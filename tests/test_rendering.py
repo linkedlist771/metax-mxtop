@@ -69,3 +69,21 @@ def test_render_once_hides_bars_on_narrow_layout():
     assert "GPU%" in output
     assert "[" not in output
     assert "█" not in output
+
+
+def test_render_once_orders_processes_by_gpu_id_before_memory():
+    frame = FrameSnapshot(
+        devices=[],
+        processes=[
+            ProcessSnapshot(gpu_index=2, pid=20, gpu_memory_bytes=900 * 1024**2, command="gpu2-large"),
+            ProcessSnapshot(gpu_index=0, pid=10, gpu_memory_bytes=100 * 1024**2, command="gpu0-small"),
+            ProcessSnapshot(gpu_index=0, pid=11, gpu_memory_bytes=200 * 1024**2, command="gpu0-large"),
+            ProcessSnapshot(gpu_index=1, pid=12, gpu_memory_bytes=300 * 1024**2, command="gpu1-mid"),
+        ],
+    )
+
+    output = render_once(frame, width=120, use_color=False)
+
+    assert output.index("gpu0-large") < output.index("gpu0-small")
+    assert output.index("gpu0-small") < output.index("gpu1-mid")
+    assert output.index("gpu1-mid") < output.index("gpu2-large")

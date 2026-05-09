@@ -62,7 +62,7 @@ def render_once(frame: FrameSnapshot, use_color: bool = True, width: int = 120) 
     if frame.processes:
         sorted_processes = sorted(
             frame.processes,
-            key=lambda process: (-(process.gpu_memory_bytes or 0), process.gpu_index, process.pid),
+            key=lambda process: (process.gpu_index, -(process.gpu_memory_bytes or 0), process.pid),
         )
         for process in sorted_processes:
             lines.append(

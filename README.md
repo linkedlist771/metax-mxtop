@@ -25,7 +25,7 @@
 Install directly from GitHub:
 
 ```bash
-python -m pip install "git+https://github.com/onlylrs/metax-mxtop.git"
+pip install -U "git+https://github.com/onlylrs/metax-mxtop.git"
 ```
 
 Or
@@ -33,7 +33,7 @@ Or
 ```bash
 git clone https://github.com/onlylrs/metax-mxtop.git
 cd metax-mxtop
-python -m pip install -e .
+pip install -e .
 ```
 
 ## Usage
