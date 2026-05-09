@@ -1,5 +1,4 @@
 <h1 align="center">mxtop</h1>
-<hr />
 
 <p align="center">
   <a href="https://github.com/onlylrs/metax-mxtop"><img src="https://img.shields.io/github/stars/onlylrs/metax-mxtop?style=flat-square&logo=github&color=181717" alt="GitHub stars"/></a>
