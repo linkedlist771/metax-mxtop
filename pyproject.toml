@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metax-mxtop"
+version = "0.1.0"
+description = "An nvitop-like terminal monitor for MetaX GPUs."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "mxtop contributors" }]
+license = "MIT"
+keywords = ["metax", "mx-smi", "maca", "gpu", "monitoring", "top"]
+classifiers = [
+    "Environment :: Console :: Curses",
+    "Environment :: GPU",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Monitoring",
+]
+dependencies = ["psutil>=5.6"]
+
+[project.scripts]
+mxtop = "mxtop.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.basedpyright]
+stubPath = "typings"
+typeCheckingMode = "basic"

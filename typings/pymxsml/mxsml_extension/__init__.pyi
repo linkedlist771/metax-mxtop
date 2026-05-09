@@ -1,0 +1,14 @@
+from typing import Any
+
+class _Utilization:
+    gpu: float
+    memory: float
+
+class _Process:
+    pid: int
+    usedGpuMemory: int
+
+def mxSmlExInit() -> object: ...
+def mxSmlExDeviceGetComputeRunningProcesses(handle: object) -> list[_Process]: ...
+def mxSmlExDeviceGetHandleByIndex(index: int) -> object: ...
+def mxSmlExDeviceGetUtilizationRates(handle: object) -> _Utilization: ...
