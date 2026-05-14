@@ -105,13 +105,13 @@ jobs:
             create_args=(--target "${GITHUB_SHA}" --prerelease)
           fi
 
+          mapfile -t assets < <(find . -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) | sort)
+
           if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" *.whl *.tar.gz SHA256SUMS.txt --clobber
+            gh release upload "${tag}" "${assets[@]}" --clobber
           else
             gh release create "${tag}" \
-              *.whl \
-              *.tar.gz \
-              SHA256SUMS.txt \
+              "${assets[@]}" \
               --title "${title}" \
               --notes "${notes}" \
               "${create_args[@]}"
