@@ -13,6 +13,16 @@
   <code>metax-mxtop</code> is an nvitop-like terminal monitor for MetaX GPUs. Install the PyPI package, then run the <code>mxtop</code> command.
 </p>
 
+<p align="center">
+  <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
+</p>
+
+<p align="center"><em>16-GPU host? mxtop auto-switches to a 1-row-per-device compact layout so the table never overflows the screen.</em></p>
+
+<p align="center">
+  <img src="assets/mxtop-preview-many.png" alt="mxtop 16-GPU compact layout"/>
+</p>
+
 ## Features
 
 - nvitop-like terminal dashboard for MetaX GPUs.

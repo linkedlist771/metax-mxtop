@@ -15,14 +15,18 @@ class DeviceSnapshot:
     power_limit_w: float | None = None
     gpu_util_percent: float | None = None
     memory_util_percent: float | None = None
+    memory_bandwidth_util_percent: float | None = None
     memory_used_bytes: int | None = None
     memory_total_bytes: int | None = None
     memory_free_bytes: int | None = None
     fan_percent: float | None = None
     ecc_status: str | None = None
+    ecc_errors: int | None = None
     persistence_mode: str | None = None
     performance_state: str | None = None
     driver_version: str | None = None
+    display_active: str | None = None
+    compute_mode: str | None = None
     metaxlink: str | None = None
 
 
@@ -39,6 +43,7 @@ class ProcessSnapshot:
     runtime_seconds: float | None = None
     process_type: str | None = None
     gpu_util_percent: float | None = None
+    gpu_memory_bandwidth_util_percent: float | None = None
     memory_util_percent: float | None = None
     identity: str | None = None
 

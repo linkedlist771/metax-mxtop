@@ -122,11 +122,18 @@ def _is_border_line(line: str) -> bool:
 
 
 def _is_header_line(line: str) -> bool:
-    return "GPU      PID" in line or "GPU  Name" in line or "Fan  Temp" in line or "Processes:" in line
+    return (
+        "GPU     PID" in line
+        or "GPU  Name" in line
+        or "Fan  Temp" in line
+        or "Processes:" in line
+    )
 
 
 def _is_device_data_line(line: str) -> bool:
-    return line.startswith("│") and ("MEM: │" in line or "UTL: │" in line)
+    if not line.startswith("│"):
+        return False
+    return "MEM:" in line or "UTL:" in line or "MBW:" in line or "PWR:" in line
 
 
 def _is_process_data_line(line: str) -> bool:
@@ -142,4 +149,4 @@ def _is_host_line(line: str) -> bool:
 
 
 def _is_graph_line(line: str) -> bool:
-    return "..." in line or "120s" in line or "60s" in line or "30s" in line
+    return "120s" in line or "60s" in line or "30s" in line or "╴" in line
