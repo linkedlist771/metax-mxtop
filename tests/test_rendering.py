@@ -3,6 +3,13 @@ from mxtop.formatting import format_bar
 from mxtop.rendering import render_once
 
 
+def _many_devices(count=16):
+    return [
+        DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=12, memory_util_percent=8)
+        for i in range(count)
+    ]
+
+
 def test_render_once_includes_gpu_and_process_rows():
     frame = FrameSnapshot(
         devices=[
@@ -149,15 +156,37 @@ def test_render_once_emits_ansi_color_when_enabled():
 
 
 def test_render_once_colors_compact_device_rows():
-    frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=12, memory_util_percent=8) for i in range(16)],
-        processes=[],
+    frame = FrameSnapshot(devices=_many_devices(), processes=[])
+
+    output = render_once(frame, width=170, use_color=True)
+    device_line = next(
+        line for line in output.splitlines() if "│   0 " in line and "│   8 " in line
     )
 
-    output = render_once(frame, width=120, use_color=True)
-
     assert "GPU Fan Temp Perf" in output
-    assert "\x1b[32m" in output
+    assert device_line.startswith("\x1b[1m\x1b[32m")
+
+
+def test_render_once_uses_two_compact_columns_for_16_gpu_wide_terminal():
+    frame = FrameSnapshot(devices=_many_devices(), processes=[])
+
+    output = render_once(frame, width=170, use_color=False)
+    lines = output.splitlines()
+
+    assert any(line.count("GPU Fan Temp") == 2 for line in lines)
+    assert any("│   0 " in line and "│   8 " in line for line in lines)
+    assert any("│   7 " in line and "│  15 " in line for line in lines)
+
+
+def test_render_once_keeps_single_compact_column_when_16_gpu_terminal_is_narrow():
+    frame = FrameSnapshot(devices=_many_devices(), processes=[])
+
+    output = render_once(frame, width=120, use_color=False)
+    lines = output.splitlines()
+
+    assert "│  15 " in output
+    assert not any(line.count("GPU Fan Temp") == 2 for line in lines)
+    assert not any("│   0 " in line and "│   8 " in line for line in lines)
 
 
 def test_render_once_omits_ansi_color_when_disabled():

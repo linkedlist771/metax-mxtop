@@ -17,7 +17,7 @@
   <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
 </p>
 
-<p align="center"><em>16-GPU host? mxtop auto-switches to a 1-row-per-device compact layout so the table never overflows the screen.</em></p>
+<p align="center"><em>16-GPU host? mxtop uses an 8+8 compact layout when the terminal is wide enough, with a single-column fallback for narrower screens.</em></p>
 
 <p align="center">
   <img src="assets/mxtop-preview-many.png" alt="mxtop 16-GPU compact layout"/>

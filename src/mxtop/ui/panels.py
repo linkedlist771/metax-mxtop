@@ -30,6 +30,9 @@ BAR_MIN_WIDTH = 100
 HOST_GRAPH_MIN_WIDTH = 100
 MIN_SCREEN_WIDTH = 79
 PROCESS_FIXED_PREFIX = 45
+COMPACT_COLUMN_LIMIT = 8
+COMPACT_COLUMN_GAP = 1
+COMPACT_GROUP_LIMIT = COMPACT_COLUMN_LIMIT * 2
 
 
 @dataclass(slots=True)
@@ -77,6 +80,8 @@ def render_device_panel(
     draw_bars = width >= BAR_MIN_WIDTH and not compact
     right_width = max(0, width - CORE_WIDTH) if draw_bars else 0
     driver_version = _driver_version(frame)
+    if compact and frame.devices and _can_render_compact_columns(len(frame.devices), width):
+        return _render_compact_device_columns(frame.devices, driver_version)
     lines: list[str] = []
     lines.append(_top_border(right_width))
     lines.append(_version_line(driver_version, right_width))
@@ -247,9 +252,9 @@ def render_main_screen(
 
     lines: list[str] = [render_title(frame, width, error)]
     show_host = state.layout != LayoutMode.COMPACT
-    compact_devices = _should_compact_devices(frame, state.layout, height, show_host)
+    compact_devices = _should_compact_devices(frame, state.layout, height, show_host, width)
     if compact_devices and state.layout == LayoutMode.AUTO:
-        show_host = show_host and _has_room_for_host(frame, height)
+        show_host = show_host and _has_room_for_host(frame, height, width)
     lines.extend(render_device_panel(frame, width, state.layout, compact=compact_devices))
     if show_host:
         lines.extend(render_host_panel(frame, width))
@@ -268,38 +273,117 @@ def render_main_screen(
     return RenderedScreen(lines, process_start=absolute_process_start, process_count=process_count)
 
 
-def _should_compact_devices(frame: FrameSnapshot, layout: LayoutMode, height: int | None, show_host: bool) -> bool:
+def _should_compact_devices(
+    frame: FrameSnapshot,
+    layout: LayoutMode,
+    height: int | None,
+    show_host: bool,
+    width: int,
+) -> bool:
     if layout == LayoutMode.COMPACT:
         return True
     if layout == LayoutMode.FULL:
         return False
     device_count = len(frame.devices) or 1
-    if device_count >= 8 and height is None:
-        return device_count >= 12
+    if device_count > COMPACT_COLUMN_LIMIT and height is None:
+        return True
     if height is None:
         return False
-    # Title (1) + version (1) + header_top (1) + headers (2) + divider (1) + bottom (1)
-    # Plus host panel (12 if shown) plus blank (1) plus process panel min (~6).
-    header_overhead = 7
+    # Title plus optional host panel/blank and a small process panel budget.
+    title_rows = 1
     host_overhead = 13 if show_host else 0
     process_min = 6
-    available_for_devices = height - header_overhead - host_overhead - process_min
-    full_rows_needed = device_count * 3 - 1  # 2 rows + 1 divider between, minus the last divider
-    if full_rows_needed <= available_for_devices:
+    available_for_devices = height - title_rows - host_overhead - process_min
+    full_rows_needed = _full_device_panel_rows(device_count)
+    if full_rows_needed <= max(available_for_devices, 1):
         return False
-    compact_rows_needed = device_count * 2 - 1
+    use_columns = _can_render_compact_columns(device_count, width)
+    compact_rows_needed = _compact_device_panel_rows(device_count, use_columns)
     return compact_rows_needed <= max(available_for_devices, 1) or device_count >= 8
 
 
-def _has_room_for_host(frame: FrameSnapshot, height: int | None) -> bool:
+def _has_room_for_host(frame: FrameSnapshot, height: int | None, width: int) -> bool:
     if height is None:
         return True
     device_count = len(frame.devices) or 1
-    header_overhead = 6  # title + version + header_top + 1 header line + divider + bottom
-    compact_device_rows = device_count * 2 - 1
+    title_rows = 1
+    use_columns = _can_render_compact_columns(device_count, width)
+    compact_device_rows = _compact_device_panel_rows(device_count, use_columns)
     process_min = 6
     host_overhead = 13
-    return height >= header_overhead + compact_device_rows + host_overhead + process_min
+    return height >= title_rows + compact_device_rows + host_overhead + process_min
+
+
+def _can_render_compact_columns(device_count: int, width: int) -> bool:
+    return device_count > COMPACT_COLUMN_LIMIT and width >= CORE_WIDTH * 2 + COMPACT_COLUMN_GAP
+
+
+def _full_device_panel_rows(device_count: int) -> int:
+    body_rows = 1 if device_count <= 0 else device_count * 3 - 1
+    return 7 + body_rows
+
+
+def _compact_device_panel_rows(device_count: int, use_columns: bool) -> int:
+    body_rows = _compact_device_body_rows(device_count, use_columns)
+    groups = _compact_device_group_count(device_count, use_columns)
+    return groups * 6 + body_rows
+
+
+def _compact_device_body_rows(device_count: int, use_columns: bool) -> int:
+    if device_count <= 0:
+        return 1
+    if not use_columns:
+        return device_count * 2 - 1
+    rows = 0
+    for group_start in range(0, device_count, COMPACT_GROUP_LIMIT):
+        group_count = min(COMPACT_GROUP_LIMIT, device_count - group_start)
+        group_rows = min(COMPACT_COLUMN_LIMIT, group_count)
+        rows += group_rows * 2 - 1
+    return rows
+
+
+def _compact_device_group_count(device_count: int, use_columns: bool) -> int:
+    if device_count <= 0 or not use_columns:
+        return 1
+    return (device_count + COMPACT_GROUP_LIMIT - 1) // COMPACT_GROUP_LIMIT
+
+
+def _render_compact_device_columns(devices: list[DeviceSnapshot], driver_version: str) -> list[str]:
+    lines: list[str] = []
+    for group_start in range(0, len(devices), COMPACT_GROUP_LIMIT):
+        group = devices[group_start : group_start + COMPACT_GROUP_LIMIT]
+        left_devices = group[:COMPACT_COLUMN_LIMIT]
+        right_devices = group[COMPACT_COLUMN_LIMIT:]
+        lines.extend(_render_compact_device_column_group(left_devices, right_devices, driver_version))
+    return lines
+
+
+def _render_compact_device_column_group(
+    left_devices: list[DeviceSnapshot],
+    right_devices: list[DeviceSnapshot],
+    driver_version: str,
+) -> list[str]:
+    rows = max(len(left_devices), len(right_devices))
+    gap = " " * COMPACT_COLUMN_GAP
+
+    def pair(left: str, right: str) -> str:
+        return f"{left}{gap}{right}"
+
+    lines = [
+        pair(_top_border(0), _top_border(0)),
+        pair(_version_line(driver_version, 0), _version_line(driver_version, 0)),
+        pair(_header_top_divider(0), _header_top_divider(0)),
+        pair(_header_line_compact(0), _header_line_compact(0)),
+        pair(_header_data_divider(0, False), _header_data_divider(0, False)),
+    ]
+    for row_index in range(rows):
+        if row_index > 0:
+            lines.append(pair(_row_divider(0, False), _row_divider(0, False)))
+        left = _device_row_compact(left_devices[row_index]) if row_index < len(left_devices) else _core_line("")
+        right = _device_row_compact(right_devices[row_index]) if row_index < len(right_devices) else _core_line("")
+        lines.append(pair(left, right))
+    lines.append(pair(_bottom_border(0), _bottom_border(0)))
+    return lines
 
 
 def _core_line(content: str) -> str:
