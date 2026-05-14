@@ -44,4 +44,16 @@ Open the interactive terminal dashboard:
 mxtop
 ```
 
-More usage and introduction, see [intro.md](INTRO.md)
+Useful options:
+
+```bash
+mxtop --once
+mxtop --json
+mxtop --backend mxsmi
+mxtop --only 0 1 --user alice
+MXTOP_MXSMI_PATH=/opt/mxdriver/bin/mx-smi mxtop --backend mxsmi
+```
+
+The interactive UI supports nvitop-like process selection, sorting, layout switching, and help with `h` or `?`. The monitor is read-only; it does not run firmware update, reset, or persistence-mode mutation commands.
+
+More usage and introduction, see [INTRO.md](INTRO.md)

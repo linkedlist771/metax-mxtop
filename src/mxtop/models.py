@@ -17,6 +17,13 @@ class DeviceSnapshot:
     memory_util_percent: float | None = None
     memory_used_bytes: int | None = None
     memory_total_bytes: int | None = None
+    memory_free_bytes: int | None = None
+    fan_percent: float | None = None
+    ecc_status: str | None = None
+    persistence_mode: str | None = None
+    performance_state: str | None = None
+    driver_version: str | None = None
+    metaxlink: str | None = None
 
 
 @dataclass(slots=True)
@@ -30,6 +37,14 @@ class ProcessSnapshot:
     cpu_percent: float | None = None
     host_memory_bytes: int | None = None
     runtime_seconds: float | None = None
+    process_type: str | None = None
+    gpu_util_percent: float | None = None
+    memory_util_percent: float | None = None
+    identity: str | None = None
+
+    @property
+    def selection_key(self) -> str:
+        return self.identity or f"{self.gpu_index}:{self.pid}"
 
 
 @dataclass(slots=True)

@@ -1,5 +1,3 @@
-from typing import Any
-
 class _Utilization:
     gpu: float
     memory: float

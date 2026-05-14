@@ -140,6 +140,9 @@ class PymxsmlBackend:
             if power_sum:
                 power_w = normalize_power_w(power_sum)
 
+            memory_used = used * 1024 if (used := _int_attr(memory, "vramUse")) is not None else None
+            memory_total = total * 1024 if (total := _int_attr(memory, "vramTotal")) is not None else None
+            memory_free = memory_total - memory_used if memory_total is not None and memory_used is not None else None
             devices.append(
                 DeviceSnapshot(
                     index=index,
@@ -150,8 +153,9 @@ class PymxsmlBackend:
                     power_w=power_w,
                     gpu_util_percent=_number_attr(util, "gpu"),
                     memory_util_percent=_number_attr(util, "memory"),
-                    memory_used_bytes=(used * 1024 if (used := _int_attr(memory, "vramUse")) is not None else None),
-                    memory_total_bytes=(total * 1024 if (total := _int_attr(memory, "vramTotal")) is not None else None),
+                    memory_used_bytes=memory_used,
+                    memory_total_bytes=memory_total,
+                    memory_free_bytes=memory_free,
                 )
             )
 
@@ -166,6 +170,8 @@ class PymxsmlBackend:
                             gpu_index=index,
                             pid=pid,
                             gpu_memory_bytes=used,
+                            process_type="C",
+                            identity=f"{index}:{pid}",
                         )
                     )
 

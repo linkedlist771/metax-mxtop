@@ -107,3 +107,19 @@ def test_render_once_orders_processes_by_gpu_id_before_memory():
     assert output.index("gpu0-large") < output.index("gpu0-small")
     assert output.index("gpu0-small") < output.index("gpu1-mid")
     assert output.index("gpu1-mid") < output.index("gpu2-large")
+
+
+def test_render_once_includes_host_and_process_gpu_columns():
+    frame = FrameSnapshot(
+        devices=[],
+        processes=[
+            ProcessSnapshot(gpu_index=0, pid=10, gpu_util_percent=33, cpu_percent=22, command="python train.py"),
+        ],
+    )
+
+    output = render_once(frame, width=140, use_color=False)
+
+    assert "Host" in output
+    assert "GPU-MEM" in output
+    assert "GPU%" in output
+    assert "33%" in output

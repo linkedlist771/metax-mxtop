@@ -51,3 +51,24 @@ def test_scroll_delta_handles_mouse_wheel_constants(monkeypatch):
     assert tui._mouse_scroll_delta(0x10000) == -3
     assert tui._mouse_scroll_delta(0x200000) == 3
     assert tui._mouse_scroll_delta(0) == 0
+
+
+def test_handle_key_updates_sort_and_layout(monkeypatch):
+    class FakeSampler:
+        def __init__(self):
+            self.refreshed = False
+
+        def refresh_now(self):
+            self.refreshed = True
+
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    assert tui._handle_key(ord("."), state, None, sampler)
+    assert state.process_sort.value == "gpu_memory"
+    assert tui._handle_key(ord("/"), state, None, sampler)
+    assert state.reverse_sort is True
+    assert tui._handle_key(ord("c"), state, None, sampler)
+    assert state.layout.value == "compact"
+    assert tui._handle_key(ord("r"), state, None, sampler)
+    assert sampler.refreshed is True

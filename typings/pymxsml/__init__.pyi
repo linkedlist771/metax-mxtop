@@ -1,5 +1,3 @@
-from typing import Any
-
 MXSML_TEMPERATURE_HOTSPOT: int
 
 class _DeviceInfo:
