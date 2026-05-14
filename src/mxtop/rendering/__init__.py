@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from mxtop.models import FrameSnapshot
 from mxtop.ui.panels import render_main_screen
 from mxtop.ui.state import UiState
@@ -16,7 +18,9 @@ FG_RED = "\x1b[31m"
 FG_MAGENTA = "\x1b[35m"
 FG_BLUE = "\x1b[34m"
 FG_WHITE = "\x1b[37m"
-BORDER_CHARS = {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═", "│"}
+BORDER_CHARS = {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═", "│", "┬", "┴", "╤"}
+_DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
+_PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
 
 
 def render_once(frame: FrameSnapshot, use_color: bool = True, width: int = 120) -> str:
@@ -41,21 +45,55 @@ def _colorize_line(row: int, line: str) -> str:
         return _style(line, BOLD, FG_RED)
     if _is_process_title(line):
         return _colorize_process_title(line)
-    if _is_device_data_line(line):
-        return _style(line, BOLD, FG_GREEN)
     if _is_process_data_line(line):
         return _colorize_process_row(line)
+    if _is_device_data_line(line):
+        return _colorize_device_row(line)
     if _is_border_line(line):
         return _style(line, DIM, FG_WHITE)
+    if "MXTOP" in line and "Driver Version" in line:
+        return _style(line, BOLD, FG_WHITE)
     if _is_header_line(line):
         return _style(line, BOLD, FG_CYAN)
     if _is_host_line(line):
         return _colorize_host_line(line)
     if _is_graph_line(line):
         return _style(line, DIM, FG_WHITE)
-    if "MXTOP" in line and "Driver Version" in line:
-        return _style(line, BOLD, FG_WHITE)
     return _style(line, FG_WHITE)
+
+
+_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
+_BAR_RE = re.compile(r"([A-Z]{3}: )([█░]+)( \S+)")
+
+
+def _utilization_color(line: str) -> str:
+    best = FG_GREEN
+    for value in _PERCENT_RE.findall(line):
+        try:
+            v = float(value)
+        except ValueError:
+            continue
+        if v >= 85:
+            return FG_RED
+        if v >= 60 and best == FG_GREEN:
+            best = FG_YELLOW
+    return best
+
+
+def _colorize_device_row(line: str) -> str:
+    color = _utilization_color(line)
+    out: list[str] = []
+    cursor = 0
+    for match in _BAR_RE.finditer(line):
+        if match.start() > cursor:
+            out.append(_style(line[cursor : match.start()], BOLD, color))
+        out.append(_style(match.group(1), BOLD, FG_CYAN))
+        out.append(_style(match.group(2), BOLD, color))
+        out.append(_style(match.group(3), BOLD, color))
+        cursor = match.end()
+    if cursor < len(line):
+        out.append(_style(line[cursor:], BOLD, color))
+    return "".join(out)
 
 
 def _colorize_title(line: str) -> str:
@@ -124,20 +162,24 @@ def _is_border_line(line: str) -> bool:
 def _is_header_line(line: str) -> bool:
     return (
         "GPU     PID" in line
+        or "GPU      PID" in line
         or "GPU  Name" in line
+        or "GPU Fan Temp" in line
         or "Fan  Temp" in line
         or "Processes:" in line
     )
 
 
 def _is_device_data_line(line: str) -> bool:
-    if not line.startswith("│"):
+    if not line.startswith("│") or "GPU-MEM" in line or _is_process_data_line(line):
         return False
-    return "MEM:" in line or "UTL:" in line or "MBW:" in line or "PWR:" in line
+    if _DEVICE_ROW_RE.match(line) and "MiB" not in line[:24]:
+        return True
+    return any(token in line for token in (" Pwr:", "GPU-Util", "UTL:", "PWR:"))
 
 
 def _is_process_data_line(line: str) -> bool:
-    return line.startswith("│") and "MiB" in line and (" days " in line or " /" in line or ":" in line)
+    return bool(_PROCESS_ROW_RE.match(line))
 
 
 def _is_process_title(line: str) -> bool:
@@ -145,7 +187,7 @@ def _is_process_title(line: str) -> bool:
 
 
 def _is_host_line(line: str) -> bool:
-    return any(label in line for label in ("Load Average:", "CPU:", "MEM:", "SWP:", "GPU MEM:", "GPU UTL:"))
+    return any(label in line for label in (" Load Average:", " CPU:", " MEM:", " SWP:", " GPU MEM:", " GPU UTL:"))
 
 
 def _is_graph_line(line: str) -> bool:

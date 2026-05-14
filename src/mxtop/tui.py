@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import re
 import sys
 import time
 from typing import Any
@@ -68,21 +69,6 @@ def _safe_addnstr(screen, row: int, column: int, text: str, width: int, attr: in
     return column + len(snippet)
 
 
-def _load_pair_from_line(line: str) -> int:
-    for part in line.split():
-        if part.endswith("%"):
-            try:
-                value = float(part.rstrip("%"))
-            except ValueError:
-                continue
-            if value >= 85:
-                return PAIR_HOT
-            if value >= 60:
-                return PAIR_WARN
-            return PAIR_GOOD
-    return PAIR_VALUE
-
-
 def _clamp_scroll(offset: int, content_lines: int, viewport_lines: int) -> int:
     max_offset = max(0, content_lines - max(0, viewport_lines))
     return max(0, min(offset, max_offset))
@@ -101,30 +87,22 @@ def _draw_line(screen, row: int, line: str, width: int) -> None:
     if row == 0:
         _draw_title_line(screen, row, line, width)
         return
+    if _is_version_line(line):
+        _draw_version_line(screen, row, line, width)
+        return
     if "Processes:" in line and "@" in line:
         _draw_process_title_line(screen, row, line, width, attr)
-        return
-    if _is_device_data_line(line):
-        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_GOOD, curses.A_BOLD))
         return
     if _is_process_data_line(line):
         _draw_process_data_line(screen, row, line, width, attr)
         return
-    if "[" not in line or line.startswith(">"):
-        _safe_addnstr(screen, row, 0, line, width, attr)
+    if _is_device_data_line(line):
+        _draw_device_data_line(screen, row, line, width)
         return
-
-    position = 0
-    for segment_index, segment in enumerate(line.split("[")):
-        if segment_index == 0:
-            position = _safe_addnstr(screen, row, position, segment, width, attr)
-            continue
-        bar, _, rest = segment.partition("]")
-        pair = PAIR_MEM if segment_index >= 2 else _load_pair_from_line(line)
-        position = _safe_addnstr(screen, row, position, "[", width, _attr(PAIR_DIM))
-        position = _safe_addnstr(screen, row, position, bar, width, _attr(pair, curses.A_BOLD))
-        position = _safe_addnstr(screen, row, position, "]", width, _attr(PAIR_DIM))
-        position = _safe_addnstr(screen, row, position, rest, width, attr)
+    if _is_host_data_line(line):
+        _draw_host_data_line(screen, row, line, width)
+        return
+    _safe_addnstr(screen, row, 0, line, width, attr)
 
 
 def _draw_title_line(screen, row: int, line: str, width: int) -> None:
@@ -168,19 +146,100 @@ def _draw_process_data_line(screen, row: int, line: str, width: int, attr: int) 
     if line.startswith("│>"):
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE))
         return
-    if " root " in line:
-        attr = _attr(PAIR_DIM)
-    position = _safe_addnstr(screen, row, 0, line[:5], width, attr)
-    position = _safe_addnstr(screen, row, position, line[5:8], width, _attr(PAIR_GOOD, curses.A_BOLD))
-    _safe_addnstr(screen, row, position, line[8:], width, attr)
+    base_attr = _attr(PAIR_DIM) if " root " in line else _attr(PAIR_VALUE)
+    position = _safe_addnstr(screen, row, 0, line[:2], width, base_attr)
+    position = _safe_addnstr(screen, row, position, line[2:5], width, _attr(PAIR_GOOD, curses.A_BOLD))
+    _safe_addnstr(screen, row, position, line[5:], width, base_attr)
+    del attr
+
+
+_DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
+_PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
+_BAR_RE = re.compile(r"([A-Z]{3}: )([█░]+)( \S+)")
 
 
 def _is_device_data_line(line: str) -> bool:
-    return line.startswith("│") and ("MEM: │" in line or "UTL: │" in line)
+    if not line.startswith("│") or "GPU-MEM" in line or _is_process_data_line(line):
+        return False
+    if _DEVICE_ROW_RE.match(line) and "MiB" not in line[:24]:
+        return True
+    return any(token in line for token in (" Pwr:", "GPU-Util", "UTL:", "PWR:"))
 
 
 def _is_process_data_line(line: str) -> bool:
-    return line.startswith("│") and "MiB" in line and " days " in line
+    return bool(_PROCESS_ROW_RE.match(line))
+
+
+def _is_host_data_line(line: str) -> bool:
+    if not line.startswith("│"):
+        return False
+    return any(
+        label in line
+        for label in (" Load Average:", " CPU:", " MEM:", " SWP:", " GPU MEM:", " GPU UTL:")
+    )
+
+
+def _is_version_line(line: str) -> bool:
+    return line.startswith("│") and "MXTOP " in line and "Driver Version" in line
+
+
+def _draw_version_line(screen, row: int, line: str, width: int) -> None:
+    _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
+
+
+def _utilization_pair(line: str) -> int:
+    best = PAIR_GOOD
+    for token in re.findall(r"(\d+(?:\.\d+)?)%", line):
+        try:
+            value = float(token)
+        except ValueError:
+            continue
+        if value >= 85 and best != PAIR_HOT:
+            best = PAIR_HOT
+        elif value >= 60 and best == PAIR_GOOD:
+            best = PAIR_WARN
+    return best
+
+
+def _draw_device_data_line(screen, row: int, line: str, width: int) -> None:
+    pair = _utilization_pair(line)
+    body_attr = _attr(pair, curses.A_BOLD)
+    cursor = 0
+    for match in _BAR_RE.finditer(line):
+        cursor = _safe_addnstr(screen, row, cursor, line[cursor : match.start()], width, body_attr)
+        cursor = _safe_addnstr(screen, row, cursor, match.group(1), width, _attr(PAIR_HEADER, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, match.group(2), width, _attr(pair, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, match.group(3), width, body_attr)
+    _safe_addnstr(screen, row, cursor, line[cursor:], width, body_attr)
+
+
+def _draw_host_data_line(screen, row: int, line: str, width: int) -> None:
+    label_to_pair = (
+        (" Load Average:", PAIR_VALUE),
+        (" CPU:", PAIR_HEADER),
+        (" MEM:", PAIR_MEM),
+        (" SWP:", PAIR_WARN),
+        (" GPU MEM:", PAIR_GOOD),
+        (" GPU UTL:", PAIR_GOOD),
+    )
+    pair = PAIR_VALUE
+    for label, candidate in label_to_pair:
+        if label in line:
+            pair = candidate
+            break
+    cursor = 0
+    for match in _BAR_RE.finditer(line):
+        cursor = _safe_addnstr(screen, row, cursor, line[cursor : match.start()], width, _attr(pair, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, match.group(1), width, _attr(PAIR_HEADER, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, match.group(2), width, _attr(pair, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, match.group(3), width, _attr(pair, curses.A_BOLD))
+    # Special: CPU/MEM lines have bar after the percent value
+    bar_match = re.search(r"(  )([█░]{4,})", line)
+    if bar_match and cursor <= bar_match.start():
+        cursor = _safe_addnstr(screen, row, cursor, line[cursor : bar_match.start()], width, _attr(pair, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, bar_match.group(1), width, _attr(PAIR_DIM))
+        cursor = _safe_addnstr(screen, row, cursor, bar_match.group(2), width, _attr(pair, curses.A_BOLD))
+    _safe_addnstr(screen, row, cursor, line[cursor:], width, _attr(pair, curses.A_BOLD))
 
 
 def _line_attr(row: int, line: str) -> int:
@@ -193,11 +252,18 @@ def _line_attr(row: int, line: str) -> int:
     if not line:
         return _attr(PAIR_VALUE)
     stripped = line.strip()
-    if stripped and set(stripped) <= {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═"}:
+    if stripped and set(stripped) <= {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═", "┬", "┴", "╤", "│"}:
         return _attr(PAIR_DIM)
-    if "Processes:" in line or "GPU      PID" in line or "GPU  Name" in line or "Fan  Temp" in line:
+    if (
+        "Processes:" in line
+        or "GPU     PID" in line
+        or "GPU      PID" in line
+        or "GPU  Name" in line
+        or "Fan  Temp" in line
+        or "GPU Fan Temp" in line
+    ):
         return _attr(PAIR_HEADER, curses.A_BOLD)
-    if "Load Average:" in line or "CPU:" in line or "MEM:" in line or "SWP:" in line:
+    if "Load Average:" in line or " CPU:" in line or " MEM:" in line or " SWP:" in line:
         return _attr(PAIR_VALUE)
     return _attr(PAIR_VALUE)
 

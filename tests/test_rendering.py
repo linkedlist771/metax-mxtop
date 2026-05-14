@@ -127,14 +127,37 @@ def test_render_once_includes_host_and_process_gpu_columns():
 
 def test_render_once_emits_ansi_color_when_enabled():
     frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83)],
+        devices=[
+            DeviceSnapshot(
+                index=0,
+                name="MXC500",
+                gpu_util_percent=88,
+                memory_util_percent=92,
+                memory_bandwidth_util_percent=64,
+            )
+        ],
         processes=[ProcessSnapshot(gpu_index=0, pid=10, user="alice", gpu_memory_bytes=100 * 1024**2)],
     )
 
     output = render_once(frame, width=140, use_color=True)
 
     assert "\x1b[" in output
+    assert "\x1b[31m" in output
     assert "\x1b[35m" in output
+    assert "\x1b[36mMEM: " in output
+    assert "\x1b[36mUTL: " in output
+
+
+def test_render_once_colors_compact_device_rows():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=12, memory_util_percent=8) for i in range(16)],
+        processes=[],
+    )
+
+    output = render_once(frame, width=120, use_color=True)
+
+    assert "GPU Fan Temp Perf" in output
+    assert "\x1b[32m" in output
 
 
 def test_render_once_omits_ansi_color_when_disabled():

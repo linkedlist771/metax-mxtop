@@ -72,3 +72,15 @@ def test_handle_key_updates_sort_and_layout(monkeypatch):
     assert state.layout.value == "compact"
     assert tui._handle_key(ord("r"), state, None, sampler)
     assert sampler.refreshed is True
+
+
+def test_new_layout_rows_are_detected_for_colored_drawing():
+    device_row = "│   0  42%  63C  P0     215W/350W │       59GiB / 64GiB │     88%      Default │ MEM: ████████░░ 92%"
+    process_row = "│    0  423901    alice  51200MiB  88    64   312%  18GiB  4:27:05 python train.py │"
+    host_row = "│ CPU:  23%  ████░░░░░░░░░░░░░░░░ MEM:  33% 42.3GiB/128GiB │"
+    version_row = "│ MXTOP 0.1.5  Driver Version: 2.31.0.5 │"
+
+    assert tui._is_device_data_line(device_row)
+    assert tui._is_process_data_line(process_row)
+    assert tui._is_host_data_line(host_row)
+    assert tui._is_version_line(version_row)
