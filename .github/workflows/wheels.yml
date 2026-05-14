@@ -1,0 +1,86 @@
+name: Build wheels
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "**"
+  pull_request:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64-wheelhouse:
+    name: Build Linux x86_64 offline wheelhouse
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build project wheel
+        run: python -m build --wheel
+
+      - name: Build Linux x86_64 offline wheelhouse
+        run: |
+          mkdir -p wheelhouse
+          cp dist/*.whl wheelhouse/
+          python -m pip download \
+            --dest wheelhouse \
+            --only-binary=:all: \
+            --platform manylinux2014_x86_64 \
+            --platform manylinux2010_x86_64 \
+            --implementation cp \
+            --python-version "39" \
+            --abi cp39 \
+            --abi abi3 \
+            --abi none \
+            dist/*.whl
+          tar -czf metax-mxtop-linux-x86_64-wheelhouse.tar.gz -C wheelhouse .
+
+      - name: Verify offline install
+        run: |
+          python -m pip install \
+            --no-index \
+            --find-links wheelhouse \
+            --target offline-test \
+            metax-mxtop
+          PYTHONPATH=offline-test python -m mxtop.cli --version
+
+      - name: Generate checksums
+        run: sha256sum dist/*.whl metax-mxtop-linux-x86_64-wheelhouse.tar.gz > SHA256SUMS.txt
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: metax-mxtop-linux-x86_64-wheels
+          path: |
+            dist/*.whl
+            metax-mxtop-linux-x86_64-wheelhouse.tar.gz
+            SHA256SUMS.txt
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/*.whl \
+            metax-mxtop-linux-x86_64-wheelhouse.tar.gz \
+            SHA256SUMS.txt \
+            --clobber
