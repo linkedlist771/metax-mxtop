@@ -62,7 +62,7 @@ def test_render_once_includes_process_runtime():
 def test_format_bar_clamps_and_fills_blocks():
     assert format_bar(50, width=10) == "█████░░░░░"
     assert format_bar(120, width=4) == "████"
-    assert format_bar(None, width=3) == "???"
+    assert format_bar(None, width=3) == "░░░"
 
 
 def test_render_once_shows_bars_on_wide_layout():
@@ -73,9 +73,9 @@ def test_render_once_shows_bars_on_wide_layout():
 
     output = render_once(frame, width=140, use_color=False)
 
-    assert "UTIL" in output
-    assert "[████" in output
-    assert "MEM" in output
+    assert "UTL:" in output
+    assert "MEM:" in output
+    assert "83%" in output
 
 
 def test_render_once_hides_bars_on_narrow_layout():
@@ -86,12 +86,12 @@ def test_render_once_hides_bars_on_narrow_layout():
 
     output = render_once(frame, width=90, use_color=False)
 
-    assert "GPU%" in output
-    assert "[" not in output
+    assert "GPU-Util" in output
+    assert "UTL:" not in output
     assert "█" not in output
 
 
-def test_render_once_orders_processes_by_gpu_id_before_memory():
+def test_render_once_orders_processes_by_gpu_id_then_pid():
     frame = FrameSnapshot(
         devices=[],
         processes=[
@@ -104,8 +104,8 @@ def test_render_once_orders_processes_by_gpu_id_before_memory():
 
     output = render_once(frame, width=120, use_color=False)
 
-    assert output.index("gpu0-large") < output.index("gpu0-small")
-    assert output.index("gpu0-small") < output.index("gpu1-mid")
+    assert output.index("gpu0-small") < output.index("gpu0-large")
+    assert output.index("gpu0-large") < output.index("gpu1-mid")
     assert output.index("gpu1-mid") < output.index("gpu2-large")
 
 
@@ -119,7 +119,27 @@ def test_render_once_includes_host_and_process_gpu_columns():
 
     output = render_once(frame, width=140, use_color=False)
 
-    assert "Host" in output
+    assert "Load Average" in output
     assert "GPU-MEM" in output
-    assert "GPU%" in output
-    assert "33%" in output
+    assert "%SM" in output
+    assert "  33 " in output
+
+
+def test_render_once_emits_ansi_color_when_enabled():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83)],
+        processes=[ProcessSnapshot(gpu_index=0, pid=10, user="alice", gpu_memory_bytes=100 * 1024**2)],
+    )
+
+    output = render_once(frame, width=140, use_color=True)
+
+    assert "\x1b[" in output
+    assert "\x1b[35m" in output
+
+
+def test_render_once_omits_ansi_color_when_disabled():
+    frame = FrameSnapshot(devices=[DeviceSnapshot(index=0, name="MXC500")], processes=[])
+
+    output = render_once(frame, width=140, use_color=False)
+
+    assert "\x1b[" not in output

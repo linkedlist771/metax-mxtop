@@ -71,7 +71,8 @@ def test_cli_once_resamples_process_cpu_when_first_snapshot_is_unknown(monkeypat
     captured = capsys.readouterr()
     assert rc == 0
     assert backend.calls == 2
-    assert "50%" in captured.out
+    assert "%CPU" in captured.out
+    assert "  50 " in captured.out
 
 
 def test_cli_json_resamples_process_cpu_when_first_snapshot_is_unknown(monkeypatch, capsys):

@@ -17,14 +17,53 @@ def format_bytes(value: int | None) -> str:
     return f"{amount:.1f}TiB"
 
 
+def format_compact_bytes(value: int | None) -> str:
+    if value is None:
+        return "N/A"
+    amount = float(value)
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    for unit in units:
+        if abs(amount) < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(amount)}B"
+            if unit == "KiB":
+                return f"{amount:.1f}KiB"
+            if unit == "MiB":
+                return f"{amount:.2f}MiB" if amount < 100 else f"{amount:.1f}MiB"
+            return f"{amount:.2f}{unit}"
+        amount /= 1024
+    return f"{amount:.2f}TiB"
+
+
 def format_mib(value: int | None) -> str:
     if value is None:
         return "N/A"
-    return f"{value / 1024**2:.0f}MiB"
+    amount = value / 1024**2
+    if amount >= 1000:
+        return f"{amount:.0f}MiB"
+    if amount >= 100:
+        return f"{amount:.1f}MiB"
+    return f"{amount:.2f}MiB"
 
 
 def format_percent(value: float | None) -> str:
     return "N/A" if value is None else f"{value:.0f}%"
+
+
+def format_percent_precise(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value - round(value)) < 0.05:
+        return f"{value:.0f}%"
+    return f"{value:.1f}%"
+
+
+def format_percent_value(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    if abs(value - round(value)) < 0.05:
+        return f"{value:.0f}"
+    return f"{value:.1f}"
 
 
 def format_float(value: float | None, unit: str) -> str:
@@ -35,6 +74,8 @@ def format_duration(value: float | None) -> str:
     if value is None:
         return "N/A"
     seconds = max(0, int(value))
+    if seconds >= 86400:
+        return f"{seconds / 86400:.1f} days"
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     if hours:
@@ -46,16 +87,18 @@ def format_bar(value: float | None, width: int = 12) -> str:
     if width <= 0:
         return ""
     if value is None:
-        return "?" * width
+        return "░" * width
     percent = max(0.0, min(100.0, value))
     filled = round(width * percent / 100)
     return "█" * filled + "░" * (width - filled)
 
 
-def ellipsize(value: str | None, width: int) -> str:
+def ellipsize(value: str | None, width: int, marker: str = "..") -> str:
     text = value or ""
+    if width <= 0:
+        return ""
     if len(text) <= width:
         return text
-    if width <= 1:
+    if width <= len(marker):
         return text[:width]
-    return text[: width - 1] + "~"
+    return text[: width - len(marker)] + marker

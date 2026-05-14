@@ -43,7 +43,7 @@ def _setup_colors() -> None:
     curses.init_pair(PAIR_GOOD, curses.COLOR_GREEN, -1)
     curses.init_pair(PAIR_WARN, curses.COLOR_YELLOW, -1)
     curses.init_pair(PAIR_HOT, curses.COLOR_RED, -1)
-    curses.init_pair(PAIR_MEM, curses.COLOR_BLUE, -1)
+    curses.init_pair(PAIR_MEM, curses.COLOR_MAGENTA, -1)
     curses.init_pair(PAIR_ERROR, curses.COLOR_WHITE, curses.COLOR_RED)
     curses.init_pair(PAIR_SELECTED, curses.COLOR_BLACK, curses.COLOR_WHITE)
 
@@ -98,6 +98,18 @@ def _mouse_scroll_delta(button_state: int) -> int:
 
 def _draw_line(screen, row: int, line: str, width: int) -> None:
     attr = _line_attr(row, line)
+    if row == 0:
+        _draw_title_line(screen, row, line, width)
+        return
+    if "Processes:" in line and "@" in line:
+        _draw_process_title_line(screen, row, line, width, attr)
+        return
+    if _is_device_data_line(line):
+        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_GOOD, curses.A_BOLD))
+        return
+    if _is_process_data_line(line):
+        _draw_process_data_line(screen, row, line, width, attr)
+        return
     if "[" not in line or line.startswith(">"):
         _safe_addnstr(screen, row, 0, line, width, attr)
         return
@@ -115,21 +127,78 @@ def _draw_line(screen, row: int, line: str, width: int) -> None:
         position = _safe_addnstr(screen, row, position, rest, width, attr)
 
 
+def _draw_title_line(screen, row: int, line: str, width: int) -> None:
+    hint_start = line.find("(Press ")
+    if hint_start < 0:
+        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
+        return
+    position = _safe_addnstr(screen, row, 0, line[:hint_start], width, _attr(PAIR_VALUE, curses.A_BOLD))
+    hint = line[hint_start:]
+    for token in ("h", "q"):
+        prefix, found, rest = hint.partition(token)
+        position = _safe_addnstr(screen, row, position, prefix, width, _attr(PAIR_VALUE, curses.A_BOLD))
+        if not found:
+            return
+        position = _safe_addnstr(screen, row, position, found, width, _attr(PAIR_MEM, curses.A_BOLD))
+        hint = rest
+    _safe_addnstr(screen, row, position, hint, width, _attr(PAIR_VALUE, curses.A_BOLD))
+
+
+def _draw_process_title_line(screen, row: int, line: str, width: int, attr: int) -> None:
+    at = line.rfind("@")
+    if at <= 0:
+        _safe_addnstr(screen, row, 0, line, width, attr)
+        return
+    start = line.rfind(" ", 0, at)
+    if start < 0:
+        start = 0
+    else:
+        start += 1
+    position = _safe_addnstr(screen, row, 0, line[:start], width, attr)
+    position = _safe_addnstr(screen, row, position, line[start:at], width, _attr(PAIR_MEM, curses.A_BOLD))
+    position = _safe_addnstr(screen, row, position, "@", width, attr)
+    end = line.find("│", at)
+    if end < 0:
+        end = len(line)
+    position = _safe_addnstr(screen, row, position, line[at + 1 : end], width, _attr(PAIR_GOOD, curses.A_BOLD))
+    _safe_addnstr(screen, row, position, line[end:], width, attr)
+
+
+def _draw_process_data_line(screen, row: int, line: str, width: int, attr: int) -> None:
+    if line.startswith("│>"):
+        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE))
+        return
+    if " root " in line:
+        attr = _attr(PAIR_DIM)
+    position = _safe_addnstr(screen, row, 0, line[:5], width, attr)
+    position = _safe_addnstr(screen, row, position, line[5:8], width, _attr(PAIR_GOOD, curses.A_BOLD))
+    _safe_addnstr(screen, row, position, line[8:], width, attr)
+
+
+def _is_device_data_line(line: str) -> bool:
+    return line.startswith("│") and ("MEM: │" in line or "UTL: │" in line)
+
+
+def _is_process_data_line(line: str) -> bool:
+    return line.startswith("│") and "MiB" in line and " days " in line
+
+
 def _line_attr(row: int, line: str) -> int:
     if row == 0:
-        return _attr(PAIR_TITLE, curses.A_BOLD)
-    if line.startswith(">"):
-        return _attr(PAIR_SELECTED, curses.A_BOLD)
-    if not line:
-        return _attr(PAIR_VALUE)
-    if set(line.strip()) <= {"-", " "}:
-        return _attr(PAIR_DIM)
-    if line in {"Devices", "Host"} or line.startswith("Processes"):
-        return _attr(PAIR_HEADER, curses.A_BOLD)
-    if line.startswith(("GPU  NAME", "GPU  PID", "GPU  NAME", "---")):
-        return _attr(PAIR_HEADER, curses.A_BOLD)
+        return _attr(PAIR_VALUE, curses.A_BOLD)
     if "backend error" in line or "error=" in line:
         return _attr(PAIR_ERROR, curses.A_BOLD)
+    if line.startswith("│>"):
+        return _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE)
+    if not line:
+        return _attr(PAIR_VALUE)
+    stripped = line.strip()
+    if stripped and set(stripped) <= {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═"}:
+        return _attr(PAIR_DIM)
+    if "Processes:" in line or "GPU      PID" in line or "GPU  Name" in line or "Fan  Temp" in line:
+        return _attr(PAIR_HEADER, curses.A_BOLD)
+    if "Load Average:" in line or "CPU:" in line or "MEM:" in line or "SWP:" in line:
+        return _attr(PAIR_VALUE)
     return _attr(PAIR_VALUE)
 
 
