@@ -11,7 +11,7 @@ from mxtop.filters import apply_filters
 from mxtop.models import FrameSnapshot
 from mxtop.rendering import render_once
 from mxtop.sampler import SnapshotSampler
-from mxtop.ui.panels import render_main_screen
+from mxtop.ui.panels import MIN_SCREEN_WIDTH, render_main_screen
 from mxtop.ui.state import DIRECT_SORT_KEYS, LayoutMode, UiState, keep_selection, next_sort, sort_processes
 
 PAIR_TITLE = 1
@@ -26,6 +26,7 @@ PAIR_ERROR = 9
 PAIR_SELECTED = 10
 PAIR_SWAP = 11
 MIN_TUI_WIDTH = 72
+OUTER_BORDER_MIN_HEIGHT = 10
 
 MEM_THRESHOLDS = (10, 80)
 GPU_THRESHOLDS = (10, 75)
@@ -34,6 +35,16 @@ CURSOR_HOME = "\x1b[H"
 CLEAR_TO_END = "\x1b[J"
 HIDE_CURSOR = "\x1b[?25l"
 SHOW_CURSOR = "\x1b[?25h"
+
+
+class _OffsetScreen:
+    def __init__(self, screen, row_offset: int, column_offset: int):
+        self._screen = screen
+        self._row_offset = row_offset
+        self._column_offset = column_offset
+
+    def addnstr(self, row: int, column: int, text: str, count: int, attr: int = 0) -> None:
+        self._screen.addnstr(row + self._row_offset, column + self._column_offset, text, count, attr)
 
 
 def _setup_colors() -> None:
@@ -72,6 +83,40 @@ def _safe_addnstr(screen, row: int, column: int, text: str, width: int, attr: in
     except curses.error:
         return width - 1
     return column + len(snippet)
+
+
+def _can_draw_outer_border(height: int, width: int) -> bool:
+    return height >= OUTER_BORDER_MIN_HEIGHT and width >= MIN_SCREEN_WIDTH + 2
+
+
+def _draw_outer_border(screen, height: int, width: int) -> None:
+    if height < 2 or width < 2:
+        return
+    attr = _attr(PAIR_DIM)
+    top = "╒" + "═" * (width - 2) + "╕"
+    bottom = "╘" + "═" * (width - 2) + "╛"
+    _try_addnstr(screen, 0, 0, top, width, attr)
+    _try_addnstr(screen, height - 1, 0, bottom, width, attr)
+    for row in range(1, height - 1):
+        _try_addnstr(screen, row, 0, "│", 1, attr)
+        _try_addnstr(screen, row, width - 1, "│", 1, attr)
+
+
+def _try_addnstr(screen, row: int, column: int, text: str, count: int, attr: int = 0) -> None:
+    try:
+        screen.addnstr(row, column, text, count, attr)
+    except curses.error:
+        pass
+
+
+def _with_outer_text_border(lines: list[str], width: int) -> list[str]:
+    if width < 2:
+        return lines
+    inner_width = width - 2
+    top = "╒" + "═" * inner_width + "╕"
+    bottom = "╘" + "═" * inner_width + "╛"
+    body = ["│" + line[:inner_width].ljust(inner_width) + "│" for line in lines]
+    return [top, *body, bottom]
 
 
 def _clamp_scroll(offset: int, content_lines: int, viewport_lines: int) -> int:
@@ -623,31 +668,42 @@ def run_tui(backend: TelemetryBackend, interval: float, options: Any | None = No
 
             screen.erase()
             height, width = screen.getmaxyx()
-            if width < MIN_TUI_WIDTH:
-                message = f"mxtop needs at least a width of {MIN_TUI_WIDTH} to render, the current width is {width}."
-                _safe_addnstr(screen, 0, 0, message, width, _attr(PAIR_ERROR, curses.A_BOLD))
-                _safe_addnstr(screen, 1, 0, "Widen the terminal or press q to quit.", width, _attr(PAIR_DIM))
+            bordered = _can_draw_outer_border(height, width)
+            draw_screen = _OffsetScreen(screen, 1, 1) if bordered else screen
+            draw_height = height - 2 if bordered else height
+            draw_width = width - 2 if bordered else width
+            if bordered:
+                _draw_outer_border(screen, height, width)
+
+            if draw_width < MIN_TUI_WIDTH:
+                message = (
+                    f"mxtop needs at least a width of {MIN_TUI_WIDTH} to render, "
+                    f"the current width is {draw_width}."
+                )
+                _safe_addnstr(draw_screen, 0, 0, message, draw_width, _attr(PAIR_ERROR, curses.A_BOLD))
+                _safe_addnstr(draw_screen, 1, 0, "Widen the terminal or press q to quit.", draw_width, _attr(PAIR_DIM))
                 screen.refresh()
                 continue
 
             if frame is None:
                 error = sampler_state.error or "loading telemetry"
-                _safe_addnstr(screen, 0, 0, f"MXTOP  {error}", width, _attr(PAIR_TITLE, curses.A_BOLD))
-                _safe_addnstr(screen, 1, 0, "q: quit  r: refresh", width, _attr(PAIR_DIM))
+                _safe_addnstr(draw_screen, 0, 0, f"MXTOP  {error}", draw_width, _attr(PAIR_TITLE, curses.A_BOLD))
+                _safe_addnstr(draw_screen, 1, 0, "q: quit  r: refresh", draw_width, _attr(PAIR_DIM))
                 screen.refresh()
                 continue
 
             rendered = render_main_screen(
                 frame,
                 state,
-                width=max(80, width),
-                height=height,
+                width=max(80, draw_width),
+                height=draw_height,
                 interval=interval,
                 error=sampler_state.error,
             )
-            for row, line in enumerate(rendered.lines[:height]):
-                _draw_line(screen, row, line, width)
-            final_rendered = "\n".join(rendered.lines)
+            for row, line in enumerate(rendered.lines[:draw_height]):
+                _draw_line(draw_screen, row, line, draw_width)
+            final_lines = _with_outer_text_border(rendered.lines, width) if bordered else rendered.lines
+            final_rendered = "\n".join(final_lines)
             screen.refresh()
             time.sleep(0.02)
 

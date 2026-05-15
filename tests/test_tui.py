@@ -54,6 +54,17 @@ def test_scroll_delta_handles_mouse_wheel_constants(monkeypatch):
     assert tui._mouse_scroll_delta(0) == 0
 
 
+def test_outer_border_helpers():
+    assert tui._can_draw_outer_border(10, 81)
+    assert not tui._can_draw_outer_border(9, 81)
+    assert not tui._can_draw_outer_border(10, 80)
+    assert tui._with_outer_text_border(["MXTOP"], 9) == [
+        "╒═══════╕",
+        "│MXTOP  │",
+        "╘═══════╛",
+    ]
+
+
 def test_handle_key_updates_sort_and_layout(monkeypatch):
     class FakeSampler:
         def __init__(self):
