@@ -63,36 +63,76 @@ def _colorize_line(row: int, line: str) -> str:
 
 
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
-_BAR_RE = re.compile(r"([A-Z]{3}: )([█░]+)( \S+)")
+_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░]+) (\S+)")
+_HOST_BAR_RE = re.compile(r"(  )([█░]{4,})")
+_GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
+
+MEM_THRESHOLDS = (10, 80)
+GPU_THRESHOLDS = (10, 75)
+_INTENSITY_RANK = {FG_GREEN: 0, FG_YELLOW: 1, FG_RED: 2}
 
 
-def _utilization_color(line: str) -> str:
+def _parse_percent(text: str) -> float | None:
+    try:
+        return float(text.replace("%", ""))
+    except ValueError:
+        return None
+
+
+def _intensity_color(value: float | None, *, memory: bool) -> str:
+    if value is None:
+        return FG_YELLOW
+    thresholds = MEM_THRESHOLDS if memory else GPU_THRESHOLDS
+    if value >= thresholds[1]:
+        return FG_RED
+    if value >= thresholds[0]:
+        return FG_YELLOW
+    return FG_GREEN
+
+
+def _bar_color(label: str, pct_text: str) -> str:
+    return _intensity_color(_parse_percent(pct_text), memory=label in {"MEM", "MBW"})
+
+
+def _max_color(*colors: str) -> str:
+    return max(colors, key=lambda c: _INTENSITY_RANK.get(c, 0))
+
+
+def _device_body_color(line: str) -> str:
+    matches = list(_BAR_RE.finditer(line))
+    if matches:
+        best = FG_GREEN
+        for match in matches:
+            label = match.group(1)
+            if label in {"MEM", "UTL"}:
+                best = _max_color(best, _bar_color(label, match.group(3)))
+        return best
     best = FG_GREEN
-    for value in _PERCENT_RE.findall(line):
-        try:
-            v = float(value)
-        except ValueError:
+    for token in _PERCENT_RE.findall(line):
+        value = _parse_percent(token)
+        if value is None:
             continue
-        if v >= 85:
-            return FG_RED
-        if v >= 60 and best == FG_GREEN:
-            best = FG_YELLOW
+        best = _max_color(best, _intensity_color(value, memory=False))
     return best
 
 
 def _colorize_device_row(line: str) -> str:
-    color = _utilization_color(line)
+    body_color = _device_body_color(line)
     out: list[str] = []
     cursor = 0
     for match in _BAR_RE.finditer(line):
+        label = match.group(1)
+        bar = match.group(2)
+        pct_text = match.group(3)
+        bar_color = _bar_color(label, pct_text)
         if match.start() > cursor:
-            out.append(_style(line[cursor : match.start()], BOLD, color))
-        out.append(_style(match.group(1), BOLD, FG_CYAN))
-        out.append(_style(match.group(2), BOLD, color))
-        out.append(_style(match.group(3), BOLD, color))
+            out.append(_style(line[cursor : match.start()], BOLD, body_color))
+        out.append(_style(f"{label}: ", BOLD, FG_CYAN))
+        out.append(_style(bar, BOLD, bar_color))
+        out.append(_style(f" {pct_text}", BOLD, bar_color))
         cursor = match.end()
     if cursor < len(line):
-        out.append(_style(line[cursor:], BOLD, color))
+        out.append(_style(line[cursor:], BOLD, body_color))
     return "".join(out)
 
 
@@ -142,16 +182,54 @@ def _colorize_process_row(line: str) -> str:
     return "".join([_style(line[:2], FG_WHITE), _style(line[2:5], BOLD, FG_GREEN), _style(line[5:], FG_WHITE)])
 
 
+def _host_left_color(text: str) -> str:
+    if " CPU:" in text:
+        return FG_CYAN
+    if " MEM:" in text:
+        return FG_MAGENTA
+    if " SWP:" in text:
+        return FG_BLUE
+    return FG_WHITE
+
+
+def _gpu_metric_color(text: str) -> str:
+    match = _GPU_METRIC_RE.search(text)
+    if not match:
+        return FG_GREEN
+    return _intensity_color(_parse_percent(match.group(2)), memory=match.group(1) == "MEM")
+
+
+def _style_host_section(text: str, color: str) -> str:
+    bar_match = _HOST_BAR_RE.search(text)
+    if not bar_match:
+        return _style(text, BOLD, color)
+    return "".join(
+        [
+            _style(text[: bar_match.start()], BOLD, color),
+            _style(bar_match.group(1), DIM),
+            _style(bar_match.group(2), BOLD, color),
+            _style(text[bar_match.end():], BOLD, color),
+        ]
+    )
+
+
 def _colorize_host_line(line: str) -> str:
-    if " SWP:" in line:
-        return _style(line, FG_BLUE)
-    if " MEM:" in line:
-        return _style(line, FG_MAGENTA)
-    if " CPU:" in line:
-        return _style(line, FG_CYAN)
-    if "GPU MEM:" in line or "GPU UTL:" in line:
-        return _style(line, FG_GREEN)
-    return _style(line, FG_WHITE)
+    pieces = line.split("│")
+    if len(pieces) < 2 or pieces[0]:
+        return _style(line, FG_WHITE)
+    out = [_style("│", DIM, FG_WHITE)]
+    if len(pieces) > 1:
+        out.append(_style_host_section(pieces[1], _host_left_color(pieces[1])))
+        out.append(_style("│", DIM, FG_WHITE))
+    if len(pieces) > 2:
+        right_text = pieces[2]
+        right_color = _gpu_metric_color(right_text) if "GPU " in right_text else FG_WHITE
+        out.append(_style_host_section(right_text, right_color))
+        out.append(_style("│", DIM, FG_WHITE))
+    for extra in pieces[3:]:
+        out.append(_style(extra, FG_WHITE))
+        out.append(_style("│", DIM, FG_WHITE))
+    return "".join(out)
 
 
 def _is_border_line(line: str) -> bool:
@@ -173,9 +251,11 @@ def _is_header_line(line: str) -> bool:
 def _is_device_data_line(line: str) -> bool:
     if not line.startswith("│") or "GPU-MEM" in line or _is_process_data_line(line):
         return False
+    if "GPU MEM:" in line or "GPU UTL:" in line:
+        return False
     if _DEVICE_ROW_RE.match(line) and "MiB" not in line[:24]:
         return True
-    return any(token in line for token in (" Pwr:", "GPU-Util", "UTL:", "PWR:"))
+    return any(token in line for token in (" Pwr:", "GPU-Util", " UTL:", " PWR:"))
 
 
 def _is_process_data_line(line: str) -> bool:

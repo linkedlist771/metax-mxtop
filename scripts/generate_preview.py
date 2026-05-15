@@ -204,6 +204,174 @@ def build_frame() -> FrameSnapshot:
     return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
 
 
+def build_idle_frame() -> FrameSnapshot:
+    devices = [
+        DeviceSnapshot(
+            index=i,
+            name="MetaX C500",
+            bdf=f"0000:{0x1a + i * 2:02x}:00.0",
+            temperature_c=37 + i,
+            power_w=72.0 + i * 1.5,
+            power_limit_w=350,
+            fan_percent=30,
+            gpu_util_percent=val,
+            memory_util_percent=mem,
+            memory_bandwidth_util_percent=mbw,
+            memory_used_bytes=int(mem / 100 * 64 * 1024**3),
+            memory_total_bytes=64 * 1024**3,
+            performance_state="P8",
+            ecc_errors=0,
+            persistence_mode="Enabled",
+            driver_version="2.31.0.5",
+        )
+        for i, (val, mem, mbw) in enumerate([(0.0, 3.5, 0.0), (2.0, 4.2, 1.0), (0.0, 2.8, 0.0)])
+    ]
+    processes = [
+        ProcessSnapshot(
+            gpu_index=0,
+            pid=99001,
+            name="metaxctl",
+            user="root",
+            gpu_memory_bytes=128 * 1024**2,
+            cpu_percent=0.1,
+            host_memory_bytes=64 * 1024**2,
+            memory_util_percent=0.1,
+            runtime_seconds=86400 * 12,
+            command="/opt/mxdriver/bin/metaxctl serve",
+            process_type="C",
+        ),
+    ]
+    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+
+
+def build_mixed_frame() -> FrameSnapshot:
+    devices = [
+        DeviceSnapshot(
+            index=0,
+            name="MetaX C500",
+            bdf="0000:1a:00.0",
+            temperature_c=72,
+            power_w=312.0,
+            power_limit_w=350,
+            fan_percent=68,
+            gpu_util_percent=94,
+            memory_util_percent=88,
+            memory_bandwidth_util_percent=42,
+            memory_used_bytes=56 * 1024**3,
+            memory_total_bytes=64 * 1024**3,
+            performance_state="P0",
+            ecc_errors=0,
+            persistence_mode="Enabled",
+            driver_version="2.31.0.5",
+        ),
+        DeviceSnapshot(
+            index=1,
+            name="MetaX C500",
+            bdf="0000:3d:00.0",
+            temperature_c=58,
+            power_w=160.0,
+            power_limit_w=350,
+            fan_percent=42,
+            gpu_util_percent=45,
+            memory_util_percent=72,
+            memory_bandwidth_util_percent=18,
+            memory_used_bytes=46 * 1024**3,
+            memory_total_bytes=64 * 1024**3,
+            performance_state="P0",
+            ecc_errors=0,
+            persistence_mode="Enabled",
+            driver_version="2.31.0.5",
+        ),
+        DeviceSnapshot(
+            index=2,
+            name="MetaX C500",
+            bdf="0000:5e:00.0",
+            temperature_c=41,
+            power_w=78.0,
+            power_limit_w=350,
+            fan_percent=33,
+            gpu_util_percent=4,
+            memory_util_percent=6,
+            memory_bandwidth_util_percent=2,
+            memory_used_bytes=4 * 1024**3,
+            memory_total_bytes=64 * 1024**3,
+            performance_state="P8",
+            ecc_errors=0,
+            persistence_mode="Enabled",
+            driver_version="2.31.0.5",
+        ),
+    ]
+    processes = [
+        ProcessSnapshot(
+            gpu_index=0, pid=423901, name="python", user="alice",
+            gpu_memory_bytes=51200 * 1024**2, gpu_util_percent=94, cpu_percent=298.4,
+            host_memory_bytes=22 * 1024**3, memory_util_percent=17.2,
+            runtime_seconds=6 * 3600 + 14 * 60,
+            command="python train.py --config configs/llama3-70b.yaml --bf16",
+            process_type="C",
+        ),
+        ProcessSnapshot(
+            gpu_index=1, pid=512377, name="python", user="bob",
+            gpu_memory_bytes=42000 * 1024**2, gpu_util_percent=45, cpu_percent=128.0,
+            host_memory_bytes=14 * 1024**3, memory_util_percent=10.9,
+            runtime_seconds=86400 + 3 * 3600,
+            command="python -m vllm.entrypoints.api_server --model qwen2-72b",
+            process_type="C",
+        ),
+        ProcessSnapshot(
+            gpu_index=2, pid=99001, name="metaxctl", user="root",
+            gpu_memory_bytes=128 * 1024**2, cpu_percent=0.0,
+            host_memory_bytes=80 * 1024**2, memory_util_percent=0.1,
+            runtime_seconds=86400 * 7,
+            command="/opt/mxdriver/bin/metaxctl serve",
+            process_type="C",
+        ),
+    ]
+    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+
+
+def build_heavy_frame() -> FrameSnapshot:
+    devices = [
+        DeviceSnapshot(
+            index=i,
+            name="MetaX C500",
+            bdf=f"0000:{0x1a + i * 2:02x}:00.0",
+            temperature_c=78 + i,
+            power_w=320.0 + i,
+            power_limit_w=350,
+            fan_percent=85,
+            gpu_util_percent=96.0 - i * 1.5,
+            memory_util_percent=93.0 - i * 0.8,
+            memory_bandwidth_util_percent=88.0 - i * 1.2,
+            memory_used_bytes=int((93 - i * 0.8) / 100 * 64 * 1024**3),
+            memory_total_bytes=64 * 1024**3,
+            performance_state="P0",
+            ecc_errors=0,
+            persistence_mode="Enabled",
+            driver_version="2.31.0.5",
+        )
+        for i in range(4)
+    ]
+    processes = [
+        ProcessSnapshot(
+            gpu_index=i,
+            pid=410000 + i * 17,
+            name="python",
+            user=["alice", "bob", "carol", "dave"][i],
+            gpu_memory_bytes=int((92 - i * 0.5) / 100 * 60 * 1024**3),
+            gpu_util_percent=96.0 - i * 1.5,
+            cpu_percent=320.0 - i * 12,
+            host_memory_bytes=(20 - i) * 1024**3,
+            memory_util_percent=15.0 + i,
+            runtime_seconds=4 * 3600 + i * 600,
+            command=f"python -m train --rank {i} --config configs/llama3.yaml",
+            process_type="C",
+        )
+        for i in range(4)
+    ]
+    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+
+
 def build_many_frame() -> FrameSnapshot:
     devices: list[DeviceSnapshot] = []
     utils = [88, 74, 0, 92, 12, 67, 81, 55, 19, 99, 24, 41, 73, 60, 8, 35]
@@ -321,10 +489,21 @@ def main() -> int:
     parser.add_argument("--theme", choices=list(THEMES), default="dark")
     parser.add_argument("--output", default="assets/mxtop-preview.png", type=Path)
     parser.add_argument("--width", type=int, default=140)
-    parser.add_argument("--scenario", choices=["small", "many"], default="small")
+    parser.add_argument(
+        "--scenario",
+        choices=["small", "many", "idle", "mixed", "heavy"],
+        default="small",
+    )
     args = parser.parse_args()
 
-    frame = build_many_frame() if args.scenario == "many" else build_frame()
+    builders = {
+        "small": build_frame,
+        "many": build_many_frame,
+        "idle": build_idle_frame,
+        "mixed": build_mixed_frame,
+        "heavy": build_heavy_frame,
+    }
+    frame = builders[args.scenario]()
     if args.scenario == "many":
         from mxtop.ui.panels import render_main_screen
         from mxtop.ui.state import UiState, LayoutMode

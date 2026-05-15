@@ -164,7 +164,8 @@ def test_render_once_colors_compact_device_rows():
     )
 
     assert "GPU Fan Temp Perf" in output
-    assert device_line.startswith("\x1b[1m\x1b[32m")
+    # 12% gpu_util falls in nvitop's MODERATE band (10..75) → yellow body color
+    assert device_line.startswith("\x1b[1m\x1b[33m")
 
 
 def test_render_once_uses_two_compact_columns_for_16_gpu_wide_terminal():

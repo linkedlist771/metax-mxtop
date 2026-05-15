@@ -17,6 +17,21 @@
   <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
 </p>
 
+<p align="center"><em>Color bands match nvitop: each <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bar is colored by its own value (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>
+
+<table align="center">
+  <tr>
+    <td align="center"><strong>Idle</strong> — light load, mostly green</td>
+    <td align="center"><strong>Mixed</strong> — per-bar color bands</td>
+    <td align="center"><strong>Heavy</strong> — saturation across the cluster</td>
+  </tr>
+  <tr>
+    <td><img src="assets/mxtop-preview-idle.png" alt="mxtop idle status preview"/></td>
+    <td><img src="assets/mxtop-preview-mixed.png" alt="mxtop mixed status preview"/></td>
+    <td><img src="assets/mxtop-preview-heavy.png" alt="mxtop heavy status preview"/></td>
+  </tr>
+</table>
+
 <p align="center"><em>16-GPU host? mxtop uses an 8+8 compact layout when the terminal is wide enough, with a single-column fallback for narrower screens.</em></p>
 
 <p align="center">
