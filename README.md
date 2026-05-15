@@ -17,7 +17,7 @@
   <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
 </p>
 
-<p align="center"><em>Color bands match nvitop: each <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bar is colored by its own value (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>
+<p align="center"><em>Color bands match nvitop: usage fields and each <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bar are colored by their own values (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>
 
 <table align="center">
   <tr>

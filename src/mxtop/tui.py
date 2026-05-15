@@ -148,14 +148,17 @@ def _draw_process_title_line(screen, row: int, line: str, width: int, attr: int)
 
 
 def _draw_process_data_line(screen, row: int, line: str, width: int, attr: int) -> None:
+    del attr
     if line.startswith("│>"):
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE))
         return
     base_attr = _attr(PAIR_DIM) if " root " in line else _attr(PAIR_VALUE)
+    if " root " not in line and (match := _PROCESS_ROW_FIELDS_RE.search(line)) is not None:
+        _draw_process_metrics_line(screen, row, line, width, match)
+        return
     position = _safe_addnstr(screen, row, 0, line[:2], width, base_attr)
     position = _safe_addnstr(screen, row, position, line[2:5], width, _attr(PAIR_GOOD, curses.A_BOLD))
     _safe_addnstr(screen, row, position, line[5:], width, base_attr)
-    del attr
 
 
 _DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
@@ -163,10 +166,32 @@ _PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
 _BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░]+) (\S+)")
 _HOST_BAR_RE = re.compile(r"(  )([█░]{4,})")
 _GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
+_WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
+_MEMORY_RATIO_RE = re.compile(
+    r"(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)\s*/\s*(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)"
+)
+_CELL_GPU_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
+_PROCESS_ROW_FIELDS_RE = re.compile(
+    r"^(?P<prefix>│[ >]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
+    r"(?P<gpu_mem>N/A|\d+(?:\.\d+)?(?:B|KiB|MiB|GiB|TiB))"
+    r"(?P<before_sm>\s+)(?P<sm>\S+)"
+    r"(?P<before_gmbw>\s+)(?P<gmbw>\S+)"
+    r"(?P<before_cpu>\s+)(?P<cpu>\S+)"
+    r"(?P<before_mem_pct>\s+)(?P<mem_pct>\S+)"
+)
+_BYTE_UNITS = {
+    "B": 1.0,
+    "KiB": 1024.0,
+    "MiB": 1024.0**2,
+    "GiB": 1024.0**3,
+    "TiB": 1024.0**4,
+}
 
 
 def _is_device_data_line(line: str) -> bool:
     if not line.startswith("│") or "GPU-MEM" in line or _is_process_data_line(line):
+        return False
+    if _is_header_line(line):
         return False
     if "GPU MEM:" in line or "GPU UTL:" in line:
         return False
@@ -177,6 +202,17 @@ def _is_device_data_line(line: str) -> bool:
 
 def _is_process_data_line(line: str) -> bool:
     return bool(_PROCESS_ROW_RE.match(line))
+
+
+def _is_header_line(line: str) -> bool:
+    return (
+        "GPU     PID" in line
+        or "GPU      PID" in line
+        or "GPU  Name" in line
+        or "GPU Fan Temp" in line
+        or "Fan  Temp" in line
+        or "Processes:" in line
+    )
 
 
 def _is_host_data_line(line: str) -> bool:
@@ -218,43 +254,181 @@ def _bar_pair(label: str, pct_text: str) -> int:
     return _intensity_pair(_parse_percent(pct_text), memory=label in {"MEM", "MBW"})
 
 
-def _max_pair(*pairs: int) -> int:
-    rank = {PAIR_GOOD: 0, PAIR_WARN: 1, PAIR_HOT: 2}
-    return max(pairs, key=lambda pair: rank.get(pair, 0))
-
-
-def _device_body_pair(line: str) -> int:
-    matches = list(_BAR_RE.finditer(line))
-    if matches:
-        best = PAIR_GOOD
-        for match in matches:
-            label = match.group(1)
-            if label in {"MEM", "UTL"}:
-                best = _max_pair(best, _bar_pair(label, match.group(3)))
-        return best
-    best = PAIR_GOOD
-    for token in re.findall(r"(\d+(?:\.\d+)?)%", line):
-        value = _parse_percent(token)
-        if value is None:
-            continue
-        best = _max_pair(best, _intensity_pair(value, memory=False))
-    return best
-
-
 def _draw_device_data_line(screen, row: int, line: str, width: int) -> None:
-    body_pair = _device_body_pair(line)
-    body_attr = _attr(body_pair, curses.A_BOLD)
+    _draw_device_cells(screen, row, line, width)
+
+
+def _draw_device_cells(screen, row: int, line: str, width: int) -> None:
+    pieces = line.split("│")
+    if len(pieces) < 3:
+        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
+        return
     cursor = 0
-    for match in _BAR_RE.finditer(line):
+    for index, piece in enumerate(pieces):
+        if index:
+            cursor = _safe_addnstr(screen, row, cursor, "│", width, _attr(PAIR_DIM))
+        if not piece:
+            continue
+        if index == 0:
+            cursor = _safe_addnstr(screen, row, cursor, piece, width, _attr(PAIR_VALUE, curses.A_BOLD))
+            continue
+        role = (index - 1) % 4
+        cursor = _draw_device_cell(screen, row, cursor, piece, width, role)
+
+
+def _draw_device_cell(screen, row: int, cursor: int, text: str, width: int, role: int) -> int:
+    if role == 0:
+        return _draw_watt_ratio(screen, row, cursor, text, width)
+    if role == 1:
+        return _draw_memory_ratio(screen, row, cursor, text, width)
+    if role == 2:
+        return _draw_gpu_percent(screen, row, cursor, text, width)
+    return _draw_bar_cell(screen, row, cursor, text, width)
+
+
+def _draw_watt_ratio(screen, row: int, cursor: int, text: str, width: int) -> int:
+    match = _WATT_RATIO_RE.search(text)
+    if not match:
+        return _safe_addnstr(screen, row, cursor, text, width, _attr(PAIR_VALUE, curses.A_BOLD))
+    used = _float_text(match.group(1))
+    limit = _float_text(match.group(2))
+    value = None if used is None or not limit else min(100.0, max(0.0, used / limit * 100))
+    return _draw_with_pair_span(
+        screen,
+        row,
+        cursor,
+        text,
+        width,
+        match.start(),
+        match.end(),
+        _intensity_pair(value, memory=False),
+    )
+
+
+def _draw_memory_ratio(screen, row: int, cursor: int, text: str, width: int) -> int:
+    match = _MEMORY_RATIO_RE.search(text)
+    if not match:
+        return _safe_addnstr(screen, row, cursor, text, width, _attr(PAIR_VALUE, curses.A_BOLD))
+    value = _ratio_percent(match.group(1), match.group(2), match.group(3), match.group(4))
+    return _draw_with_pair_span(
+        screen,
+        row,
+        cursor,
+        text,
+        width,
+        match.start(),
+        match.end(),
+        _intensity_pair(value, memory=True),
+    )
+
+
+def _draw_gpu_percent(screen, row: int, cursor: int, text: str, width: int) -> int:
+    match = _CELL_GPU_PERCENT_RE.search(text)
+    if not match:
+        return _safe_addnstr(screen, row, cursor, text, width, _attr(PAIR_VALUE, curses.A_BOLD))
+    pair = _intensity_pair(_parse_percent(match.group(1)), memory=False)
+    return _draw_with_pair_span(screen, row, cursor, text, width, match.start(), match.end(), pair)
+
+
+def _draw_bar_cell(screen, row: int, cursor: int, text: str, width: int) -> int:
+    local_cursor = 0
+    for match in _BAR_RE.finditer(text):
         label = match.group(1)
         bar = match.group(2)
         pct_text = match.group(3)
-        bar_pair = _bar_pair(label, pct_text)
-        cursor = _safe_addnstr(screen, row, cursor, line[cursor : match.start()], width, body_attr)
+        pair = _bar_pair(label, pct_text)
+        cursor = _safe_addnstr(
+            screen,
+            row,
+            cursor,
+            text[local_cursor : match.start()],
+            width,
+            _attr(PAIR_VALUE, curses.A_BOLD),
+        )
         cursor = _safe_addnstr(screen, row, cursor, f"{label}: ", width, _attr(PAIR_HEADER, curses.A_BOLD))
-        cursor = _safe_addnstr(screen, row, cursor, bar, width, _attr(bar_pair, curses.A_BOLD))
-        cursor = _safe_addnstr(screen, row, cursor, f" {pct_text}", width, _attr(bar_pair, curses.A_BOLD))
-    _safe_addnstr(screen, row, cursor, line[cursor:], width, body_attr)
+        cursor = _safe_addnstr(screen, row, cursor, bar, width, _attr(pair, curses.A_BOLD))
+        cursor = _safe_addnstr(screen, row, cursor, f" {pct_text}", width, _attr(pair, curses.A_BOLD))
+        local_cursor = match.end()
+    return _safe_addnstr(screen, row, cursor, text[local_cursor:], width, _attr(PAIR_VALUE, curses.A_BOLD))
+
+
+def _draw_with_pair_span(
+    screen,
+    row: int,
+    cursor: int,
+    text: str,
+    width: int,
+    start: int,
+    end: int,
+    pair: int,
+) -> int:
+    cursor = _safe_addnstr(screen, row, cursor, text[:start], width, _attr(PAIR_VALUE, curses.A_BOLD))
+    cursor = _safe_addnstr(screen, row, cursor, text[start:end], width, _attr(pair, curses.A_BOLD))
+    return _safe_addnstr(screen, row, cursor, text[end:], width, _attr(PAIR_VALUE, curses.A_BOLD))
+
+
+def _draw_process_metrics_line(screen, row: int, line: str, width: int, match: re.Match[str]) -> None:
+    cursor = 0
+    cursor = _safe_addnstr(screen, row, cursor, match.group("prefix"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(screen, row, cursor, match.group("gpu"), width, _attr(PAIR_GOOD, curses.A_BOLD))
+    cursor = _safe_addnstr(screen, row, cursor, match.group("before_mem"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(screen, row, cursor, match.group("gpu_mem"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(screen, row, cursor, match.group("before_sm"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(
+        screen,
+        row,
+        cursor,
+        match.group("sm"),
+        width,
+        _attr(_intensity_pair(_parse_percent(match.group("sm")), memory=False), curses.A_BOLD),
+    )
+    cursor = _safe_addnstr(screen, row, cursor, match.group("before_gmbw"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(
+        screen,
+        row,
+        cursor,
+        match.group("gmbw"),
+        width,
+        _attr(_intensity_pair(_parse_percent(match.group("gmbw")), memory=True), curses.A_BOLD),
+    )
+    cursor = _safe_addnstr(screen, row, cursor, match.group("before_cpu"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(
+        screen,
+        row,
+        cursor,
+        match.group("cpu"),
+        width,
+        _attr(_intensity_pair(_parse_percent(match.group("cpu")), memory=False), curses.A_BOLD),
+    )
+    cursor = _safe_addnstr(screen, row, cursor, match.group("before_mem_pct"), width, _attr(PAIR_VALUE))
+    cursor = _safe_addnstr(
+        screen,
+        row,
+        cursor,
+        match.group("mem_pct"),
+        width,
+        _attr(_intensity_pair(_parse_percent(match.group("mem_pct")), memory=True), curses.A_BOLD),
+    )
+    _safe_addnstr(screen, row, cursor, line[match.end() :], width, _attr(PAIR_VALUE))
+
+
+def _float_text(text: str) -> float | None:
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _ratio_percent(used: str, used_unit: str, total: str, total_unit: str) -> float | None:
+    used_value = _float_text(used)
+    total_value = _float_text(total)
+    if used_value is None or total_value is None:
+        return None
+    used_bytes = used_value * _BYTE_UNITS[used_unit]
+    total_bytes = total_value * _BYTE_UNITS[total_unit]
+    if total_bytes <= 0:
+        return None
+    return min(100.0, max(0.0, used_bytes / total_bytes * 100))
 
 
 def _host_left_pair(text: str) -> int:
@@ -318,7 +492,26 @@ def _line_attr(row: int, line: str) -> int:
     if not line:
         return _attr(PAIR_VALUE)
     stripped = line.strip()
-    if stripped and set(stripped) <= {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═", "┬", "┴", "╤", "│"}:
+    if stripped and set(stripped) <= {
+        " ",
+        "╒",
+        "╕",
+        "╘",
+        "╛",
+        "╞",
+        "╡",
+        "╪",
+        "╧",
+        "├",
+        "┤",
+        "┼",
+        "─",
+        "═",
+        "┬",
+        "┴",
+        "╤",
+        "│",
+    }:
         return _attr(PAIR_DIM)
     if (
         "Processes:" in line

@@ -3,11 +3,12 @@ from mxtop.models import FrameSnapshot
 
 
 class FakeScreen:
-    def __init__(self):
+    def __init__(self, column_limit=8):
         self.calls = []
+        self.column_limit = column_limit
 
     def addnstr(self, row, column, text, count, attr=0):
-        if column >= 8 or count <= 0:
+        if column >= self.column_limit or count <= 0:
             raise RuntimeError("would be curses ERR")
         self.calls.append((row, column, text[:count], count, attr))
 
@@ -87,3 +88,32 @@ def test_new_layout_rows_are_detected_for_colored_drawing():
     assert tui._is_process_data_line(process_row)
     assert tui._is_host_data_line(host_row)
     assert tui._is_version_line(version_row)
+
+
+def test_device_usage_fields_use_independent_tui_colors(monkeypatch):
+    monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: pair)
+    screen = FakeScreen(column_limit=160)
+    line = (
+        "│ N/A   N/A  N/A     20W / 350W │   4.00GiB / 64.00GiB │"
+        "      4%      Default │"
+    )
+
+    tui._draw_device_data_line(screen, 0, line, 120)
+
+    colored_segments = {(text, attr) for _, _, text, _, attr in screen.calls}
+    assert ("20W / 350W", tui.PAIR_GOOD) in colored_segments
+    assert ("4.00GiB / 64.00GiB", tui.PAIR_GOOD) in colored_segments
+    assert ("4%", tui.PAIR_GOOD) in colored_segments
+
+    hot_screen = FakeScreen(column_limit=160)
+    hot_line = (
+        "│ N/A   N/A  N/A    330W / 350W │  56.00GiB / 64.00GiB │"
+        "     94%      Default │"
+    )
+
+    tui._draw_device_data_line(hot_screen, 0, hot_line, 120)
+
+    hot_segments = {(text, attr) for _, _, text, _, attr in hot_screen.calls}
+    assert ("330W / 350W", tui.PAIR_HOT) in hot_segments
+    assert ("56.00GiB / 64.00GiB", tui.PAIR_HOT) in hot_segments
+    assert ("94%", tui.PAIR_HOT) in hot_segments

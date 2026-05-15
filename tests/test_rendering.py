@@ -1,6 +1,10 @@
-from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
+import re
+
 from mxtop.formatting import format_bar
+from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 from mxtop.rendering import render_once
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _many_devices(count=16):
@@ -8,6 +12,10 @@ def _many_devices(count=16):
         DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=12, memory_util_percent=8)
         for i in range(count)
     ]
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
 
 
 def test_render_once_includes_gpu_and_process_rows():
@@ -155,17 +163,120 @@ def test_render_once_emits_ansi_color_when_enabled():
     assert "\x1b[36mUTL: " in output
 
 
-def test_render_once_colors_compact_device_rows():
-    frame = FrameSnapshot(devices=_many_devices(), processes=[])
+def test_render_once_colors_compact_device_usage_independently():
+    utils = [4] * 8 + [94] * 8
+    frame = FrameSnapshot(
+        devices=[
+            DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=value, memory_util_percent=value)
+            for i, value in enumerate(utils)
+        ],
+        processes=[],
+    )
 
     output = render_once(frame, width=170, use_color=True)
     device_line = next(
-        line for line in output.splitlines() if "│   0 " in line and "│   8 " in line
+        line
+        for line in output.splitlines()
+        if "│   0 " in _strip_ansi(line) and "│   8 " in _strip_ansi(line)
     )
 
     assert "GPU Fan Temp Perf" in output
-    # 12% gpu_util falls in nvitop's MODERATE band (10..75) → yellow body color
-    assert device_line.startswith("\x1b[1m\x1b[33m")
+    assert "\x1b[1m\x1b[32m4%" in device_line
+    assert "\x1b[1m\x1b[31m94%" in device_line
+
+
+def test_render_once_colors_device_usage_fields_independently():
+    frame = FrameSnapshot(
+        devices=[
+            DeviceSnapshot(
+                index=0,
+                name="MXC500",
+                power_w=20,
+                power_limit_w=350,
+                gpu_util_percent=4,
+                memory_used_bytes=4 * 1024**3,
+                memory_total_bytes=64 * 1024**3,
+            ),
+            DeviceSnapshot(
+                index=1,
+                name="MXC500",
+                power_w=215,
+                power_limit_w=350,
+                gpu_util_percent=45,
+                memory_used_bytes=46 * 1024**3,
+                memory_total_bytes=64 * 1024**3,
+            ),
+            DeviceSnapshot(
+                index=2,
+                name="MXC500",
+                power_w=330,
+                power_limit_w=350,
+                gpu_util_percent=94,
+                memory_used_bytes=56 * 1024**3,
+                memory_total_bytes=64 * 1024**3,
+            ),
+        ],
+        processes=[],
+    )
+
+    output = render_once(frame, width=120, use_color=True)
+
+    assert "\x1b[1m\x1b[32m20W / 350W" in output
+    assert "\x1b[1m\x1b[32m4.00GiB / 64.00GiB" in output
+    assert "\x1b[1m\x1b[32m4%" in output
+    assert "\x1b[1m\x1b[33m215W / 350W" in output
+    assert "\x1b[1m\x1b[33m46.00GiB / 64.00GiB" in output
+    assert "\x1b[1m\x1b[33m45%" in output
+    assert "\x1b[1m\x1b[31m330W / 350W" in output
+    assert "\x1b[1m\x1b[31m56.00GiB / 64.00GiB" in output
+    assert "\x1b[1m\x1b[31m94%" in output
+
+
+def test_render_once_colors_process_usage_columns():
+    frame = FrameSnapshot(
+        devices=[],
+        processes=[
+            ProcessSnapshot(
+                gpu_index=0,
+                pid=10,
+                user="alice",
+                gpu_memory_bytes=10 * 1024**2,
+                gpu_util_percent=4,
+                gpu_memory_bandwidth_util_percent=1,
+                cpu_percent=5,
+                memory_util_percent=1,
+                command="low",
+            ),
+            ProcessSnapshot(
+                gpu_index=1,
+                pid=20,
+                user="bob",
+                gpu_memory_bytes=1000 * 1024**2,
+                gpu_util_percent=45,
+                gpu_memory_bandwidth_util_percent=72,
+                cpu_percent=150,
+                memory_util_percent=20,
+                command="mid",
+            ),
+            ProcessSnapshot(
+                gpu_index=2,
+                pid=30,
+                user="carol",
+                gpu_memory_bytes=50000 * 1024**2,
+                gpu_util_percent=94,
+                gpu_memory_bandwidth_util_percent=88,
+                cpu_percent=300,
+                memory_util_percent=90,
+                command="hot",
+            ),
+        ],
+    )
+
+    output = render_once(frame, width=140, use_color=True)
+
+    assert "\x1b[1m\x1b[32m4\x1b[0m" in output
+    assert "\x1b[1m\x1b[33m45\x1b[0m" in output
+    assert "\x1b[1m\x1b[31m94\x1b[0m" in output
 
 
 def test_render_once_uses_two_compact_columns_for_16_gpu_wide_terminal():
