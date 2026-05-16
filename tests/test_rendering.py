@@ -80,6 +80,119 @@ def test_format_bar_clamps_and_fills_blocks():
     assert format_bar(None, width=3) == "░░░"
 
 
+def test_format_bar_uses_subcell_glyphs():
+    assert format_bar(25, width=4) == "█░░░"
+    assert format_bar(50, width=4) == "██░░"
+    bar = format_bar(12.5, width=4)
+    assert bar.startswith("▌") or bar.startswith("█")
+    assert len(bar) == 4
+
+
+def test_format_bar_handles_non_finite():
+    assert format_bar(float("nan"), width=5) == "░░░░░"
+    assert format_bar(float("inf"), width=5) == "░░░░░"
+
+
+def test_render_once_shows_max_for_saturated_bar():
+    frame = FrameSnapshot(
+        devices=[
+            DeviceSnapshot(
+                index=0,
+                name="MXC500",
+                memory_used_bytes=64 * 1024**3,
+                memory_total_bytes=64 * 1024**3,
+                memory_util_percent=100,
+                gpu_util_percent=100,
+            )
+        ],
+        processes=[],
+    )
+
+    output = render_once(frame, width=140, use_color=False)
+
+    assert " MAX " in output
+    assert "MEM: " in output
+
+
+def test_render_once_survives_nan_and_inf_values():
+    frame = FrameSnapshot(
+        devices=[
+            DeviceSnapshot(
+                index=0,
+                name="MXC500",
+                gpu_util_percent=float("nan"),
+                memory_util_percent=float("inf"),
+                memory_bandwidth_util_percent=float("nan"),
+            )
+        ],
+        processes=[
+            ProcessSnapshot(
+                gpu_index=0,
+                pid=99,
+                gpu_util_percent=float("nan"),
+                cpu_percent=float("inf"),
+                command="weird",
+            )
+        ],
+    )
+
+    output = render_once(frame, width=140, use_color=False)
+
+    assert "weird" in output
+    assert "N/A" in output
+
+
+def test_render_once_compact_panel_extends_to_full_width():
+    devices = [
+        DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=10, memory_util_percent=10)
+        for i in range(8)
+    ]
+    output = render_once(FrameSnapshot(devices=devices, processes=[]), width=120, use_color=False)
+    device_lines = [line for line in output.splitlines() if line.startswith("│") and "MXC500" in line]
+    assert device_lines, "expected at least one device row"
+    assert all(len(line) == 120 for line in device_lines)
+
+
+def test_render_once_lines_share_the_requested_width():
+    frame = FrameSnapshot(
+        devices=[
+            DeviceSnapshot(
+                index=0,
+                name="MXC500",
+                gpu_util_percent=42,
+                memory_used_bytes=32 * 1024**3,
+                memory_total_bytes=64 * 1024**3,
+                memory_util_percent=50,
+                memory_bandwidth_util_percent=40,
+                power_w=200,
+                power_limit_w=350,
+            ),
+            DeviceSnapshot(index=1, name="MXC500", gpu_util_percent=12, memory_util_percent=8),
+        ],
+        processes=[],
+    )
+    for width in (79, 100, 120, 160, 200):
+        output = render_once(frame, width=width, use_color=False)
+        for line in output.splitlines():
+            if not line:
+                continue
+            assert len(line) == width, (
+                f"line width mismatch at width={width}: expected {width}, got {len(line)}: {line!r}"
+            )
+
+
+def test_render_once_host_panel_does_not_duplicate_right_vbar():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, gpu_util_percent=50, memory_util_percent=50)],
+        processes=[],
+    )
+    coloured = render_once(frame, width=120, use_color=True)
+    for line in coloured.splitlines():
+        plain = ANSI_RE.sub("", line)
+        if "GPU MEM:" in plain or "GPU UTL:" in plain:
+            assert not plain.endswith("││"), f"trailing duplicate vbar in {plain!r}"
+
+
 def test_render_once_shows_bars_on_wide_layout():
     frame = FrameSnapshot(
         devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83)],

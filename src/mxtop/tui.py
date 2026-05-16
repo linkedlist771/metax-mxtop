@@ -9,6 +9,7 @@ from typing import Any
 from mxtop.backends import TelemetryBackend
 from mxtop.filters import apply_filters
 from mxtop.models import FrameSnapshot
+from mxtop import rendering as _rendering
 from mxtop.rendering import render_once
 from mxtop.sampler import SnapshotSampler
 from mxtop.ui.panels import MIN_SCREEN_WIDTH, render_main_screen
@@ -28,8 +29,6 @@ PAIR_SWAP = 11
 MIN_TUI_WIDTH = 72
 OUTER_BORDER_MIN_HEIGHT = 10
 
-MEM_THRESHOLDS = (10, 80)
-GPU_THRESHOLDS = (10, 75)
 SCROLL_STEP = 3
 CURSOR_HOME = "\x1b[H"
 CLEAR_TO_END = "\x1b[J"
@@ -208,8 +207,8 @@ def _draw_process_data_line(screen, row: int, line: str, width: int, attr: int) 
 
 _DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
 _PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
-_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░]+) (\S+)")
-_HOST_BAR_RE = re.compile(r"(  )([█░]{4,})")
+_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
+_HOST_BAR_RE = re.compile(r"(  )([█░▏▎▍▌▋▊▉]{4,})")
 _GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
 _WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
 _MEMORY_RATIO_RE = re.compile(
@@ -280,7 +279,7 @@ def _draw_version_line(screen, row: int, line: str, width: int) -> None:
 def _intensity_pair(value: float | None, *, memory: bool) -> int:
     if value is None:
         return PAIR_WARN
-    thresholds = MEM_THRESHOLDS if memory else GPU_THRESHOLDS
+    thresholds = _rendering.MEM_THRESHOLDS if memory else _rendering.GPU_THRESHOLDS
     if value >= thresholds[1]:
         return PAIR_HOT
     if value >= thresholds[0]:
@@ -289,6 +288,8 @@ def _intensity_pair(value: float | None, *, memory: bool) -> int:
 
 
 def _parse_percent(text: str) -> float | None:
+    if text == "MAX":
+        return 100.0
     try:
         return float(text.replace("%", ""))
     except ValueError:
@@ -523,6 +524,8 @@ def _draw_host_data_line(screen, row: int, line: str, width: int) -> None:
         cursor = _draw_host_section(screen, row, cursor, right_text, width, right_pair)
         cursor = _safe_addnstr(screen, row, cursor, "│", width, _attr(PAIR_DIM))
     for extra in pieces[3:]:
+        if not extra:
+            continue
         cursor = _safe_addnstr(screen, row, cursor, extra, width, _attr(PAIR_VALUE, curses.A_BOLD))
         cursor = _safe_addnstr(screen, row, cursor, "│", width, _attr(PAIR_DIM))
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 import sys
 import time
 
@@ -10,11 +11,19 @@ from mxtop import __version__
 from mxtop.backends import TelemetryBackend, create_backend
 from mxtop.filters import apply_filters, normalize_indices, normalize_pids, normalize_strings
 from mxtop.models import FrameSnapshot
-from mxtop.rendering import render_once
+from mxtop.rendering import (
+    DEFAULT_GPU_UTILIZATION_THRESHOLDS,
+    DEFAULT_MEMORY_UTILIZATION_THRESHOLDS,
+    render_once,
+    set_intensity_thresholds,
+    set_render_style,
+)
 from mxtop.tui import run_tui
 from mxtop.ui.state import LayoutMode
 
 MIN_INTERVAL = 0.25
+MXTOP_GPU_THRESHOLDS_ENV = "MXTOP_GPU_UTILIZATION_THRESHOLDS"
+MXTOP_MEM_THRESHOLDS_ENV = "MXTOP_MEMORY_UTILIZATION_THRESHOLDS"
 
 
 @dataclass(slots=True)
@@ -96,13 +105,85 @@ def build_parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--graphics", action="store_true", help="prefer graphics processes when process type is available")
     _ = parser.add_argument("--only-graphics", action="store_true", help="show only graphics processes when process type is available")
     _ = parser.add_argument("--no-unicode", "--ascii", action="store_true", help="reserve ASCII-only rendering mode")
-    _ = parser.add_argument("--gpu-util-thresh", nargs=2, type=float, metavar=("LOW", "HIGH"), default=(60.0, 85.0))
-    _ = parser.add_argument("--mem-util-thresh", nargs=2, type=float, metavar=("LOW", "HIGH"), default=(60.0, 85.0))
+    _ = parser.add_argument(
+        "--colorful",
+        action="store_true",
+        help="use a 5-tier intensity palette for usage-coloured bars and percentages",
+    )
+    _ = parser.add_argument(
+        "--light",
+        action="store_true",
+        help="adjust dim foreground for light terminal themes",
+    )
+    _ = parser.add_argument(
+        "--force-color",
+        action="store_true",
+        help="emit ANSI colour even when stdout is not a TTY",
+    )
+    _ = parser.add_argument(
+        "--gpu-util-thresh",
+        nargs=2,
+        type=float,
+        metavar=("LOW", "HIGH"),
+        default=None,
+        help=(
+            "GPU utilization intensity thresholds (default: "
+            f"{DEFAULT_GPU_UTILIZATION_THRESHOLDS[0]} {DEFAULT_GPU_UTILIZATION_THRESHOLDS[1]}). "
+            f"Falls back to env {MXTOP_GPU_THRESHOLDS_ENV}=LOW,HIGH when omitted."
+        ),
+    )
+    _ = parser.add_argument(
+        "--mem-util-thresh",
+        nargs=2,
+        type=float,
+        metavar=("LOW", "HIGH"),
+        default=None,
+        help=(
+            "GPU memory intensity thresholds (default: "
+            f"{DEFAULT_MEMORY_UTILIZATION_THRESHOLDS[0]} {DEFAULT_MEMORY_UTILIZATION_THRESHOLDS[1]}). "
+            f"Falls back to env {MXTOP_MEM_THRESHOLDS_ENV}=LOW,HIGH when omitted."
+        ),
+    )
     return parser
+
+
+def _parse_threshold_env(value: str | None) -> tuple[int, int] | None:
+    if not value:
+        return None
+    try:
+        parts = [int(float(token)) for token in value.split(",")[:2]]
+    except ValueError:
+        return None
+    if len(parts) != 2:
+        return None
+    low, high = sorted(parts)
+    if not (0 < low < high < 100):
+        return None
+    return low, high
+
+
+def _coerce_threshold(values: list[float] | tuple[float, float] | None) -> tuple[int, int] | None:
+    if values is None:
+        return None
+    if len(values) != 2:
+        return None
+    low, high = sorted(int(value) for value in values)
+    if not (0 <= low < high <= 100):
+        return None
+    return low, high
+
+
+def _apply_intensity_thresholds(args: argparse.Namespace) -> None:
+    gpu = _coerce_threshold(args.gpu_util_thresh) or _parse_threshold_env(os.environ.get(MXTOP_GPU_THRESHOLDS_ENV))
+    memory = _coerce_threshold(args.mem_util_thresh) or _parse_threshold_env(os.environ.get(MXTOP_MEM_THRESHOLDS_ENV))
+    if gpu is not None or memory is not None:
+        set_intensity_thresholds(gpu=gpu, memory=memory)
 
 
 def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _apply_intensity_thresholds(args)
+    set_render_style(light=args.light, colorful=args.colorful)
     options = _runtime_options(args)
     selected_backend = backend or create_backend(args.backend)
 
@@ -110,8 +191,9 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         print(json.dumps(_single_snapshot_with_cpu_sample(selected_backend, options).to_dict(), indent=2, sort_keys=True))
         return 0
 
+    use_color = not options.no_color and (args.force_color or sys.stdout.isatty() or args.once)
     if args.once or not sys.stdout.isatty():
-        print(render_once(_single_snapshot_with_cpu_sample(selected_backend, options), use_color=not options.no_color))
+        print(render_once(_single_snapshot_with_cpu_sample(selected_backend, options), use_color=use_color))
         return 0
 
     return run_tui(

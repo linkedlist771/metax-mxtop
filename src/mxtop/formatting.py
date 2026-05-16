@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 
 def format_bytes(value: int | None) -> str:
     if value is None:
@@ -46,12 +48,18 @@ def format_mib(value: int | None) -> str:
     return f"{amount:.2f}MiB"
 
 
+def _finite(value: float | None) -> bool:
+    return value is not None and math.isfinite(float(value))
+
+
 def format_percent(value: float | None) -> str:
-    return "N/A" if value is None else f"{value:.0f}%"
+    if not _finite(value):
+        return "N/A"
+    return f"{value:.0f}%"
 
 
 def format_percent_precise(value: float | None) -> str:
-    if value is None:
+    if not _finite(value):
         return "N/A"
     if abs(value - round(value)) < 0.05:
         return f"{value:.0f}%"
@@ -59,7 +67,7 @@ def format_percent_precise(value: float | None) -> str:
 
 
 def format_percent_value(value: float | None) -> str:
-    if value is None:
+    if not _finite(value):
         return "N/A"
     if abs(value - round(value)) < 0.05:
         return f"{value:.0f}"
@@ -83,14 +91,21 @@ def format_duration(value: float | None) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
+_SUBCELL_GLYPHS = " ▏▎▍▌▋▊▉"
+
+
 def format_bar(value: float | None, width: int = 12) -> str:
     if width <= 0:
         return ""
-    if value is None:
+    if value is None or (isinstance(value, float) and not math.isfinite(value)):
         return "░" * width
-    percent = max(0.0, min(100.0, value))
-    filled = round(width * percent / 100)
-    return "█" * filled + "░" * (width - filled)
+    percent = max(0.0, min(100.0, float(value)))
+    eighths = round(8 * width * percent / 100)
+    full, remainder = divmod(eighths, 8)
+    bar = "█" * full
+    if remainder:
+        bar += _SUBCELL_GLYPHS[remainder]
+    return bar + "░" * (width - len(bar))
 
 
 def ellipsize(value: str | None, width: int, marker: str = "..") -> str:

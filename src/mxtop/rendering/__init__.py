@@ -18,6 +18,25 @@ FG_RED = "\x1b[31m"
 FG_MAGENTA = "\x1b[35m"
 FG_BLUE = "\x1b[34m"
 FG_WHITE = "\x1b[37m"
+FG_BLACK = "\x1b[30m"
+FG_BRIGHT_GREEN = "\x1b[92m"
+FG_BRIGHT_YELLOW = "\x1b[93m"
+FG_BRIGHT_RED = "\x1b[91m"
+LIGHT_THEME = False
+COLORFUL_MODE = False
+
+
+def set_render_style(light: bool | None = None, colorful: bool | None = None) -> None:
+    """Toggle visual modes that mirror nvitop's ``--light`` / ``--colorful``."""
+    global LIGHT_THEME, COLORFUL_MODE
+    if light is not None:
+        LIGHT_THEME = bool(light)
+    if colorful is not None:
+        COLORFUL_MODE = bool(colorful)
+
+
+def _dim_fg() -> str:
+    return FG_BLACK if LIGHT_THEME else FG_WHITE
 BORDER_CHARS = {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═", "│", "┬", "┴", "╤"}
 _DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
 _PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
@@ -50,7 +69,7 @@ def _colorize_line(row: int, line: str) -> str:
     if _is_device_data_line(line):
         return _colorize_device_row(line)
     if _is_border_line(line):
-        return _style(line, DIM, FG_WHITE)
+        return _style(line, DIM, _dim_fg())
     if "MXTOP" in line and "Driver Version" in line:
         return _style(line, BOLD, FG_WHITE)
     if _is_header_line(line):
@@ -58,18 +77,19 @@ def _colorize_line(row: int, line: str) -> str:
     if _is_host_line(line):
         return _colorize_host_line(line)
     if _is_graph_line(line):
-        return _style(line, DIM, FG_WHITE)
+        return _style(line, DIM, _dim_fg())
     return _style(line, FG_WHITE)
 
 
-_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░]+) (\S+)")
-_HOST_BAR_RE = re.compile(r"(  )([█░]{4,})")
+_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
+_HOST_BAR_RE = re.compile(r"(  )([█░▏▎▍▌▋▊▉]{4,})")
 _GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
 _WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
 _MEMORY_RATIO_RE = re.compile(
     r"(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)\s*/\s*(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)"
 )
 _CELL_GPU_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
+_BAR_SUFFIX_PERCENT_RE = re.compile(r"^(MAX|\d+(?:\.\d+)?%)$")
 _PROCESS_ROW_FIELDS_RE = re.compile(
     r"^(?P<prefix>│[ >]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
     r"(?P<gpu_mem>N/A|\d+(?:\.\d+)?(?:B|KiB|MiB|GiB|TiB))"
@@ -79,8 +99,32 @@ _PROCESS_ROW_FIELDS_RE = re.compile(
     r"(?P<before_mem_pct>\s+)(?P<mem_pct>\S+)"
 )
 
-MEM_THRESHOLDS = (10, 80)
-GPU_THRESHOLDS = (10, 75)
+DEFAULT_GPU_UTILIZATION_THRESHOLDS: tuple[int, int] = (10, 75)
+DEFAULT_MEMORY_UTILIZATION_THRESHOLDS: tuple[int, int] = (10, 80)
+GPU_THRESHOLDS: tuple[int, int] = DEFAULT_GPU_UTILIZATION_THRESHOLDS
+MEM_THRESHOLDS: tuple[int, int] = DEFAULT_MEMORY_UTILIZATION_THRESHOLDS
+
+
+def set_intensity_thresholds(
+    gpu: tuple[int, int] | None = None,
+    memory: tuple[int, int] | None = None,
+) -> None:
+    """Override the intensity colouring thresholds used by the renderer."""
+    global GPU_THRESHOLDS, MEM_THRESHOLDS
+    if gpu is not None:
+        low, high = sorted(int(value) for value in gpu)
+        GPU_THRESHOLDS = (low, high)
+    if memory is not None:
+        low, high = sorted(int(value) for value in memory)
+        MEM_THRESHOLDS = (low, high)
+
+
+def reset_intensity_thresholds() -> None:
+    """Reset intensity thresholds back to nvitop-aligned defaults."""
+    set_intensity_thresholds(
+        gpu=DEFAULT_GPU_UTILIZATION_THRESHOLDS,
+        memory=DEFAULT_MEMORY_UTILIZATION_THRESHOLDS,
+    )
 _BYTE_UNITS = {
     "B": 1.0,
     "KiB": 1024.0,
@@ -91,6 +135,8 @@ _BYTE_UNITS = {
 
 
 def _parse_percent(text: str) -> float | None:
+    if text == "MAX":
+        return 100.0
     try:
         return float(text.replace("%", ""))
     except ValueError:
@@ -101,6 +147,21 @@ def _intensity_color(value: float | None, *, memory: bool) -> str:
     if value is None:
         return FG_YELLOW
     thresholds = MEM_THRESHOLDS if memory else GPU_THRESHOLDS
+    if COLORFUL_MODE:
+        low, high = thresholds
+        mid_low = low + (high - low) / 3
+        mid_high = low + 2 * (high - low) / 3
+        if value >= high + (100 - high) / 2:
+            return FG_BRIGHT_RED
+        if value >= high:
+            return FG_RED
+        if value >= mid_high:
+            return FG_BRIGHT_YELLOW
+        if value >= mid_low:
+            return FG_YELLOW
+        if value >= low:
+            return FG_BRIGHT_GREEN
+        return FG_GREEN
     if value >= thresholds[1]:
         return FG_RED
     if value >= thresholds[0]:
@@ -123,7 +184,7 @@ def _colorize_device_cells(line: str) -> str:
     out: list[str] = []
     for index, piece in enumerate(pieces):
         if index:
-            out.append(_style("│", DIM, FG_WHITE))
+            out.append(_style("│", DIM, _dim_fg()))
         if not piece:
             continue
         if index == 0:
@@ -270,7 +331,7 @@ def _colorize_process_row(line: str) -> str:
     if line.startswith("│>"):
         return _style(line, BOLD, REVERSE, FG_WHITE)
     if " root " in line:
-        return _style(line, DIM, FG_WHITE)
+        return _style(line, DIM, _dim_fg())
     if len(line) < 5:
         return _style(line, FG_WHITE)
     match = _PROCESS_ROW_FIELDS_RE.search(line)
@@ -329,18 +390,20 @@ def _colorize_host_line(line: str) -> str:
     pieces = line.split("│")
     if len(pieces) < 2 or pieces[0]:
         return _style(line, FG_WHITE)
-    out = [_style("│", DIM, FG_WHITE)]
+    out = [_style("│", DIM, _dim_fg())]
     if len(pieces) > 1:
         out.append(_style_host_section(pieces[1], _host_left_color(pieces[1])))
-        out.append(_style("│", DIM, FG_WHITE))
+        out.append(_style("│", DIM, _dim_fg()))
     if len(pieces) > 2:
         right_text = pieces[2]
         right_color = _gpu_metric_color(right_text) if "GPU " in right_text else FG_WHITE
         out.append(_style_host_section(right_text, right_color))
-        out.append(_style("│", DIM, FG_WHITE))
+        out.append(_style("│", DIM, _dim_fg()))
     for extra in pieces[3:]:
+        if not extra:
+            continue
         out.append(_style(extra, FG_WHITE))
-        out.append(_style("│", DIM, FG_WHITE))
+        out.append(_style("│", DIM, _dim_fg()))
     return "".join(out)
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import getpass
+import math
 import os
 import socket
 
@@ -81,7 +82,10 @@ def render_device_panel(
     right_width = max(0, width - CORE_WIDTH) if draw_bars else 0
     driver_version = _driver_version(frame)
     if compact and frame.devices and _can_render_compact_columns(len(frame.devices), width):
-        return _render_compact_device_columns(frame.devices, driver_version)
+        return _pad_device_lines_to_width(
+            _render_compact_device_columns(frame.devices, driver_version),
+            width,
+        )
     lines: list[str] = []
     lines.append(_top_border(right_width))
     lines.append(_version_line(driver_version, right_width))
@@ -122,6 +126,8 @@ def render_device_panel(
             lines.append(row_one)
             lines.append(row_two)
     lines.append(_bottom_border(right_width))
+    if compact:
+        return _pad_device_lines_to_width(lines, width)
     return lines
 
 
@@ -348,6 +354,32 @@ def _compact_device_group_count(device_count: int, use_columns: bool) -> int:
     return (device_count + COMPACT_GROUP_LIMIT - 1) // COMPACT_GROUP_LIMIT
 
 
+_BORDER_EXTENSIONS = {
+    "╕": ("╤", "═"),
+    "╛": ("╧", "═"),
+    "┤": ("┼", "─"),
+    "╡": ("╪", "═"),
+    "│": ("│", " "),
+}
+
+
+def _pad_device_lines_to_width(lines: list[str], width: int) -> list[str]:
+    padded: list[str] = []
+    for line in lines:
+        extra = width - len(line)
+        if extra <= 0:
+            padded.append(line)
+            continue
+        last = line[-1]
+        extension = _BORDER_EXTENSIONS.get(last)
+        if extension is None:
+            padded.append(line + " " * extra)
+            continue
+        connector, filler = extension
+        padded.append(line[:-1] + connector + filler * (extra - 1) + last)
+    return padded
+
+
 def _render_compact_device_columns(devices: list[DeviceSnapshot], driver_version: str) -> list[str]:
     lines: list[str] = []
     for group_start in range(0, len(devices), COMPACT_GROUP_LIMIT):
@@ -391,12 +423,13 @@ def _core_line(content: str) -> str:
 
 
 def _top_border(right_width: int) -> str:
-    del right_width
-    return "╒" + "═" * CORE_INNER + "╕"
+    base = "╒" + "═" * CORE_INNER + "╕"
+    if right_width:
+        base = base[:-1] + "═" * right_width + "╕"
+    return base
 
 
 def _version_line(driver_version: str, right_width: int) -> str:
-    del right_width
     parts = [
         f"MXTOP {__version__}",
         f"Driver Version: {driver_version}",
@@ -405,27 +438,38 @@ def _version_line(driver_version: str, right_width: int) -> str:
     total = sum(len(p) for p in parts)
     seps = " " * max(2, (75 - total) // 2)
     content = seps.join(parts).ljust(75)
-    return f"│ {content} │"
+    base = f"│ {content} │"
+    if right_width:
+        base = base[:-1] + " " * right_width + "│"
+    return base
 
 
 def _header_top_divider(right_width: int) -> str:
-    del right_width
-    return "├" + "─" * LEFT_INNER + "┬" + "─" * MID_INNER + "┬" + "─" * RIGHT_INNER + "┤"
+    base = "├" + "─" * LEFT_INNER + "┬" + "─" * MID_INNER + "┬" + "─" * RIGHT_INNER + "┤"
+    if right_width:
+        base = base[:-1] + "─" * right_width + "┤"
+    return base
 
 
 def _header_line_one(right_width: int) -> str:
-    del right_width
-    return "│ GPU  Name        Persistence-M│ Bus-Id        Disp.A │ Volatile Uncorr. ECC │"
+    base = "│ GPU  Name        Persistence-M│ Bus-Id        Disp.A │ Volatile Uncorr. ECC │"
+    if right_width:
+        base = base[:-1] + " " * right_width + "│"
+    return base
 
 
 def _header_line_two(right_width: int) -> str:
-    del right_width
-    return "│ Fan  Temp  Perf  Pwr:Usage/Cap│         Memory-Usage │ GPU-Util  Compute M. │"
+    base = "│ Fan  Temp  Perf  Pwr:Usage/Cap│         Memory-Usage │ GPU-Util  Compute M. │"
+    if right_width:
+        base = base[:-1] + " " * right_width + "│"
+    return base
 
 
 def _header_line_compact(right_width: int) -> str:
-    del right_width
-    return "│ GPU Fan Temp Perf Pwr:Usg/Cap │         Memory-Usage │ GPU-Util  Compute M. │"
+    base = "│ GPU Fan Temp Perf Pwr:Usg/Cap │         Memory-Usage │ GPU-Util  Compute M. │"
+    if right_width:
+        base = base[:-1] + " " * right_width + "│"
+    return base
 
 
 def _header_data_divider(right_width: int, draw_bars: bool) -> str:
@@ -495,9 +539,10 @@ def _device_bars(device: DeviceSnapshot, right_width: int) -> tuple[str, str]:
     inner = right_width - 1
     if inner <= 0:
         return "", ""
-    if inner >= 44:
-        left = (inner - 3) // 2
-        right = inner - 3 - left
+    if right_width >= 46:
+        bar_total = right_width - 6
+        left = bar_total // 2
+        right = bar_total - left
         top = " " + _named_bar("MEM", device.memory_util_percent, left) + " │ " + _named_bar("MBW", device.memory_bandwidth_util_percent, right) + " │"
         bot = " " + _named_bar("UTL", device.gpu_util_percent, left) + " │ " + _named_bar("PWR", _power_util(device), right) + " │"
         return top, bot
@@ -515,11 +560,20 @@ def _power_util(device: DeviceSnapshot) -> float | None:
 def _named_bar(label: str, value: float | None, width: int) -> str:
     if width <= 0:
         return ""
-    suffix = f" {format_percent_precise(value)}"
+    suffix_text = _bar_suffix_text(value)
+    suffix = f" {suffix_text}"
     label_text = f"{label}: "
     bar_width = max(1, width - len(label_text) - len(suffix))
     bar = format_bar(value, width=bar_width)
     return (label_text + bar + suffix)[:width].ljust(width)
+
+
+def _bar_suffix_text(value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return "N/A"
+    if value >= 100:
+        return "MAX"
+    return format_percent_precise(value)
 
 
 def _host_top_border(right_width: int) -> str:

@@ -1,5 +1,6 @@
 import json
 
+from mxtop import rendering
 from mxtop.cli import main
 from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 
@@ -138,3 +139,49 @@ def test_cli_rejects_too_small_interval(capsys):
 
     assert rc == 2
     assert "interval must be at least" in capsys.readouterr().err
+
+
+def test_cli_applies_threshold_flags_to_rendering(capsys):
+    try:
+        rc = main(
+            ["--once", "--no-color", "--gpu-util-thresh", "5", "70", "--mem-util-thresh", "5", "70"],
+            backend=StaticBackend(),
+        )
+        assert rc == 0
+        assert capsys.readouterr().out
+        assert rendering.GPU_THRESHOLDS == (5, 70)
+        assert rendering.MEM_THRESHOLDS == (5, 70)
+    finally:
+        rendering.reset_intensity_thresholds()
+
+
+def test_cli_reads_mxtop_threshold_env(monkeypatch, capsys):
+    monkeypatch.setenv("MXTOP_GPU_UTILIZATION_THRESHOLDS", "20,77")
+    monkeypatch.setenv("MXTOP_MEMORY_UTILIZATION_THRESHOLDS", "15,82")
+    try:
+        rc = main(["--once", "--no-color"], backend=StaticBackend())
+        assert rc == 0
+        assert capsys.readouterr().out
+        assert rendering.GPU_THRESHOLDS == (20, 77)
+        assert rendering.MEM_THRESHOLDS == (15, 82)
+    finally:
+        rendering.reset_intensity_thresholds()
+
+
+def test_cli_accepts_style_flags(capsys):
+    try:
+        rc = main(["--once", "--colorful", "--light"], backend=StaticBackend())
+        assert rc == 0
+        assert capsys.readouterr().out
+        assert rendering.LIGHT_THEME is True
+        assert rendering.COLORFUL_MODE is True
+    finally:
+        rendering.set_render_style(light=False, colorful=False)
+
+
+def test_cli_force_color_emits_ansi_when_piped(capsys, monkeypatch):
+    monkeypatch.setattr("mxtop.cli.sys.stdout.isatty", lambda: False)
+    rc = main(["--once", "--force-color"], backend=StaticBackend())
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "\x1b[" in out
