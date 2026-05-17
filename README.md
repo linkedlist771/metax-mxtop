@@ -193,6 +193,10 @@ Release automation is tag-driven:
 
 GitHub Actions then builds the wheelhouse, creates or updates the GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
 
+## More previews
+
+See [GALLERY.md](GALLERY.md) for a tile of rendered stdout across common CLI parameter combinations — colour palettes, layout modes, filters, custom intensity thresholds, multi-GPU layouts, and JSON output.
+
 ## Development
 
 Run tests and lint locally:

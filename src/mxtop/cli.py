@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--interval", type=_interval, default=1.0, help="refresh interval in seconds")
     _ = parser.add_argument("--once", "-1", action="store_true", help="print one text snapshot and exit")
     _ = parser.add_argument("--json", action="store_true", help="print one JSON snapshot and exit")
-    _ = parser.add_argument("--no-color", action="store_true", help="disable ANSI color output")
+    _ = parser.add_argument("--no-color", action="store_true", help="disable ANSI color output (color is on by default, including when piped)")
     _ = parser.add_argument("--monitor", choices=[mode.value for mode in LayoutMode], default=LayoutMode.AUTO.value)
     _ = parser.add_argument("--only", nargs="+", type=int, help="show only selected GPU indices")
     _ = parser.add_argument("--only-visible", action="store_true", help="reserved for MetaX visible-device environments")
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         print(json.dumps(_single_snapshot_with_cpu_sample(selected_backend, options).to_dict(), indent=2, sort_keys=True))
         return 0
 
-    use_color = not options.no_color and (args.force_color or sys.stdout.isatty() or args.once)
+    use_color = not options.no_color
     if args.once or not sys.stdout.isatty():
         print(render_once(_single_snapshot_with_cpu_sample(selected_backend, options), use_color=use_color))
         return 0
