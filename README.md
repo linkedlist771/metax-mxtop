@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <em>Built upon <a href="https://github.com/onlylrs/metax-mxtop">onlylrs/metax-mxtop</a>, with thanks to the original project for the foundation.</em>
+</p>
+
+<p align="center">
   <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
 </p>
 
