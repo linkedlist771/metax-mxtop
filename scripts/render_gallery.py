@@ -28,7 +28,7 @@ from mxtop.ui import panels as ui_panels  # noqa: E402
 from mxtop.ui.panels import render_main_screen  # noqa: E402
 from mxtop.ui.state import LayoutMode, UiState  # noqa: E402
 
-from generate_preview import THEMES, render_to_png  # noqa: E402
+from generate_preview import render_to_png  # noqa: E402
 
 GALLERY_DIR = PROJECT_ROOT / "assets" / "gallery"
 
