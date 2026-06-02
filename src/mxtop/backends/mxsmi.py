@@ -13,8 +13,16 @@ from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 
 MXSMI_ENV = "MXTOP_MXSMI_PATH"
 DEFAULT_MXSMI_PATH = "/opt/mxdriver/bin/mx-smi"
+# Matches both the colon form ("GPU 0: MXC500 (UUID: MX-abc)") and the real
+# `mx-smi -L` form ("GPU#0    MXC600-AL    0000:06:00.0    Available (UUID: GPU-...)").
 LIST_ROW = re.compile(
-    r"(?:GPU\s*)?(?P<index>\d+)\s*[:：]\s*(?P<name>.*?)(?:\s*\((?:UUID|uuid)\s*[:：]?\s*(?P<uuid>[^)]+)\))?\s*$"
+    r"GPU\s*#?\s*(?P<index>\d+)\s*[:：]?\s+"
+    r"(?P<name>.+?)"
+    r"(?:\s+(?P<bdf>[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.\d))?"
+    r"(?:\s+(?P<state>Available|Unavailable|N/A|On|Off))?"
+    r"(?:\s*\((?:UUID|uuid)\s*[:：]?\s*(?P<uuid>[^)]+)\))?"
+    r"\s*$",
+    re.IGNORECASE,
 )
 PROCESS_ROW = re.compile(r"^\s*(?P<gpu>\d+)\s+(?P<pid>\d+)\s+(?P<name>.+?)\s+(?P<memory>[\d.]+\s*[A-Za-z]*|N/A|-)\s*$")
 NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
@@ -94,7 +102,8 @@ def parse_list_output(output: str) -> dict[int, DeviceSnapshot]:
         index = int(match.group("index"))
         name = (match.group("name") or "MetaX GPU").strip()
         uuid = (match.group("uuid") or "").strip() or None
-        devices[index] = DeviceSnapshot(index=index, name=name, uuid=uuid)
+        bdf = (match.group("bdf") or "").strip() or None
+        devices[index] = DeviceSnapshot(index=index, name=name, uuid=uuid, bdf=bdf)
     return devices
 
 

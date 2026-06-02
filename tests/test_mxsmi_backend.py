@@ -55,6 +55,22 @@ GPU 1: MXC550
     assert devices[1].name == "MXC550"
 
 
+def test_parse_list_output_handles_hash_indexed_list_format():
+    # Mirrors the `mx-smi -L` layout ("GPU#<n>  NAME  BDF  STATE (UUID: ...)")
+    # with dummy identifiers.
+    devices = parse_list_output("""mx-smi  version: 0.0.0
+GPU#0    MXTEST-00    0000:01:00.0    Available (UUID: GPU-00000000-0000-0000-0000-000000000000)
+GPU#1    MXTEST-00    0000:02:00.0    Available (UUID: GPU-11111111-1111-1111-1111-111111111111)
+GPU#15   MXTEST-00    0000:0f:00.0    Available (UUID: GPU-22222222-2222-2222-2222-222222222222)
+""")
+
+    assert set(devices) == {0, 1, 15}
+    assert devices[0].name == "MXTEST-00"
+    assert devices[0].bdf == "0000:01:00.0"
+    assert devices[0].uuid == "GPU-00000000-0000-0000-0000-000000000000"
+    assert devices[15].bdf == "0000:0f:00.0"
+
+
 def test_parse_process_table_handles_process_names_with_spaces():
     processes = parse_process_table(PROCESS_SAMPLE)
 
