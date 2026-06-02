@@ -61,3 +61,23 @@ class FrameSnapshot:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class NodeSnapshot:
+    """One remote node's telemetry for the cluster dashboard."""
+
+    hostname: str
+    reachable: bool = False
+    frame: FrameSnapshot | None = None
+    error: str | None = None
+    latency_ms: float | None = None
+
+
+@dataclass(slots=True)
+class ClusterSnapshot:
+    nodes: list[NodeSnapshot] = field(default_factory=list)
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)

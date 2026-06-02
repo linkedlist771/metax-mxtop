@@ -91,6 +91,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="An nvitop-like monitor for MetaX GPUs.")
     _ = parser.add_argument("--version", action="version", version=f"mxtop {__version__}")
     _ = parser.add_argument("--backend", choices=["auto", "pymxsml", "mxsmi"], default="auto")
+    remote = parser.add_argument_group("remote mode")
+    _ = remote.add_argument(
+        "--remote-mode",
+        action="store_true",
+        help="serve a local web dashboard aggregating multiple SSH nodes",
+    )
+    _ = remote.add_argument(
+        "--nodes",
+        nargs="+",
+        metavar="HOST",
+        help="ssh hosts/aliases to monitor (resolved via ~/.ssh/config)",
+    )
+    _ = remote.add_argument("--nodes-file", help="file with one ssh host per line (# comments allowed)")
+    _ = remote.add_argument("--port", type=int, default=8080, help="dashboard port (default: 8080)")
+    _ = remote.add_argument("--bind", default="127.0.0.1", help="dashboard bind address (default: 127.0.0.1)")
+    _ = remote.add_argument("--remote-mxsmi-path", default="mx-smi", help="mx-smi path on remote hosts")
+    _ = remote.add_argument("--open", action="store_true", help="open the dashboard in a browser")
     _ = parser.add_argument("--interval", type=_interval, default=1.0, help="refresh interval in seconds")
     _ = parser.add_argument("--once", "-1", action="store_true", help="print one text snapshot and exit")
     _ = parser.add_argument("--json", action="store_true", help="print one JSON snapshot and exit")
@@ -181,7 +198,24 @@ def _apply_intensity_thresholds(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.remote_mode:
+        from mxtop.remote.app import load_hosts, run_remote
+
+        hosts = load_hosts(args.nodes, args.nodes_file)
+        if not hosts:
+            parser.error("--remote-mode requires --nodes or --nodes-file")
+        return run_remote(
+            hosts,
+            bind=args.bind,
+            port=args.port,
+            interval=args.interval,
+            mxsmi_path=args.remote_mxsmi_path,
+            open_browser=args.open,
+        )
+
     _apply_intensity_thresholds(args)
     set_render_style(light=args.light, colorful=args.colorful)
     options = _runtime_options(args)

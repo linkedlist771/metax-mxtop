@@ -162,6 +162,30 @@ Useful CLI flags:
 | `--only-compute`, `--only-graphics` | Require matching process types when available. |
 | `--ascii`, `--no-unicode` | Reserve ASCII-only rendering mode. |
 
+## Remote mode (cluster dashboard)
+
+Aggregate several SSH-reachable nodes into one local web dashboard:
+
+```bash
+pip install 'metax-mxtop[remote]'        # pulls in asyncssh
+mxtop --remote-mode --nodes nodeA nodeB nodeC --open
+# or list hosts in a file (one per line, # comments allowed)
+mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
+```
+
+- Host names are plain SSH aliases resolved from your `~/.ssh/config`
+  (HostName/User/Port/IdentityFile/ProxyJump all honoured), so nodes with
+  different MetaX card configurations work without extra setup.
+- Authentication uses your SSH keys / `ssh-agent` — the "login once" model.
+  For password-only nodes, run `ssh-copy-id` first; mxtop does not store
+  passwords.
+- The dashboard polls every node concurrently (`--interval`, default 2s),
+  serves on `127.0.0.1` by default (`--bind` to change), and streams live
+  updates over Server-Sent Events. Unreachable nodes are shown as down
+  instead of breaking the page.
+- Each node runs the same `mx-smi` queries as the local backend; override the
+  remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
+
 ## Interactive keys
 
 | Key | Action |

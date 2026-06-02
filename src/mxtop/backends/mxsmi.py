@@ -175,6 +175,50 @@ def parse_process_table(output: str) -> list[ProcessSnapshot]:
     return processes
 
 
+# Command argument lists shared by the local backend and the remote (SSH) path,
+# so both run identical mx-smi invocations and feed the same parsers.
+LIST_ARGS_VARIANTS: tuple[list[str], ...] = (["-L"], ["--list"])
+DMON_SNAPSHOT_ARGS: list[str] = [
+    "dmon",
+    "--show-temperature",
+    "--show-board-power",
+    "--show-usage",
+    "--show-memory",
+    "--total-memory",
+    "--show-bdf",
+    "--format",
+    "csv",
+    "-c",
+    "1",
+]
+PROCESS_ARGS: list[str] = ["--show-process"]
+
+
+def build_frame_from_outputs(
+    dmon_output: str,
+    process_output: str,
+    *,
+    known_devices: dict[int, DeviceSnapshot] | None = None,
+    backend_name: str = "mx-smi",
+    enrich: bool = True,
+) -> FrameSnapshot:
+    """Assemble a FrameSnapshot from raw mx-smi command output.
+
+    Transport-agnostic: the caller supplies the dmon/process text (from a local
+    subprocess or an SSH channel) and an optional parsed device map from -L.
+    ``enrich`` should stay False for remote hosts (psutil would read the wrong
+    machine).
+    """
+    known_devices = known_devices or {}
+    devices = parse_dmon_csv(dmon_output, known_devices=known_devices)
+    if not devices and known_devices:
+        devices = list(known_devices.values())
+    processes = parse_process_table(process_output) if process_output else []
+    if enrich:
+        enrich_processes(processes)
+    return FrameSnapshot(devices=devices, processes=processes, backend=backend_name)
+
+
 class MxSmiBackend:
     name: str = "mx-smi"
 
@@ -190,7 +234,7 @@ class MxSmiBackend:
         )
 
     def _list_devices(self) -> dict[int, DeviceSnapshot]:
-        for list_args in (["-L"], ["--list"]):
+        for list_args in LIST_ARGS_VARIANTS:
             result = self._run(list_args, check=False)
             if result.returncode == 0:
                 devices = parse_list_output(result.stdout)
@@ -200,26 +244,12 @@ class MxSmiBackend:
 
     def snapshot(self) -> FrameSnapshot:
         known_devices = self._list_devices()
-        dmon = self._run(
-            [
-                "dmon",
-                "--show-temperature",
-                "--show-board-power",
-                "--show-usage",
-                "--show-memory",
-                "--total-memory",
-                "--show-bdf",
-                "--format",
-                "csv",
-                "-c",
-                "1",
-            ]
+        dmon = self._run(DMON_SNAPSHOT_ARGS)
+        process_output = self._run(PROCESS_ARGS, check=False)
+        return build_frame_from_outputs(
+            dmon.stdout,
+            process_output.stdout if process_output.returncode == 0 else "",
+            known_devices=known_devices,
+            backend_name=self.name,
+            enrich=True,
         )
-        devices = parse_dmon_csv(dmon.stdout, known_devices=known_devices)
-        if not devices and known_devices:
-            devices = list(known_devices.values())
-
-        process_output = self._run(["--show-process"], check=False)
-        processes = parse_process_table(process_output.stdout) if process_output.returncode == 0 else []
-        enrich_processes(processes)
-        return FrameSnapshot(devices=devices, processes=processes, backend=self.name)
