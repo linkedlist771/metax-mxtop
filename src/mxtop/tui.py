@@ -53,7 +53,10 @@ def _setup_colors() -> None:
     curses.use_default_colors()
     curses.init_pair(PAIR_TITLE, curses.COLOR_BLACK, curses.COLOR_CYAN)
     curses.init_pair(PAIR_HEADER, curses.COLOR_CYAN, -1)
-    curses.init_pair(PAIR_DIM, curses.COLOR_BLACK, -1)
+    # Default foreground (not COLOR_BLACK) so borders/separators stay visible on
+    # dark terminals; the subdued look comes from A_DIM in _attr(). Using black
+    # here rendered every box-drawing line invisible against a dark background.
+    curses.init_pair(PAIR_DIM, -1, -1)
     curses.init_pair(PAIR_VALUE, curses.COLOR_WHITE, -1)
     curses.init_pair(PAIR_GOOD, curses.COLOR_GREEN, -1)
     curses.init_pair(PAIR_WARN, curses.COLOR_YELLOW, -1)
@@ -67,6 +70,8 @@ def _setup_colors() -> None:
 def _attr(pair: int, extra: int = 0) -> int:
     if not curses.has_colors():
         return extra
+    if pair == PAIR_DIM:
+        extra |= curses.A_DIM
     return curses.color_pair(pair) | extra
 
 

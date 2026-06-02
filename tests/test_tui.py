@@ -65,6 +65,27 @@ def test_outer_border_helpers():
     ]
 
 
+def test_dim_pair_is_visible_on_dark_terminals(monkeypatch):
+    # Regression: borders/separators were drawn with COLOR_BLACK foreground,
+    # which is invisible on dark terminals (live TUI showed no borders even
+    # though the exit text frame did). They must use the default foreground.
+    pairs: dict[int, tuple[int, int]] = {}
+    monkeypatch.setattr(tui.curses, "has_colors", lambda: True)
+    monkeypatch.setattr(tui.curses, "start_color", lambda: None, raising=False)
+    monkeypatch.setattr(tui.curses, "use_default_colors", lambda: None, raising=False)
+    monkeypatch.setattr(
+        tui.curses, "init_pair", lambda pair, fg, bg: pairs.__setitem__(pair, (fg, bg)), raising=False
+    )
+
+    tui._setup_colors()
+
+    dim_fg, _ = pairs[tui.PAIR_DIM]
+    assert dim_fg != tui.curses.COLOR_BLACK
+
+    monkeypatch.setattr(tui.curses, "color_pair", lambda pair: 0, raising=False)
+    assert tui._attr(tui.PAIR_DIM) & tui.curses.A_DIM
+
+
 def test_handle_key_updates_sort_and_layout(monkeypatch):
     class FakeSampler:
         def __init__(self):
