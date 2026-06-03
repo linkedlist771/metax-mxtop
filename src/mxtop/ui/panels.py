@@ -81,14 +81,15 @@ def render_device_panel(
     draw_bars = width >= BAR_MIN_WIDTH and not compact
     right_width = max(0, width - CORE_WIDTH) if draw_bars else 0
     driver_version = _driver_version(frame)
+    maca_version = _maca_version(frame)
     if compact and frame.devices and _can_render_compact_columns(len(frame.devices), width):
         return _pad_device_lines_to_width(
-            _render_compact_device_columns(frame.devices, driver_version),
+            _render_compact_device_columns(frame.devices, driver_version, maca_version),
             width,
         )
     lines: list[str] = []
     lines.append(_top_border(right_width))
-    lines.append(_version_line(driver_version, right_width))
+    lines.append(_version_line(driver_version, right_width, maca_version))
     lines.append(_header_top_divider(right_width))
     if compact:
         lines.append(_header_line_compact(right_width))
@@ -380,13 +381,15 @@ def _pad_device_lines_to_width(lines: list[str], width: int) -> list[str]:
     return padded
 
 
-def _render_compact_device_columns(devices: list[DeviceSnapshot], driver_version: str) -> list[str]:
+def _render_compact_device_columns(
+    devices: list[DeviceSnapshot], driver_version: str, maca_version: str = "N/A"
+) -> list[str]:
     lines: list[str] = []
     for group_start in range(0, len(devices), COMPACT_GROUP_LIMIT):
         group = devices[group_start : group_start + COMPACT_GROUP_LIMIT]
         left_devices = group[:COMPACT_COLUMN_LIMIT]
         right_devices = group[COMPACT_COLUMN_LIMIT:]
-        lines.extend(_render_compact_device_column_group(left_devices, right_devices, driver_version))
+        lines.extend(_render_compact_device_column_group(left_devices, right_devices, driver_version, maca_version))
     return lines
 
 
@@ -394,6 +397,7 @@ def _render_compact_device_column_group(
     left_devices: list[DeviceSnapshot],
     right_devices: list[DeviceSnapshot],
     driver_version: str,
+    maca_version: str = "N/A",
 ) -> list[str]:
     rows = max(len(left_devices), len(right_devices))
     gap = " " * COMPACT_COLUMN_GAP
@@ -403,7 +407,7 @@ def _render_compact_device_column_group(
 
     lines = [
         pair(_top_border(0), _top_border(0)),
-        pair(_version_line(driver_version, 0), _version_line(driver_version, 0)),
+        pair(_version_line(driver_version, 0, maca_version), _version_line(driver_version, 0, maca_version)),
         pair(_header_top_divider(0), _header_top_divider(0)),
         pair(_header_line_compact(0), _header_line_compact(0)),
         pair(_header_data_divider(0, False), _header_data_divider(0, False)),
@@ -429,11 +433,11 @@ def _top_border(right_width: int) -> str:
     return base
 
 
-def _version_line(driver_version: str, right_width: int) -> str:
+def _version_line(driver_version: str, right_width: int, maca_version: str | None = None) -> str:
     parts = [
         f"MXTOP {__version__}",
         f"Driver Version: {driver_version}",
-        f"MX Driver Version: {driver_version}",
+        f"MACA Version: {maca_version or 'N/A'}",
     ]
     total = sum(len(p) for p in parts)
     seps = " " * max(2, (75 - total) // 2)
@@ -641,6 +645,13 @@ def _driver_version(frame: FrameSnapshot) -> str:
     for device in frame.devices:
         if device.driver_version:
             return device.driver_version
+    return "N/A"
+
+
+def _maca_version(frame: FrameSnapshot) -> str:
+    for device in frame.devices:
+        if device.maca_version:
+            return device.maca_version
     return "N/A"
 
 

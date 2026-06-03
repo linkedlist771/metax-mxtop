@@ -25,6 +25,7 @@ class DeviceSnapshot:
     persistence_mode: str | None = None
     performance_state: str | None = None
     driver_version: str | None = None
+    maca_version: str | None = None
     display_active: str | None = None
     compute_mode: str | None = None
     metaxlink: str | None = None

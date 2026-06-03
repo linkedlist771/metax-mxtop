@@ -32,7 +32,8 @@ def _device(
     perf: str | None = "P0",
     persistence: str | None = "Enabled",
     bdf: str | None = None,
-    driver: str | None = "2.31.0.1015",
+    driver: str | None = "3.10.0",
+    maca: str | None = "3.7.1.5",
     ecc: int | None = 0,
     compute_mode: str | None = "Default",
 ) -> DeviceSnapshot:
@@ -54,6 +55,7 @@ def _device(
         persistence_mode=persistence,
         performance_state=perf,
         driver_version=driver,
+        maca_version=maca,
         compute_mode=compute_mode,
     )
 

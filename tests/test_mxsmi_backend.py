@@ -1,6 +1,14 @@
 from subprocess import CompletedProcess
 
-from mxtop.backends.mxsmi import MxSmiBackend, parse_dmon_csv, parse_list_output, parse_process_table, resolve_mxsmi_path
+from mxtop.backends.mxsmi import (
+    MxSmiBackend,
+    build_frame_from_outputs,
+    parse_dmon_csv,
+    parse_list_output,
+    parse_process_table,
+    parse_versions,
+    resolve_mxsmi_path,
+)
 
 
 DMON_SAMPLE = """dev, die, hottemp, soctemp, coretemp, power, gpu, vpue, vpud, visvram, vram, xtt, total, bdfid
@@ -83,6 +91,28 @@ def test_parse_process_table_handles_process_names_with_spaces():
     assert processes[1].name == "python worker"
 
 
+def test_parse_versions_extracts_driver_and_maca():
+    block = (
+        "| MX-SMI 2.3.1                     Kernel Mode Driver Version: 3.10.0      |\n"
+        "| MACA Version: 3.7.1.5            BIOS Version: 2.1.2.0                   |\n"
+    )
+    assert parse_versions(block) == ("3.10.0", "3.7.1.5")
+
+
+def test_parse_versions_missing_returns_none():
+    assert parse_versions("nothing here") == (None, None)
+
+
+def test_build_frame_stamps_versions_on_devices():
+    frame = build_frame_from_outputs(
+        DMON_SAMPLE, "", backend_name="mx-smi", enrich=False,
+        driver_version="3.10.0", maca_version="3.7.1.5",
+    )
+    assert frame.devices
+    assert all(d.driver_version == "3.10.0" for d in frame.devices)
+    assert all(d.maca_version == "3.7.1.5" for d in frame.devices)
+
+
 def test_parse_process_table_handles_memory_units():
     processes = parse_process_table("|  0  123  python train.py  1.5GiB  |")
 
@@ -111,11 +141,16 @@ def test_backend_uses_resolved_executable(monkeypatch):
 
     def fake_run(args, check, text, capture_output):
         calls.append(args)
-        if args[1] == "-L":
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "-L":
             return CompletedProcess(args, 0, "GPU 0: MXC500 (UUID: MX-abc)\n", "")
-        if args[1] == "dmon":
+        if sub == "--show-version":
+            return CompletedProcess(
+                args, 0, "Kernel Mode Driver Version: 3.10.0\nMACA Version: 3.7.1.5\n", ""
+            )
+        if sub == "dmon":
             return CompletedProcess(args, 0, DMON_SAMPLE, "")
-        if args[1] == "--show-process":
+        if sub == "--show-process":
             return CompletedProcess(args, 0, PROCESS_SAMPLE, "")
         return CompletedProcess(args, 1, "", "")
 
@@ -125,4 +160,6 @@ def test_backend_uses_resolved_executable(monkeypatch):
 
     assert calls[0][0] == "/opt/mxdriver/bin/mx-smi"
     assert frame.devices[0].name == "MXC500"
+    assert frame.devices[0].driver_version == "3.10.0"
+    assert frame.devices[0].maca_version == "3.7.1.5"
     assert frame.processes[0].pid == 967305

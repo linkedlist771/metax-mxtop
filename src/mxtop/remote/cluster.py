@@ -11,8 +11,10 @@ from mxtop.backends.mxsmi import (
     DMON_SNAPSHOT_ARGS,
     LIST_ARGS_VARIANTS,
     PROCESS_ARGS,
+    VERSION_ARGS_VARIANTS,
     build_frame_from_outputs,
     parse_list_output,
+    parse_versions,
 )
 from mxtop.models import ClusterSnapshot, NodeSnapshot
 from mxtop.remote import ssh
@@ -38,6 +40,7 @@ class ClusterMonitor:
         self.mxsmi_path = mxsmi_path
         self.connect_timeout = connect_timeout
         self._conns: dict[str, Any] = {}
+        self._versions: dict[str, tuple[str | None, str | None]] = {}
 
     async def _connection(self, host: str) -> Any:
         conn = self._conns.get(host)
@@ -50,6 +53,20 @@ class ClusterMonitor:
         result = await conn.run(_command(self.mxsmi_path, args), check=False)
         return (result.exit_status or 0), (result.stdout or "")
 
+    async def _versions_for(self, host: str, conn: Any) -> tuple[str | None, str | None]:
+        # Versions are static; fetch once per host and cache.
+        if host not in self._versions:
+            versions: tuple[str | None, str | None] = (None, None)
+            for variant in VERSION_ARGS_VARIANTS:
+                code, out = await self._run(conn, variant)
+                if code == 0:
+                    parsed = parse_versions(out)
+                    if any(parsed):
+                        versions = parsed
+                        break
+            self._versions[host] = versions
+        return self._versions[host]
+
     async def _collect(self, host: str) -> NodeSnapshot:
         start = time.monotonic()
         try:
@@ -61,6 +78,7 @@ class ClusterMonitor:
                     known = parse_list_output(out)
                     if known:
                         break
+            driver_version, maca_version = await self._versions_for(host, conn)
             _, dmon_out = await self._run(conn, DMON_SNAPSHOT_ARGS)
             proc_code, proc_out = await self._run(conn, PROCESS_ARGS)
             frame = build_frame_from_outputs(
@@ -69,6 +87,8 @@ class ClusterMonitor:
                 known_devices=known,
                 backend_name=f"mx-smi@{host}",
                 enrich=False,
+                driver_version=driver_version,
+                maca_version=maca_version,
             )
             latency = (time.monotonic() - start) * 1000
             return NodeSnapshot(hostname=host, reachable=True, frame=frame, latency_ms=latency)

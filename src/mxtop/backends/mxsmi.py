@@ -192,6 +192,21 @@ DMON_SNAPSHOT_ARGS: list[str] = [
     "1",
 ]
 PROCESS_ARGS: list[str] = ["--show-process"]
+# Bare `mx-smi` (and `--show-version`) print the static version block; we parse
+# both the kernel-mode driver version and the MACA (CUDA-equivalent) version.
+VERSION_ARGS_VARIANTS: tuple[list[str], ...] = (["--show-version"], [])
+_DRIVER_VERSION_RE = re.compile(r"(?:Kernel\s*Mode\s*)?Driver\s*Version\s*[:：]\s*([^\s|]+)", re.IGNORECASE)
+_MACA_VERSION_RE = re.compile(r"MACA\s*Version\s*[:：]\s*([^\s|]+)", re.IGNORECASE)
+
+
+def parse_versions(output: str) -> tuple[str | None, str | None]:
+    """Return ``(driver_version, maca_version)`` parsed from mx-smi output."""
+    driver = _DRIVER_VERSION_RE.search(output)
+    maca = _MACA_VERSION_RE.search(output)
+    return (
+        driver.group(1).strip() if driver else None,
+        maca.group(1).strip() if maca else None,
+    )
 
 
 def build_frame_from_outputs(
@@ -201,18 +216,27 @@ def build_frame_from_outputs(
     known_devices: dict[int, DeviceSnapshot] | None = None,
     backend_name: str = "mx-smi",
     enrich: bool = True,
+    driver_version: str | None = None,
+    maca_version: str | None = None,
 ) -> FrameSnapshot:
     """Assemble a FrameSnapshot from raw mx-smi command output.
 
     Transport-agnostic: the caller supplies the dmon/process text (from a local
     subprocess or an SSH channel) and an optional parsed device map from -L.
     ``enrich`` should stay False for remote hosts (psutil would read the wrong
-    machine).
+    machine). ``driver_version``/``maca_version`` are system-wide and stamped on
+    every device so the header can show them.
     """
     known_devices = known_devices or {}
     devices = parse_dmon_csv(dmon_output, known_devices=known_devices)
     if not devices and known_devices:
         devices = list(known_devices.values())
+    if driver_version is not None or maca_version is not None:
+        for device in devices:
+            if driver_version is not None:
+                device.driver_version = driver_version
+            if maca_version is not None:
+                device.maca_version = maca_version
     processes = parse_process_table(process_output) if process_output else []
     if enrich:
         enrich_processes(processes)
@@ -224,6 +248,7 @@ class MxSmiBackend:
 
     def __init__(self, executable: str | None = None) -> None:
         self.executable = resolve_mxsmi_path(executable)
+        self._versions: tuple[str | None, str | None] | None = None
 
     def _run(self, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -242,8 +267,23 @@ class MxSmiBackend:
                     return devices
         return {}
 
+    def _driver_versions(self) -> tuple[str | None, str | None]:
+        # Versions are static; fetch once and cache. Try --show-version, then
+        # fall back to bare mx-smi (whose header carries the same block).
+        if self._versions is None:
+            self._versions = (None, None)
+            for version_args in VERSION_ARGS_VARIANTS:
+                result = self._run(version_args, check=False)
+                if result.returncode == 0:
+                    parsed = parse_versions(result.stdout)
+                    if any(parsed):
+                        self._versions = parsed
+                        break
+        return self._versions
+
     def snapshot(self) -> FrameSnapshot:
         known_devices = self._list_devices()
+        driver_version, maca_version = self._driver_versions()
         dmon = self._run(DMON_SNAPSHOT_ARGS)
         process_output = self._run(PROCESS_ARGS, check=False)
         return build_frame_from_outputs(
@@ -252,4 +292,6 @@ class MxSmiBackend:
             known_devices=known_devices,
             backend_name=self.name,
             enrich=True,
+            driver_version=driver_version,
+            maca_version=maca_version,
         )

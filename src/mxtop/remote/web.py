@@ -129,6 +129,7 @@ DASHBOARD_HTML = """<!doctype html>
   .node.down .name { color: #ff757f; }
   .node .lat { color: #5c6680; font-size: 11px; }
   .err { padding: 10px 12px; color: #ff757f; white-space: pre-wrap; }
+  .ver { padding: 4px 12px; font-size: 11px; border-bottom: 1px solid #1c2230; }
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 3px 8px; text-align: right; white-space: nowrap; }
   th { color: #5c6680; font-weight: 500; border-bottom: 1px solid #1c2230; font-size: 11px; }
@@ -185,9 +186,12 @@ function nodeCard(n) {
   }
   const devs = n.frame ? n.frame.devices : [];
   const procs = n.frame ? n.frame.processes.length : 0;
+  const d0 = devs[0] || {};
+  const ver = 'driver ' + (d0.driver_version || 'N/A') + ' &middot; MACA ' + (d0.maca_version || 'N/A');
   return '<div class="node"><div class="head"><span class="name">' + n.hostname +
     '</span><span class="lat">' + devs.length + ' GPU &middot; ' + procs + ' proc &middot; ' +
     (n.latency_ms == null ? '' : Math.round(n.latency_ms) + 'ms') + '</span></div>' +
+    '<div class="ver muted">' + ver + '</div>' +
     '<table><thead><tr><th class="l">#</th><th class="l">name</th><th>temp</th><th>pwr</th>' +
     '<th class="l">util</th><th class="l">mem</th></tr></thead><tbody>' +
     deviceRows(devs) + '</tbody></table></div>';
