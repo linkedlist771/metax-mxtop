@@ -93,10 +93,10 @@ def test_parse_process_table_handles_process_names_with_spaces():
 
 def test_parse_versions_extracts_driver_and_maca():
     block = (
-        "| MX-SMI 2.3.1                     Kernel Mode Driver Version: 3.10.0      |\n"
-        "| MACA Version: 3.7.1.5            BIOS Version: 2.1.2.0                   |\n"
+        "| MX-SMI 0.0.0                     Kernel Mode Driver Version: 1.2.3      |\n"
+        "| MACA Version: 4.5.6            BIOS Version: 0.0.0                     |\n"
     )
-    assert parse_versions(block) == ("3.10.0", "3.7.1.5")
+    assert parse_versions(block) == ("1.2.3", "4.5.6")
 
 
 def test_parse_versions_missing_returns_none():
@@ -106,11 +106,11 @@ def test_parse_versions_missing_returns_none():
 def test_build_frame_stamps_versions_on_devices():
     frame = build_frame_from_outputs(
         DMON_SAMPLE, "", backend_name="mx-smi", enrich=False,
-        driver_version="3.10.0", maca_version="3.7.1.5",
+        driver_version="1.2.3", maca_version="4.5.6",
     )
     assert frame.devices
-    assert all(d.driver_version == "3.10.0" for d in frame.devices)
-    assert all(d.maca_version == "3.7.1.5" for d in frame.devices)
+    assert all(d.driver_version == "1.2.3" for d in frame.devices)
+    assert all(d.maca_version == "4.5.6" for d in frame.devices)
 
 
 def test_parse_process_table_handles_memory_units():
@@ -146,7 +146,7 @@ def test_backend_uses_resolved_executable(monkeypatch):
             return CompletedProcess(args, 0, "GPU 0: MXC500 (UUID: MX-abc)\n", "")
         if sub == "--show-version":
             return CompletedProcess(
-                args, 0, "Kernel Mode Driver Version: 3.10.0\nMACA Version: 3.7.1.5\n", ""
+                args, 0, "Kernel Mode Driver Version: 1.2.3\nMACA Version: 4.5.6\n", ""
             )
         if sub == "dmon":
             return CompletedProcess(args, 0, DMON_SAMPLE, "")
@@ -160,6 +160,6 @@ def test_backend_uses_resolved_executable(monkeypatch):
 
     assert calls[0][0] == "/opt/mxdriver/bin/mx-smi"
     assert frame.devices[0].name == "MXC500"
-    assert frame.devices[0].driver_version == "3.10.0"
-    assert frame.devices[0].maca_version == "3.7.1.5"
+    assert frame.devices[0].driver_version == "1.2.3"
+    assert frame.devices[0].maca_version == "4.5.6"
     assert frame.processes[0].pid == 967305
