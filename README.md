@@ -47,7 +47,7 @@
 - nvitop-like terminal dashboard for MetaX GPUs.
 - Read-only monitoring through MXSML/Pymxsml or `mx-smi`.
 - GPU device panel with temperature, power, utilization, memory, bus id, persistence, performance state, and driver fields when available.
-- Host panel with load average, CPU, memory, swap, and aggregate GPU utilization.
+- Host panel with load average and scrolling braille history graphs for CPU, memory, swap, and aggregate GPU memory/utilization, matching nvitop's layout.
 - Process table with GPU, PID, user, GPU memory, GPU utilization, CPU, host memory, runtime, command, selection, scrolling, and sorting.
 - ANSI-colored one-shot output and curses TUI colors aligned with the nvitop-style visual hierarchy.
 - Shared filters for TUI, text, and JSON output.

@@ -28,7 +28,7 @@ def _stub_host_memory_total() -> int:
 
 
 def _stub_load_average() -> str:
-    return "1.42  1.85  2.07"
+    return "Load Average:  1.42  1.85  2.07"
 
 
 def _stub_user_host() -> str:
@@ -41,7 +41,30 @@ ui_panels._load_average_text = _stub_load_average  # type: ignore[assignment]
 ui_panels._user_host = _stub_user_host  # type: ignore[assignment]
 _ = ui  # keep module reference alive
 
+
+def seed_host_history() -> None:
+    """Fill the host graphs with a deterministic waveform so previews show data."""
+    import math
+
+    history = ui_panels._HOST_HISTORY
+    history.reset()
+    now = 0.0
+    for step in range(170):
+        now += 1.1
+        wave = 50 + 45 * math.sin(step / 9)
+        history.sample(
+            cpu=18 + wave / 3,
+            memory=25 + wave / 4,
+            swap=0.0,
+            gpu_memory=30 + wave / 2,
+            gpu_utilization=wave,
+            now=now,
+        )
+
 ANSI_PATTERN = re.compile(r"\x1b\[(\d+(?:;\d+)*)m")
+BRAILLE_SPLIT = re.compile(r"([⠀-⣿]+)")
+# Menlo has no braille glyphs; Apple Symbols carries the full U+2800 block.
+SYMBOL_FONT_PATH = "/System/Library/Fonts/Apple Symbols.ttf"
 
 THEMES = {
     "dark": {
@@ -444,6 +467,10 @@ def render_to_png(output: str, theme_name: str, target: Path) -> None:
     font_size = 18
     font = ImageFont.truetype(font_path, font_size)
     bold_font = ImageFont.truetype(font_path, font_size, index=1)
+    try:
+        symbol_font = ImageFont.truetype(SYMBOL_FONT_PATH, font_size)
+    except OSError:
+        symbol_font = None
     char_width = font.getbbox("M")[2]
     line_height = font_size + 6
 
@@ -474,7 +501,21 @@ def render_to_png(output: str, theme_name: str, target: Path) -> None:
             if bg != theme["bg"]:
                 draw.rectangle((x, y, x + text_width, y + line_height), fill=bg)
             chosen_font = bold_font if bold else font
-            draw.text((x, y), text, fill=fg, font=chosen_font)
+            if symbol_font is not None and BRAILLE_SPLIT.search(text):
+                run_x = x
+                for part in BRAILLE_SPLIT.split(text):
+                    if not part:
+                        continue
+                    if BRAILLE_SPLIT.fullmatch(part):
+                        # Keep the character grid: draw each braille cell at
+                        # its own column since Apple Symbols is not monospace.
+                        for column, char in enumerate(part):
+                            draw.text((run_x + char_width * column, y), char, fill=fg, font=symbol_font)
+                    else:
+                        draw.text((run_x, y), part, fill=fg, font=chosen_font)
+                    run_x += char_width * len(part)
+            else:
+                draw.text((x, y), text, fill=fg, font=chosen_font)
             x += text_width
     target.parent.mkdir(parents=True, exist_ok=True)
     image.save(target)
@@ -504,12 +545,17 @@ def main() -> int:
         "heavy": build_heavy_frame,
     }
     frame = builders[args.scenario]()
+    seed_host_history()
     if args.scenario == "many":
         from mxtop.ui.panels import render_main_screen
         from mxtop.ui.state import UiState, LayoutMode
-        from mxtop.rendering import _colorize_line
+        from mxtop.rendering import _colorize_line, host_graph_context
         screen = render_main_screen(frame, UiState(layout=LayoutMode.AUTO), width=args.width, height=50)
-        rendered = "\n".join(_colorize_line(row, line) for row, line in enumerate(screen.lines))
+        host_context = host_graph_context(screen.lines)
+        rendered = "\n".join(
+            _colorize_line(row, line, host_context.get(row))
+            for row, line in enumerate(screen.lines)
+        )
     else:
         rendered = render_once(frame, use_color=True, width=args.width)
     target = args.output

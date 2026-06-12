@@ -420,3 +420,78 @@ def test_render_once_omits_ansi_color_when_disabled():
     output = render_once(frame, width=140, use_color=False)
 
     assert "\x1b[" not in output
+
+
+def test_render_once_merges_device_bottom_border_into_host_top():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10)],
+        processes=[],
+    )
+
+    output = render_once(frame, width=79, use_color=False)
+    lines = output.splitlines()
+
+    host_top = next(i for i, line in enumerate(lines) if "Load Average:" in line) - 1
+    assert lines[host_top].startswith("╞"), "host panel should start with the merged border"
+    assert not lines[host_top - 1].startswith("╘"), (
+        "device bottom border must merge into the host top border (nvitop overlay)"
+    )
+
+
+def test_render_once_host_panel_has_five_rows_below_time_axis():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10)],
+        processes=[],
+    )
+
+    output = render_once(frame, width=79, use_color=False)
+    lines = output.splitlines()
+
+    axis = next(i for i, line in enumerate(lines) if "╴120s├" in line)
+    bottom = next(i for i, line in enumerate(lines[axis:], start=axis) if line.startswith("╘"))
+    assert bottom - axis - 1 == 5, "host panel should have 4 MEM rows + 1 SWP row below the axis"
+    assert "Load Average:" in lines[axis - 5]
+    assert " CPU: " in lines[axis - 4]
+    assert " MEM: " in lines[bottom - 2]
+    assert " SWP: " in lines[bottom - 1]
+
+
+def test_render_once_extends_time_axis_labels_on_wide_terminals():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10)],
+        processes=[],
+    )
+
+    output = render_once(frame, width=200, use_color=False)
+
+    axis = next(line for line in output.splitlines() if "╴120s├" in line)
+    assert axis.count("╴30s├") == 2
+    assert axis.count("╴60s├") == 2
+    assert "╴180s├" not in axis.split("┼")[0], "left axis keeps the classic 79-col labels"
+
+
+def test_render_once_colors_host_history_graphs_by_section():
+    from mxtop.ui import panels
+
+    panels.reset_host_history()
+    try:
+        history = panels._HOST_HISTORY
+        now = 0.0
+        for _ in range(60):
+            now += 1.1
+            history.sample(cpu=80, memory=60, swap=30, gpu_memory=70, gpu_utilization=90, now=now)
+        frame = FrameSnapshot(
+            devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=90, memory_util_percent=70)],
+            processes=[],
+        )
+
+        output = render_once(frame, width=120, use_color=True)
+        lines = output.splitlines()
+        plain = [_strip_ansi(line) for line in lines]
+        cpu_row = next(i for i, line in enumerate(plain) if "Load Average:" in line) + 2
+        mem_row = cpu_row + 4
+
+        assert "\x1b[36m⣿" in lines[cpu_row], "CPU graph should be cyan"
+        assert "\x1b[35m" in lines[mem_row], "MEM graph should be magenta"
+    finally:
+        panels.reset_host_history()

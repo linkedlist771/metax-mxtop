@@ -20,6 +20,7 @@ from mxtop.formatting import (
 )
 from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 from mxtop.ui.help import HELP_LINES
+from mxtop.ui.history import HostHistory
 from mxtop.ui.state import LayoutMode, UiState, keep_selection, sort_processes
 
 CORE_INNER = 77
@@ -132,50 +133,70 @@ def render_device_panel(
     return lines
 
 
-def render_host_panel(frame: FrameSnapshot, width: int) -> list[str]:
-    draw_bars = width >= HOST_GRAPH_MIN_WIDTH
-    right_width = max(0, width - CORE_WIDTH) if draw_bars else 0
+_HOST_HISTORY = HostHistory()
+
+
+def reset_host_history() -> None:
+    _HOST_HISTORY.reset()
+
+
+def render_host_panel(frame: FrameSnapshot, width: int, *, history: HostHistory | None = None) -> list[str]:
+    history = history if history is not None else _HOST_HISTORY
+    draw_graphs = width >= HOST_GRAPH_MIN_WIDTH
+    right_width = max(0, width - CORE_WIDTH) if draw_graphs else 0
+    right_inner = max(0, right_width - 1)
     cpu, memory_used_text, memory_pct, swap_used_text, swap_pct = _host_metrics()
     gpu_mem = _average_percent(d.memory_util_percent for d in frame.devices)
     gpu_util = _average_percent(d.gpu_util_percent for d in frame.devices)
-    cpu_suffix = _cpu_bar(cpu) if draw_bars else ""
-    mem_suffix = _mem_bar(memory_pct) if draw_bars else ""
-    lines: list[str] = []
-    lines.append(_host_top_border(right_width))
-    lines.append(_host_data_line(f" Load Average:  {_load_average_text()}", _gpu_metric_text("GPU MEM", gpu_mem), right_width))
-    lines.append(_host_data_line(f" CPU: {format_percent(cpu)}{cpu_suffix}", "", right_width))
-    lines.append(_host_data_line("", "", right_width))
-    lines.append(_host_data_line("", "", right_width))
-    lines.append(_host_data_line("", "", right_width))
+    history.sample(cpu=cpu, memory=memory_pct, swap=swap_pct, gpu_memory=gpu_mem, gpu_utilization=gpu_util)
+
+    # nvitop layout: 5 graph rows (CPU) above the time axis, 5 below
+    # (4-row MEM hanging down + 1-row SWP), text overlaid on the graphs.
+    top_rows = history.cpu.render(CORE_INNER)
+    bottom_rows = history.memory.render(CORE_INNER) + history.swap.render(CORE_INNER)
+    top_rows[0] = _overlay(top_rows[0], f" {_load_average_text()} ")
+    top_rows[1] = _overlay(top_rows[1], f" CPU: {_host_percent_text(cpu)} ")
+    bottom_rows[3] = _overlay(bottom_rows[3], f" MEM: {memory_used_text} ({_host_percent_text(memory_pct)}) ")
+    bottom_rows[4] = _overlay(bottom_rows[4], f" SWP: {swap_used_text} ({_host_percent_text(swap_pct)}) ")
+
+    if right_inner:
+        right_top = history.gpu_memory.render(right_inner)
+        right_bottom = history.gpu_utilization.render(right_inner)
+        prefix = "AVG " if len(frame.devices) > 1 else ""
+        right_top[0] = _overlay(right_top[0], f" {prefix}GPU MEM: {_host_percent_text(gpu_mem)} ")
+        right_bottom[4] = _overlay(right_bottom[4], f" {prefix}GPU UTL: {_host_percent_text(gpu_util)} ")
+    else:
+        right_top = right_bottom = [""] * 5
+
+    lines: list[str] = [_host_top_border(right_width)]
+    for left, right in zip(top_rows, right_top):
+        lines.append(_host_data_line(left, right, right_width))
     lines.append(_host_time_axis(right_width))
-    lines.append(_host_data_line("", "", right_width))
-    lines.append(_host_data_line("", "", right_width))
-    lines.append(_host_data_line(f" MEM: {memory_used_text} ({format_percent(memory_pct)}){mem_suffix}", "", right_width))
-    lines.append(_host_data_line(f" SWP: {swap_used_text} ({format_percent(swap_pct)})", _gpu_metric_text("GPU UTL", gpu_util), right_width))
+    for left, right in zip(bottom_rows, right_bottom):
+        lines.append(_host_data_line(left, right, right_width))
     lines.append(_host_bottom_border(right_width))
     return lines
 
 
-def _gpu_metric_text(label: str, value: float | None) -> str:
-    return f" {label}: {format_percent_precise(value)}"
+def _overlay(base: str, text: str, start: int = 0) -> str:
+    text = text[: max(0, len(base) - start)]
+    return base[:start] + text + base[start + len(text) :]
 
 
-def _cpu_bar(value: float | None) -> str:
-    bar = format_bar(value, width=20)
-    return f"  {bar}"
-
-
-def _mem_bar(value: float | None) -> str:
-    bar = format_bar(value, width=20)
-    return f"  {bar}"
+def _host_percent_text(value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return "N/A"
+    return f"{value:.1f}%"
 
 
 def _load_average_text() -> str:
     try:
-        load1, load5, load15 = os.getloadavg()
+        values = os.getloadavg()
     except OSError:
-        return "N/A  N/A  N/A"
-    return f"{load1:.2f}  {load5:.2f}  {load15:.2f}"
+        return "Load Average: N/A N/A N/A"
+    return "Load Average: {} {} {}".format(
+        *(f"{value:5.2f}"[:5] if value < 10000.0 else "9999+" for value in values)
+    )
 
 
 def visible_processes(frame: FrameSnapshot, state: UiState) -> list[ProcessSnapshot]:
@@ -264,6 +285,15 @@ def render_main_screen(
         show_host = show_host and _has_room_for_host(frame, height, width)
     lines.extend(render_device_panel(frame, width, state.layout, compact=compact_devices))
     if show_host:
+        use_columns = (
+            compact_devices
+            and bool(frame.devices)
+            and _can_render_compact_columns(len(frame.devices), width)
+        )
+        if not use_columns and lines and lines[-1].startswith("╘"):
+            # nvitop overlays the host panel's top border on the device
+            # panel's bottom border; merge them into a single rule.
+            lines.pop()
         lines.extend(render_host_panel(frame, width))
         lines.append("")
 
@@ -317,7 +347,9 @@ def _has_room_for_host(frame: FrameSnapshot, height: int | None, width: int) -> 
     use_columns = _can_render_compact_columns(device_count, width)
     compact_device_rows = _compact_device_panel_rows(device_count, use_columns)
     process_min = 6
-    host_overhead = 13
+    # The host top border merges into the device bottom border except in the
+    # two-column compact layout, where both borders stay.
+    host_overhead = 14 if use_columns else 13
     return height >= title_rows + compact_device_rows + host_overhead + process_min
 
 
@@ -608,7 +640,14 @@ def _time_axis_right(width: int) -> str:
     if width <= 0:
         return ""
     line = list("─" * width)
-    labels = [(20, "╴30s├"), (35, "╴60s├"), (66, "╴120s├")]
+    labels = [
+        (20, "╴30s├"),
+        (35, "╴60s├"),
+        (66, "╴120s├"),
+        (96, "╴180s├"),
+        (126, "╴240s├"),
+        (156, "╴300s├"),
+    ]
     for offset, label in labels:
         if offset > width:
             break

@@ -18,6 +18,7 @@ from mxtop import ui  # noqa: E402
 from mxtop.filters import apply_filters  # noqa: E402
 from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot  # noqa: E402
 from mxtop.rendering import (  # noqa: E402
+    host_graph_context,
     render_once,
     reset_intensity_thresholds,
     set_intensity_thresholds,
@@ -28,7 +29,7 @@ from mxtop.ui import panels as ui_panels  # noqa: E402
 from mxtop.ui.panels import render_main_screen  # noqa: E402
 from mxtop.ui.state import LayoutMode, UiState  # noqa: E402
 
-from generate_preview import render_to_png  # noqa: E402
+from generate_preview import render_to_png, seed_host_history  # noqa: E402
 
 GALLERY_DIR = PROJECT_ROOT / "assets" / "gallery"
 
@@ -42,7 +43,7 @@ def _stub_host_memory_total() -> int:
 
 
 def _stub_load_average() -> str:
-    return "1.42  1.85  2.07"
+    return "Load Average:  1.42  1.85  2.07"
 
 
 def _stub_user_host() -> str:
@@ -397,7 +398,11 @@ def _render_text(variant: Variant) -> str:
         screen = render_main_screen(frame, state, width=variant.width, height=variant.height)
         if not variant.color:
             return "\n".join(screen.lines)
-        return "\n".join(_colorize_line(row, line) for row, line in enumerate(screen.lines))
+        host_context = host_graph_context(screen.lines)
+        return "\n".join(
+            _colorize_line(row, line, host_context.get(row))
+            for row, line in enumerate(screen.lines)
+        )
     return render_once(frame, use_color=variant.color, width=variant.width)
 
 
@@ -408,6 +413,7 @@ def _prefix(variant: Variant) -> str:
 
 def _render_all() -> list[Variant]:
     GALLERY_DIR.mkdir(parents=True, exist_ok=True)
+    seed_host_history()
     completed: list[Variant] = []
     for variant in VARIANTS:
         text = _render_text(variant)

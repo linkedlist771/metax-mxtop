@@ -136,7 +136,13 @@ def _mouse_scroll_delta(button_state: int) -> int:
     return 0
 
 
-def _draw_line(screen, row: int, line: str, width: int) -> None:
+def _draw_line(
+    screen,
+    row: int,
+    line: str,
+    width: int,
+    host_context: tuple[str, float | None, bool] | None = None,
+) -> None:
     attr = _line_attr(row, line)
     if row == 0:
         _draw_title_line(screen, row, line, width)
@@ -153,8 +159,8 @@ def _draw_line(screen, row: int, line: str, width: int) -> None:
     if _is_device_data_line(line):
         _draw_device_data_line(screen, row, line, width)
         return
-    if _is_host_data_line(line):
-        _draw_host_data_line(screen, row, line, width)
+    if host_context is not None or _is_host_data_line(line):
+        _draw_host_data_line(screen, row, line, width, host_context)
         return
     _safe_addnstr(screen, row, 0, line, width, attr)
 
@@ -213,7 +219,6 @@ def _draw_process_data_line(screen, row: int, line: str, width: int, attr: int) 
 _DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
 _PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
 _BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
-_HOST_BAR_RE = re.compile(r"(  )([█░▏▎▍▌▋▊▉]{4,})")
 _GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
 _WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
 _MEMORY_RATIO_RE = re.compile(
@@ -499,34 +504,69 @@ def _gpu_metric_pair(text: str) -> int:
     return _intensity_pair(_parse_percent(match.group(2)), memory=match.group(1) == "MEM")
 
 
-def _draw_host_section(screen, row: int, cursor: int, text: str, width: int, pair: int) -> int:
-    section_attr = _attr(pair, curses.A_BOLD)
-    bar_match = _HOST_BAR_RE.search(text)
-    if bar_match:
-        cursor = _safe_addnstr(screen, row, cursor, text[: bar_match.start()], width, section_attr)
-        cursor = _safe_addnstr(screen, row, cursor, bar_match.group(1), width, _attr(PAIR_DIM))
-        cursor = _safe_addnstr(screen, row, cursor, bar_match.group(2), width, section_attr)
-        cursor = _safe_addnstr(screen, row, cursor, text[bar_match.end():], width, section_attr)
-    else:
-        cursor = _safe_addnstr(screen, row, cursor, text, width, section_attr)
-    return cursor
+_BRAILLE_RUN_RE = re.compile(r"[⠀-⣿]+")
 
 
-def _draw_host_data_line(screen, row: int, line: str, width: int) -> None:
+def _host_section_pair(section: str | None) -> int | None:
+    if section == "cpu":
+        return PAIR_HEADER
+    if section == "mem":
+        return PAIR_MEM
+    if section == "swp":
+        return PAIR_SWAP
+    return None
+
+
+def _draw_host_section(
+    screen,
+    row: int,
+    cursor: int,
+    text: str,
+    width: int,
+    pair: int,
+    graph_pair: int | None = None,
+) -> int:
+    """Draw overlay text with ``pair`` and braille graph runs with ``graph_pair``."""
+    text_attr = _attr(pair, curses.A_BOLD)
+    graph_attr = _attr(graph_pair if graph_pair is not None else pair)
+    local_cursor = 0
+    for match in _BRAILLE_RUN_RE.finditer(text):
+        if match.start() > local_cursor:
+            cursor = _safe_addnstr(screen, row, cursor, text[local_cursor : match.start()], width, text_attr)
+        cursor = _safe_addnstr(screen, row, cursor, match.group(), width, graph_attr)
+        local_cursor = match.end()
+    return _safe_addnstr(screen, row, cursor, text[local_cursor:], width, text_attr)
+
+
+def _draw_host_data_line(
+    screen,
+    row: int,
+    line: str,
+    width: int,
+    host_context: tuple[str, float | None, bool] | None = None,
+) -> None:
     pieces = line.split("│")
     cursor = 0
     if not pieces or pieces[0]:
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
         return
+    section, right_value, right_is_memory = host_context or (None, None, False)
+    section_pair = _host_section_pair(section)
     cursor = _safe_addnstr(screen, row, cursor, "│", width, _attr(PAIR_DIM))
     if len(pieces) > 1:
         left_pair = _host_left_pair(pieces[1])
-        cursor = _draw_host_section(screen, row, cursor, pieces[1], width, left_pair)
+        cursor = _draw_host_section(
+            screen, row, cursor, pieces[1], width, left_pair,
+            section_pair if section_pair is not None else left_pair,
+        )
         cursor = _safe_addnstr(screen, row, cursor, "│", width, _attr(PAIR_DIM))
     if len(pieces) > 2:
         right_text = pieces[2]
         right_pair = _gpu_metric_pair(right_text) if "GPU " in right_text else PAIR_VALUE
-        cursor = _draw_host_section(screen, row, cursor, right_text, width, right_pair)
+        graph_pair = (
+            _intensity_pair(right_value, memory=right_is_memory) if right_value is not None else right_pair
+        )
+        cursor = _draw_host_section(screen, row, cursor, right_text, width, right_pair, graph_pair)
         cursor = _safe_addnstr(screen, row, cursor, "│", width, _attr(PAIR_DIM))
     for extra in pieces[3:]:
         if not extra:
@@ -708,8 +748,9 @@ def run_tui(backend: TelemetryBackend, interval: float, options: Any | None = No
                 interval=interval,
                 error=sampler_state.error,
             )
+            host_context = _rendering.host_graph_context(rendered.lines)
             for row, line in enumerate(rendered.lines[:draw_height]):
-                _draw_line(draw_screen, row, line, draw_width)
+                _draw_line(draw_screen, row, line, draw_width, host_context.get(row))
             final_lines = _with_outer_text_border(rendered.lines, width) if bordered else rendered.lines
             final_rendered = "\n".join(final_lines)
             screen.refresh()

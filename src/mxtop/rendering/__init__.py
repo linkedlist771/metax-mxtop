@@ -46,7 +46,37 @@ def render_once(frame: FrameSnapshot, use_color: bool = True, width: int = 120) 
     rendered = render_main_screen(frame, UiState(), width=width)
     if not use_color:
         return "\n".join(rendered.lines)
-    return "\n".join(_colorize_line(row, line) for row, line in enumerate(rendered.lines))
+    host_context = host_graph_context(rendered.lines)
+    return "\n".join(
+        _colorize_line(row, line, host_context.get(row))
+        for row, line in enumerate(rendered.lines)
+    )
+
+
+def host_graph_context(lines: list[str]) -> dict[int, tuple[str, float | None, bool]]:
+    """Map host-panel rows to ``(section, right_value, right_is_memory)``.
+
+    The host panel mirrors nvitop: 5 CPU graph rows starting at the
+    "Load Average" row, the time axis, then 4 MEM rows and 1 SWP row. The
+    right-hand GPU graphs are colored by the percent shown in their label
+    rows (GPU MEM on the first row, GPU UTL on the last).
+    """
+    for index, line in enumerate(lines):
+        if "Load Average:" not in line:
+            continue
+        gpu_mem = gpu_utl = None
+        if (match := _GPU_METRIC_RE.search(line)) is not None:
+            gpu_mem = _parse_percent(match.group(2))
+        if index + 10 < len(lines) and (match := _GPU_METRIC_RE.search(lines[index + 10])) is not None:
+            gpu_utl = _parse_percent(match.group(2))
+        context: dict[int, tuple[str, float | None, bool]] = {}
+        for offset in range(5):
+            context[index + offset] = ("cpu", gpu_mem, True)
+        for offset in range(6, 10):
+            context[index + offset] = ("mem", gpu_utl, False)
+        context[index + 10] = ("swp", gpu_utl, False)
+        return context
+    return {}
 
 
 def _style(text: str, *codes: str) -> str:
@@ -55,7 +85,11 @@ def _style(text: str, *codes: str) -> str:
     return "".join(codes) + text + RESET
 
 
-def _colorize_line(row: int, line: str) -> str:
+def _colorize_line(
+    row: int,
+    line: str,
+    host_context: tuple[str, float | None, bool] | None = None,
+) -> str:
     if not line:
         return line
     if row == 0:
@@ -68,21 +102,20 @@ def _colorize_line(row: int, line: str) -> str:
         return _colorize_process_row(line)
     if _is_device_data_line(line):
         return _colorize_device_row(line)
+    if host_context is not None or _is_host_line(line):
+        return _colorize_host_line(line, host_context)
     if _is_border_line(line):
         return _style(line, DIM, _dim_fg())
     if "MXTOP" in line and "Driver Version" in line:
         return _style(line, BOLD, FG_WHITE)
     if _is_header_line(line):
         return _style(line, BOLD, FG_CYAN)
-    if _is_host_line(line):
-        return _colorize_host_line(line)
     if _is_graph_line(line):
         return _style(line, DIM, _dim_fg())
     return _style(line, FG_WHITE)
 
 
 _BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
-_HOST_BAR_RE = re.compile(r"(  )([█░▏▎▍▌▋▊▉]{4,})")
 _GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
 _WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
 _MEMORY_RATIO_RE = re.compile(
@@ -372,32 +405,40 @@ def _gpu_metric_color(text: str) -> str:
     return _intensity_color(_parse_percent(match.group(2)), memory=match.group(1) == "MEM")
 
 
-def _style_host_section(text: str, color: str) -> str:
-    bar_match = _HOST_BAR_RE.search(text)
-    if not bar_match:
-        return _style(text, BOLD, color)
-    return "".join(
-        [
-            _style(text[: bar_match.start()], BOLD, color),
-            _style(bar_match.group(1), DIM),
-            _style(bar_match.group(2), BOLD, color),
-            _style(text[bar_match.end():], BOLD, color),
-        ]
-    )
+_BRAILLE_RUN_RE = re.compile(r"[⠀-⣿]+")
+_HOST_SECTION_COLORS = {"cpu": FG_CYAN, "mem": FG_MAGENTA, "swp": FG_BLUE}
 
 
-def _colorize_host_line(line: str) -> str:
+def _style_host_section(text: str, color: str, graph_color: str | None = None) -> str:
+    """Style overlay text with ``color`` and braille graph runs with ``graph_color``."""
+    graph_color = graph_color or color
+    out: list[str] = []
+    cursor = 0
+    for match in _BRAILLE_RUN_RE.finditer(text):
+        if match.start() > cursor:
+            out.append(_style(text[cursor : match.start()], BOLD, color))
+        out.append(_style(match.group(), graph_color))
+        cursor = match.end()
+    out.append(_style(text[cursor:], BOLD, color))
+    return "".join(out)
+
+
+def _colorize_host_line(line: str, host_context: tuple[str, float | None, bool] | None = None) -> str:
     pieces = line.split("│")
     if len(pieces) < 2 or pieces[0]:
         return _style(line, FG_WHITE)
+    section, right_value, right_is_memory = host_context or (None, None, False)
+    section_color = _HOST_SECTION_COLORS.get(section or "")
     out = [_style("│", DIM, _dim_fg())]
     if len(pieces) > 1:
-        out.append(_style_host_section(pieces[1], _host_left_color(pieces[1])))
+        label_color = _host_left_color(pieces[1])
+        out.append(_style_host_section(pieces[1], label_color, section_color or label_color))
         out.append(_style("│", DIM, _dim_fg()))
     if len(pieces) > 2:
         right_text = pieces[2]
         right_color = _gpu_metric_color(right_text) if "GPU " in right_text else FG_WHITE
-        out.append(_style_host_section(right_text, right_color))
+        graph_color = _intensity_color(right_value, memory=right_is_memory) if right_value is not None else right_color
+        out.append(_style_host_section(right_text, right_color, graph_color))
         out.append(_style("│", DIM, _dim_fg()))
     for extra in pieces[3:]:
         if not extra:
