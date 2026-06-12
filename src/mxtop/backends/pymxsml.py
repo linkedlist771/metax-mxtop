@@ -52,6 +52,20 @@ def _callable(module: ModuleType, name: str) -> Callable[..., object]:
     return value
 
 
+def _optional_callable(module: ModuleType, name: str) -> Callable[..., object] | None:
+    value = cast(object, getattr(module, name, None))
+    return value if callable(value) else None
+
+
+def _text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode(errors="replace")
+    text = str(value).strip()
+    return text or None
+
+
 def _items(value: object | None) -> Iterable[object]:
     if value is None:
         return ()
@@ -123,6 +137,18 @@ class PymxsmlBackend:
         get_compute_processes = _callable(mxsml_extension, "mxSmlExDeviceGetComputeRunningProcesses")
         get_handle_by_index = _callable(mxsml_extension, "mxSmlExDeviceGetHandleByIndex")
         get_utilization_rates = _callable(mxsml_extension, "mxSmlExDeviceGetUtilizationRates")
+        get_maca_version = _optional_callable(mxsml, "mxSmlGetMacaVersion")
+        get_device_version = _optional_callable(mxsml, "mxSmlGetDeviceVersion")
+        get_driver_version = _optional_callable(mxsml_extension, "mxSmlExSystemGetDriverVersion")
+        get_power_usage = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerUsage")
+        get_board_power_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetBoardPowerLimit")
+        get_power_mgmt_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerManagementLimit")
+        get_board_power_limit_core = _optional_callable(mxsml, "mxSmlGetBoardPowerLimit")
+        version_driver_unit = _integer(getattr(mxsml, "MXSML_VERSION_DRIVER", 1)) or 1
+
+        # System-wide versions: query once per snapshot.
+        driver_version = _text(_safe(get_driver_version)) if get_driver_version else None
+        maca_version = _text(_safe(get_maca_version)) if get_maca_version else None
 
         devices: list[DeviceSnapshot] = []
         processes: list[ProcessSnapshot] = []
@@ -133,12 +159,35 @@ class PymxsmlBackend:
             handle = _safe(lambda index=index: get_handle_by_index(index))
             util = _safe(lambda handle=handle: get_utilization_rates(handle)) if handle else None
             temperature = _safe(lambda index=index: get_temperature_info(index, temperature_hotspot))
-            board_power = _safe(lambda index=index: get_board_power_info(index), [])
+
+            # Power draw: prefer the extension API, fall back to summing the
+            # per-way board power readings from the core API.
             power_w = None
-            power_values = [_number_attr(item, "power") for item in _items(board_power)]
-            power_sum = sum(value for value in power_values if value is not None)
-            if power_sum:
-                power_w = normalize_power_w(power_sum)
+            if handle is not None and get_power_usage is not None:
+                power_w = normalize_power_w(_number(_safe(lambda handle=handle: get_power_usage(handle))))
+            if power_w is None:
+                board_power = _safe(lambda index=index: get_board_power_info(index), [])
+                power_values = [_number_attr(item, "power") for item in _items(board_power)]
+                power_sum = sum(value for value in power_values if value is not None)
+                if power_sum:
+                    power_w = normalize_power_w(power_sum)
+
+            # Power limit: extension board limit -> management limit -> core API.
+            power_limit_raw: object | None = None
+            if handle is not None and get_board_power_limit is not None:
+                power_limit_raw = _safe(lambda handle=handle: get_board_power_limit(handle))
+            if not power_limit_raw and handle is not None and get_power_mgmt_limit is not None:
+                power_limit_raw = _safe(lambda handle=handle: get_power_mgmt_limit(handle))
+            if not power_limit_raw and get_board_power_limit_core is not None:
+                power_limit_raw = _safe(lambda index=index: get_board_power_limit_core(index))
+            power_limit_w = normalize_power_w(_number(power_limit_raw)) if power_limit_raw else None
+
+            # Driver version: per-device fallback when the system-wide call failed.
+            device_driver_version = driver_version
+            if device_driver_version is None and get_device_version is not None:
+                device_driver_version = _text(
+                    _safe(lambda index=index: get_device_version(index, version_driver_unit))
+                )
 
             memory_used = used * 1024 if (used := _int_attr(memory, "vramUse")) is not None else None
             memory_total = total * 1024 if (total := _int_attr(memory, "vramTotal")) is not None else None
@@ -151,6 +200,9 @@ class PymxsmlBackend:
                     uuid=str(getattr(info, "uuid", "")) or None,
                     temperature_c=normalize_temperature_c(_number(temperature)),
                     power_w=power_w,
+                    power_limit_w=power_limit_w,
+                    driver_version=device_driver_version,
+                    maca_version=maca_version,
                     gpu_util_percent=_number_attr(util, "gpu"),
                     memory_util_percent=_number_attr(util, "memory"),
                     memory_used_bytes=memory_used,
