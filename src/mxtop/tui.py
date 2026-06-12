@@ -12,8 +12,29 @@ from mxtop.models import FrameSnapshot
 from mxtop import rendering as _rendering
 from mxtop.rendering import render_once
 from mxtop.sampler import SnapshotSampler
+from mxtop.ui import classify
+from mxtop.ui.classify import host_graph_context
 from mxtop.ui.panels import MIN_SCREEN_WIDTH, render_main_screen
 from mxtop.ui.state import DIRECT_SORT_KEYS, LayoutMode, UiState, keep_selection, next_sort, sort_processes
+
+# Line classification and value parsing live in mxtop.ui.classify, shared with
+# the ANSI renderer. Local aliases keep this module's call sites short.
+_is_border_line = classify.is_border_line
+_is_device_data_line = classify.is_device_data_line
+_is_header_line = classify.is_header_line
+_is_host_data_line = classify.is_host_data_line
+_is_process_data_line = classify.is_process_data_line
+_is_version_line = classify.is_version_line
+_parse_percent = classify.parse_percent
+_float_text = classify.float_text
+_ratio_percent = classify.ratio_percent
+_BAR_RE = classify.BAR_RE
+_BRAILLE_RUN_RE = classify.BRAILLE_RUN_RE
+_CELL_GPU_PERCENT_RE = classify.CELL_GPU_PERCENT_RE
+_GPU_METRIC_RE = classify.GPU_METRIC_RE
+_MEMORY_RATIO_RE = classify.MEMORY_RATIO_RE
+_PROCESS_ROW_FIELDS_RE = classify.PROCESS_ROW_FIELDS_RE
+_WATT_RATIO_RE = classify.WATT_RATIO_RE
 
 PAIR_TITLE = 1
 PAIR_HEADER = 2
@@ -216,72 +237,6 @@ def _draw_process_data_line(screen, row: int, line: str, width: int, attr: int) 
     _safe_addnstr(screen, row, position, line[5:], width, base_attr)
 
 
-_DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
-_PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
-_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
-_GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
-_WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
-_MEMORY_RATIO_RE = re.compile(
-    r"(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)\s*/\s*(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)"
-)
-_CELL_GPU_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
-_PROCESS_ROW_FIELDS_RE = re.compile(
-    r"^(?P<prefix>│[ >]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
-    r"(?P<gpu_mem>N/A|\d+(?:\.\d+)?(?:B|KiB|MiB|GiB|TiB))"
-    r"(?P<before_sm>\s+)(?P<sm>\S+)"
-    r"(?P<before_gmbw>\s+)(?P<gmbw>\S+)"
-    r"(?P<before_cpu>\s+)(?P<cpu>\S+)"
-    r"(?P<before_mem_pct>\s+)(?P<mem_pct>\S+)"
-)
-_BYTE_UNITS = {
-    "B": 1.0,
-    "KiB": 1024.0,
-    "MiB": 1024.0**2,
-    "GiB": 1024.0**3,
-    "TiB": 1024.0**4,
-}
-
-
-def _is_device_data_line(line: str) -> bool:
-    if not line.startswith("│") or "GPU-MEM" in line or _is_process_data_line(line):
-        return False
-    if _is_header_line(line):
-        return False
-    if "GPU MEM:" in line or "GPU UTL:" in line:
-        return False
-    if _DEVICE_ROW_RE.match(line) and "MiB" not in line[:24]:
-        return True
-    return any(token in line for token in (" Pwr:", "GPU-Util", " UTL:", " PWR:"))
-
-
-def _is_process_data_line(line: str) -> bool:
-    return bool(_PROCESS_ROW_RE.match(line))
-
-
-def _is_header_line(line: str) -> bool:
-    return (
-        "GPU     PID" in line
-        or "GPU      PID" in line
-        or "GPU  Name" in line
-        or "GPU Fan Temp" in line
-        or "Fan  Temp" in line
-        or "Processes:" in line
-    )
-
-
-def _is_host_data_line(line: str) -> bool:
-    if not line.startswith("│"):
-        return False
-    return any(
-        label in line
-        for label in (" Load Average:", " CPU:", " MEM:", " SWP:", " GPU MEM:", " GPU UTL:")
-    )
-
-
-def _is_version_line(line: str) -> bool:
-    return line.startswith("│") and "MXTOP " in line and "Driver Version" in line
-
-
 def _draw_version_line(screen, row: int, line: str, width: int) -> None:
     _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
 
@@ -295,15 +250,6 @@ def _intensity_pair(value: float | None, *, memory: bool) -> int:
     if value >= thresholds[0]:
         return PAIR_WARN
     return PAIR_GOOD
-
-
-def _parse_percent(text: str) -> float | None:
-    if text == "MAX":
-        return 100.0
-    try:
-        return float(text.replace("%", ""))
-    except ValueError:
-        return None
 
 
 def _bar_pair(label: str, pct_text: str) -> int:
@@ -468,25 +414,6 @@ def _draw_process_metrics_line(screen, row: int, line: str, width: int, match: r
     _safe_addnstr(screen, row, cursor, line[match.end() :], width, _attr(PAIR_VALUE))
 
 
-def _float_text(text: str) -> float | None:
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
-def _ratio_percent(used: str, used_unit: str, total: str, total_unit: str) -> float | None:
-    used_value = _float_text(used)
-    total_value = _float_text(total)
-    if used_value is None or total_value is None:
-        return None
-    used_bytes = used_value * _BYTE_UNITS[used_unit]
-    total_bytes = total_value * _BYTE_UNITS[total_unit]
-    if total_bytes <= 0:
-        return None
-    return min(100.0, max(0.0, used_bytes / total_bytes * 100))
-
-
 def _host_left_pair(text: str) -> int:
     if " CPU:" in text:
         return PAIR_HEADER
@@ -502,9 +429,6 @@ def _gpu_metric_pair(text: str) -> int:
     if not match:
         return PAIR_GOOD
     return _intensity_pair(_parse_percent(match.group(2)), memory=match.group(1) == "MEM")
-
-
-_BRAILLE_RUN_RE = re.compile(r"[⠀-⣿]+")
 
 
 def _host_section_pair(section: str | None) -> int | None:
@@ -584,39 +508,10 @@ def _line_attr(row: int, line: str) -> int:
         return _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE)
     if not line:
         return _attr(PAIR_VALUE)
-    stripped = line.strip()
-    if stripped and set(stripped) <= {
-        " ",
-        "╒",
-        "╕",
-        "╘",
-        "╛",
-        "╞",
-        "╡",
-        "╪",
-        "╧",
-        "├",
-        "┤",
-        "┼",
-        "─",
-        "═",
-        "┬",
-        "┴",
-        "╤",
-        "│",
-    }:
+    if _is_border_line(line):
         return _attr(PAIR_DIM)
-    if (
-        "Processes:" in line
-        or "GPU     PID" in line
-        or "GPU      PID" in line
-        or "GPU  Name" in line
-        or "Fan  Temp" in line
-        or "GPU Fan Temp" in line
-    ):
+    if _is_header_line(line):
         return _attr(PAIR_HEADER, curses.A_BOLD)
-    if "Load Average:" in line or " CPU:" in line or " MEM:" in line or " SWP:" in line:
-        return _attr(PAIR_VALUE)
     return _attr(PAIR_VALUE)
 
 
@@ -707,15 +602,36 @@ def run_tui(backend: TelemetryBackend, interval: float, options: Any | None = No
             pass
         screen.nodelay(True)
         screen.timeout(100)
+        # Repaint only when something actually changed: a new sampler frame,
+        # a key press (every UI mutation goes through keys, including
+        # KEY_RESIZE/mouse), or a terminal size change — plus a 1 Hz heartbeat
+        # so the host history graphs keep scrolling when --interval > 1s.
+        # Idle cost drops from a full render + colorize every 100 ms tick to
+        # a plain getch wait.
+        painted_version = -1
+        painted_size = (-1, -1)
+        painted_at = 0.0
         while True:
             sampler_state = sampler.snapshot()
             frame = _filtered_frame(sampler_state.frame, options) if sampler_state.frame is not None else None
             key = screen.getch()
             if not _handle_key(key, state, frame, sampler):
                 break
+            size = screen.getmaxyx()
+            now = time.monotonic()
+            if (
+                key == -1
+                and sampler_state.version == painted_version
+                and size == painted_size
+                and now - painted_at < 1.0
+            ):
+                continue
+            painted_version = sampler_state.version
+            painted_size = size
+            painted_at = now
 
             screen.erase()
-            height, width = screen.getmaxyx()
+            height, width = size
             bordered = _can_draw_outer_border(height, width)
             draw_screen = _OffsetScreen(screen, 1, 1) if bordered else screen
             draw_height = height - 2 if bordered else height
@@ -748,13 +664,12 @@ def run_tui(backend: TelemetryBackend, interval: float, options: Any | None = No
                 interval=interval,
                 error=sampler_state.error,
             )
-            host_context = _rendering.host_graph_context(rendered.lines)
+            host_context = host_graph_context(rendered.lines)
             for row, line in enumerate(rendered.lines[:draw_height]):
                 _draw_line(draw_screen, row, line, draw_width, host_context.get(row))
             final_lines = _with_outer_text_border(rendered.lines, width) if bordered else rendered.lines
             final_rendered = "\n".join(final_lines)
             screen.refresh()
-            time.sleep(0.02)
 
     try:
         screen = curses.initscr()

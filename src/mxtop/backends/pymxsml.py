@@ -125,30 +125,74 @@ class PymxsmlBackend:
         _ = _callable(mxsml, "mxSmlInit")()
         _ = _callable(mxsml_extension, "mxSmlExInit")()
 
-    def snapshot(self) -> FrameSnapshot:
-        mxsml = _module("pymxsml")
-        mxsml_extension = _module("pymxsml.mxsml_extension")
-        temperature_hotspot = _integer(getattr(mxsml, "MXSML_TEMPERATURE_HOTSPOT")) or 0
-        get_board_power_info = _callable(mxsml, "mxSmlGetBoardPowerInfo")
-        get_device_count = _callable(mxsml, "mxSmlGetDeviceCount")
-        get_device_info = _callable(mxsml, "mxSmlGetDeviceInfo")
-        get_memory_info = _callable(mxsml, "mxSmlGetMemoryInfo")
-        get_temperature_info = _callable(mxsml, "mxSmlGetTemperatureInfo")
-        get_compute_processes = _callable(mxsml_extension, "mxSmlExDeviceGetComputeRunningProcesses")
-        get_handle_by_index = _callable(mxsml_extension, "mxSmlExDeviceGetHandleByIndex")
-        get_utilization_rates = _callable(mxsml_extension, "mxSmlExDeviceGetUtilizationRates")
-        get_maca_version = _optional_callable(mxsml, "mxSmlGetMacaVersion")
-        get_device_version = _optional_callable(mxsml, "mxSmlGetDeviceVersion")
-        get_driver_version = _optional_callable(mxsml_extension, "mxSmlExSystemGetDriverVersion")
-        get_power_usage = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerUsage")
-        get_board_power_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetBoardPowerLimit")
-        get_power_mgmt_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerManagementLimit")
-        get_board_power_limit_core = _optional_callable(mxsml, "mxSmlGetBoardPowerLimit")
-        version_driver_unit = _integer(getattr(mxsml, "MXSML_VERSION_DRIVER", 1)) or 1
+        # Resolve attributes once: module/function lookups are static.
+        self._temperature_hotspot = _integer(getattr(mxsml, "MXSML_TEMPERATURE_HOTSPOT", 0)) or 0
+        self._version_driver_unit = _integer(getattr(mxsml, "MXSML_VERSION_DRIVER", 1)) or 1
+        self._get_board_power_info = _callable(mxsml, "mxSmlGetBoardPowerInfo")
+        self._get_device_count = _callable(mxsml, "mxSmlGetDeviceCount")
+        self._get_device_info = _callable(mxsml, "mxSmlGetDeviceInfo")
+        self._get_memory_info = _callable(mxsml, "mxSmlGetMemoryInfo")
+        self._get_temperature_info = _callable(mxsml, "mxSmlGetTemperatureInfo")
+        self._get_compute_processes = _callable(mxsml_extension, "mxSmlExDeviceGetComputeRunningProcesses")
+        self._get_handle_by_index = _callable(mxsml_extension, "mxSmlExDeviceGetHandleByIndex")
+        self._get_utilization_rates = _callable(mxsml_extension, "mxSmlExDeviceGetUtilizationRates")
+        self._get_maca_version = _optional_callable(mxsml, "mxSmlGetMacaVersion")
+        self._get_device_version = _optional_callable(mxsml, "mxSmlGetDeviceVersion")
+        self._get_driver_version = _optional_callable(mxsml_extension, "mxSmlExSystemGetDriverVersion")
+        self._get_power_usage = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerUsage")
+        self._get_board_power_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetBoardPowerLimit")
+        self._get_power_mgmt_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerManagementLimit")
+        self._get_board_power_limit_core = _optional_callable(mxsml, "mxSmlGetBoardPowerLimit")
 
-        # System-wide versions: query once per snapshot.
-        driver_version = _text(_safe(get_driver_version)) if get_driver_version else None
-        maca_version = _text(_safe(get_maca_version)) if get_maca_version else None
+        # Static values (versions, power limits) are cached after first fetch
+        # so each refresh does not repeat C-library calls for data that never
+        # changes while the process runs. Mirrors MxSmiBackend._versions.
+        self._system_versions: tuple[str | None, str | None] | None = None
+        self._device_driver_versions: dict[int, str | None] = {}
+        self._device_power_limits: dict[int, float | None] = {}
+
+    def _versions(self) -> tuple[str | None, str | None]:
+        if self._system_versions is None:
+            driver = _text(_safe(self._get_driver_version)) if self._get_driver_version else None
+            maca = _text(_safe(self._get_maca_version)) if self._get_maca_version else None
+            self._system_versions = (driver, maca)
+        return self._system_versions
+
+    def _device_driver_version(self, index: int) -> str | None:
+        if index not in self._device_driver_versions:
+            version = None
+            if self._get_device_version is not None:
+                version = _text(
+                    _safe(lambda: self._get_device_version(index, self._version_driver_unit))
+                )
+            self._device_driver_versions[index] = version
+        return self._device_driver_versions[index]
+
+    def _power_limit(self, index: int, handle: object | None) -> float | None:
+        if index not in self._device_power_limits:
+            raw: object | None = None
+            if handle is not None and self._get_board_power_limit is not None:
+                raw = _safe(lambda: self._get_board_power_limit(handle))
+            if not raw and handle is not None and self._get_power_mgmt_limit is not None:
+                raw = _safe(lambda: self._get_power_mgmt_limit(handle))
+            if not raw and self._get_board_power_limit_core is not None:
+                raw = _safe(lambda: self._get_board_power_limit_core(index))
+            self._device_power_limits[index] = normalize_power_w(_number(raw)) if raw else None
+        return self._device_power_limits[index]
+
+    def snapshot(self) -> FrameSnapshot:
+        temperature_hotspot = self._temperature_hotspot
+        get_board_power_info = self._get_board_power_info
+        get_device_count = self._get_device_count
+        get_device_info = self._get_device_info
+        get_memory_info = self._get_memory_info
+        get_temperature_info = self._get_temperature_info
+        get_compute_processes = self._get_compute_processes
+        get_handle_by_index = self._get_handle_by_index
+        get_utilization_rates = self._get_utilization_rates
+        get_power_usage = self._get_power_usage
+
+        driver_version, maca_version = self._versions()
 
         devices: list[DeviceSnapshot] = []
         processes: list[ProcessSnapshot] = []
@@ -172,22 +216,14 @@ class PymxsmlBackend:
                 if power_sum:
                     power_w = normalize_power_w(power_sum)
 
-            # Power limit: extension board limit -> management limit -> core API.
-            power_limit_raw: object | None = None
-            if handle is not None and get_board_power_limit is not None:
-                power_limit_raw = _safe(lambda handle=handle: get_board_power_limit(handle))
-            if not power_limit_raw and handle is not None and get_power_mgmt_limit is not None:
-                power_limit_raw = _safe(lambda handle=handle: get_power_mgmt_limit(handle))
-            if not power_limit_raw and get_board_power_limit_core is not None:
-                power_limit_raw = _safe(lambda index=index: get_board_power_limit_core(index))
-            power_limit_w = normalize_power_w(_number(power_limit_raw)) if power_limit_raw else None
+            # Power limit: extension board limit -> management limit -> core
+            # API; static, so cached per device after the first fetch.
+            power_limit_w = self._power_limit(index, handle)
 
             # Driver version: per-device fallback when the system-wide call failed.
             device_driver_version = driver_version
-            if device_driver_version is None and get_device_version is not None:
-                device_driver_version = _text(
-                    _safe(lambda index=index: get_device_version(index, version_driver_unit))
-                )
+            if device_driver_version is None:
+                device_driver_version = self._device_driver_version(index)
 
             memory_used = used * 1024 if (used := _int_attr(memory, "vramUse")) is not None else None
             memory_total = total * 1024 if (total := _int_attr(memory, "vramTotal")) is not None else None

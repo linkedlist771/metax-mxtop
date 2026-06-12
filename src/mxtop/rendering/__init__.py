@@ -1,10 +1,30 @@
 from __future__ import annotations
 
-import re
-
 from mxtop.models import FrameSnapshot
+from mxtop.ui import classify
+from mxtop.ui.classify import host_graph_context
 from mxtop.ui.panels import render_main_screen
 from mxtop.ui.state import UiState
+
+# Line classification and value parsing live in mxtop.ui.classify, shared with
+# the curses TUI. Local aliases keep this module's call sites short.
+_is_border_line = classify.is_border_line
+_is_device_data_line = classify.is_device_data_line
+_is_graph_line = classify.is_graph_line
+_is_header_line = classify.is_header_line
+_is_host_line = classify.is_host_overlay
+_is_process_data_line = classify.is_process_data_line
+_is_process_title = classify.is_process_title
+_parse_percent = classify.parse_percent
+_float_text = classify.float_text
+_ratio_percent = classify.ratio_percent
+_BAR_RE = classify.BAR_RE
+_BRAILLE_RUN_RE = classify.BRAILLE_RUN_RE
+_CELL_GPU_PERCENT_RE = classify.CELL_GPU_PERCENT_RE
+_GPU_METRIC_RE = classify.GPU_METRIC_RE
+_MEMORY_RATIO_RE = classify.MEMORY_RATIO_RE
+_PROCESS_ROW_FIELDS_RE = classify.PROCESS_ROW_FIELDS_RE
+_WATT_RATIO_RE = classify.WATT_RATIO_RE
 
 WIDE_MIN_WIDTH = 110
 RESET = "\x1b[0m"
@@ -37,9 +57,9 @@ def set_render_style(light: bool | None = None, colorful: bool | None = None) ->
 
 def _dim_fg() -> str:
     return FG_BLACK if LIGHT_THEME else FG_WHITE
-BORDER_CHARS = {"╒", "╕", "╘", "╛", "╞", "╡", "╪", "╧", "├", "┤", "┼", "─", "═", "│", "┬", "┴", "╤"}
-_DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
-_PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
+
+
+BORDER_CHARS = classify.BORDER_CHARS
 
 
 def render_once(frame: FrameSnapshot, use_color: bool = True, width: int = 120) -> str:
@@ -53,30 +73,6 @@ def render_once(frame: FrameSnapshot, use_color: bool = True, width: int = 120) 
     )
 
 
-def host_graph_context(lines: list[str]) -> dict[int, tuple[str, float | None, bool]]:
-    """Map host-panel rows to ``(section, right_value, right_is_memory)``.
-
-    The host panel mirrors nvitop: 5 CPU graph rows starting at the
-    "Load Average" row, the time axis, then 4 MEM rows and 1 SWP row. The
-    right-hand GPU graphs are colored by the percent shown in their label
-    rows (GPU MEM on the first row, GPU UTL on the last).
-    """
-    for index, line in enumerate(lines):
-        if "Load Average:" not in line:
-            continue
-        gpu_mem = gpu_utl = None
-        if (match := _GPU_METRIC_RE.search(line)) is not None:
-            gpu_mem = _parse_percent(match.group(2))
-        if index + 10 < len(lines) and (match := _GPU_METRIC_RE.search(lines[index + 10])) is not None:
-            gpu_utl = _parse_percent(match.group(2))
-        context: dict[int, tuple[str, float | None, bool]] = {}
-        for offset in range(5):
-            context[index + offset] = ("cpu", gpu_mem, True)
-        for offset in range(6, 10):
-            context[index + offset] = ("mem", gpu_utl, False)
-        context[index + 10] = ("swp", gpu_utl, False)
-        return context
-    return {}
 
 
 def _style(text: str, *codes: str) -> str:
@@ -115,23 +111,6 @@ def _colorize_line(
     return _style(line, FG_WHITE)
 
 
-_BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
-_GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
-_WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
-_MEMORY_RATIO_RE = re.compile(
-    r"(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)\s*/\s*(\d+(?:\.\d+)?)(B|KiB|MiB|GiB|TiB)"
-)
-_CELL_GPU_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
-_BAR_SUFFIX_PERCENT_RE = re.compile(r"^(MAX|\d+(?:\.\d+)?%)$")
-_PROCESS_ROW_FIELDS_RE = re.compile(
-    r"^(?P<prefix>│[ >]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
-    r"(?P<gpu_mem>N/A|\d+(?:\.\d+)?(?:B|KiB|MiB|GiB|TiB))"
-    r"(?P<before_sm>\s+)(?P<sm>\S+)"
-    r"(?P<before_gmbw>\s+)(?P<gmbw>\S+)"
-    r"(?P<before_cpu>\s+)(?P<cpu>\S+)"
-    r"(?P<before_mem_pct>\s+)(?P<mem_pct>\S+)"
-)
-
 DEFAULT_GPU_UTILIZATION_THRESHOLDS: tuple[int, int] = (10, 75)
 DEFAULT_MEMORY_UTILIZATION_THRESHOLDS: tuple[int, int] = (10, 80)
 GPU_THRESHOLDS: tuple[int, int] = DEFAULT_GPU_UTILIZATION_THRESHOLDS
@@ -158,22 +137,6 @@ def reset_intensity_thresholds() -> None:
         gpu=DEFAULT_GPU_UTILIZATION_THRESHOLDS,
         memory=DEFAULT_MEMORY_UTILIZATION_THRESHOLDS,
     )
-_BYTE_UNITS = {
-    "B": 1.0,
-    "KiB": 1024.0,
-    "MiB": 1024.0**2,
-    "GiB": 1024.0**3,
-    "TiB": 1024.0**4,
-}
-
-
-def _parse_percent(text: str) -> float | None:
-    if text == "MAX":
-        return 100.0
-    try:
-        return float(text.replace("%", ""))
-    except ValueError:
-        return None
 
 
 def _intensity_color(value: float | None, *, memory: bool) -> str:
@@ -305,25 +268,6 @@ def _style_with_span(text: str, start: int, end: int, color: str) -> str:
     )
 
 
-def _float_text(text: str) -> float | None:
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
-def _ratio_percent(used: str, used_unit: str, total: str, total_unit: str) -> float | None:
-    used_value = _float_text(used)
-    total_value = _float_text(total)
-    if used_value is None or total_value is None:
-        return None
-    used_bytes = used_value * _BYTE_UNITS[used_unit]
-    total_bytes = total_value * _BYTE_UNITS[total_unit]
-    if total_bytes <= 0:
-        return None
-    return min(100.0, max(0.0, used_bytes / total_bytes * 100))
-
-
 def _colorize_title(line: str) -> str:
     hint_start = line.find("(Press ")
     if hint_start < 0:
@@ -405,7 +349,6 @@ def _gpu_metric_color(text: str) -> str:
     return _intensity_color(_parse_percent(match.group(2)), memory=match.group(1) == "MEM")
 
 
-_BRAILLE_RUN_RE = re.compile(r"[⠀-⣿]+")
 _HOST_SECTION_COLORS = {"cpu": FG_CYAN, "mem": FG_MAGENTA, "swp": FG_BLUE}
 
 
@@ -448,45 +391,3 @@ def _colorize_host_line(line: str, host_context: tuple[str, float | None, bool] 
     return "".join(out)
 
 
-def _is_border_line(line: str) -> bool:
-    stripped = line.strip()
-    return bool(stripped) and set(stripped) <= BORDER_CHARS | {" "}
-
-
-def _is_header_line(line: str) -> bool:
-    return (
-        "GPU     PID" in line
-        or "GPU      PID" in line
-        or "GPU  Name" in line
-        or "GPU Fan Temp" in line
-        or "Fan  Temp" in line
-        or "Processes:" in line
-    )
-
-
-def _is_device_data_line(line: str) -> bool:
-    if not line.startswith("│") or "GPU-MEM" in line or _is_process_data_line(line):
-        return False
-    if _is_header_line(line):
-        return False
-    if "GPU MEM:" in line or "GPU UTL:" in line:
-        return False
-    if _DEVICE_ROW_RE.match(line) and "MiB" not in line[:24]:
-        return True
-    return any(token in line for token in (" Pwr:", "GPU-Util", " UTL:", " PWR:"))
-
-
-def _is_process_data_line(line: str) -> bool:
-    return bool(_PROCESS_ROW_RE.match(line))
-
-
-def _is_process_title(line: str) -> bool:
-    return "Processes:" in line and "@" in line
-
-
-def _is_host_line(line: str) -> bool:
-    return any(label in line for label in (" Load Average:", " CPU:", " MEM:", " SWP:", " GPU MEM:", " GPU UTL:"))
-
-
-def _is_graph_line(line: str) -> bool:
-    return "120s" in line or "60s" in line or "30s" in line or "╴" in line
