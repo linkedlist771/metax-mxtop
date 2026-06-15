@@ -11,4 +11,5 @@ HELP_LINES = [
     "/             reverse sort",
     "o then key    sort directly: g GPU, m memory, u GPU%, c CPU%, h host memory, t time, p pid",
     "a/f/c         auto/full/compact layout",
+    "K/T/I         send SIGKILL/SIGTERM/SIGINT to selected (confirm y/n)",
 ]

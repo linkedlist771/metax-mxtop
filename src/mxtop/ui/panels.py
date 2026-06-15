@@ -256,6 +256,8 @@ def render_footer(frame: FrameSnapshot, state: UiState, interval: float, error: 
         footer += f"  command+{state.command_offset}"
     if error:
         footer = f"backend error: {error}  " + footer
+    if state.status_message:
+        footer = f"{state.status_message}  " + footer
     return ellipsize(footer, width)
 
 

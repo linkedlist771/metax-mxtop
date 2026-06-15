@@ -149,3 +149,55 @@ def test_device_usage_fields_use_independent_tui_colors(monkeypatch):
     assert ("330W / 350W", tui.PAIR_HOT) in hot_segments
     assert ("56.00GiB / 64.00GiB", tui.PAIR_HOT) in hot_segments
     assert ("94%", tui.PAIR_HOT) in hot_segments
+
+
+class _DummySampler:
+    interval = 1.0
+    def refresh_now(self):
+        pass
+    def set_interval(self, v):
+        self.interval = v
+
+
+def _frame_two_procs():
+    from mxtop.models import FrameSnapshot, ProcessSnapshot
+    return FrameSnapshot(devices=[], processes=[
+        ProcessSnapshot(gpu_index=0, pid=111, identity="0:111"),
+        ProcessSnapshot(gpu_index=0, pid=222, identity="0:222"),
+    ])
+
+
+def test_selected_process_by_key():
+    from mxtop.tui import _selected_process
+    from mxtop.ui.state import UiState
+    p = _selected_process(UiState(selected_key="0:222"), _frame_two_procs())
+    assert p.pid == 222
+
+
+def test_capital_T_sets_pending_then_y_confirms(monkeypatch):
+    import mxtop.tui as tui
+    from mxtop.ui.state import UiState
+    calls = []
+    monkeypatch.setattr(tui, "send_signal", lambda pid, sig: calls.append((pid, sig)) or None)
+    state = UiState(selected_key="0:111")
+    frame = _frame_two_procs()
+    tui._handle_key(ord("T"), state, frame, _DummySampler())
+    assert state.pending_signal is not None
+    tui._handle_key(ord("y"), state, frame, _DummySampler())
+    assert calls and calls[0][0] == 111
+    assert state.pending_signal is None
+    assert "sent SIGTERM to pid 111" in (state.status_message or "")
+
+
+def test_n_cancels_pending_signal(monkeypatch):
+    import mxtop.tui as tui
+    from mxtop.ui.state import UiState
+    calls = []
+    monkeypatch.setattr(tui, "send_signal", lambda pid, sig: calls.append((pid, sig)) or None)
+    state = UiState(selected_key="0:111")
+    frame = _frame_two_procs()
+    tui._handle_key(ord("K"), state, frame, _DummySampler())
+    assert state.pending_signal is not None
+    tui._handle_key(ord("n"), state, frame, _DummySampler())
+    assert not calls
+    assert state.pending_signal is None

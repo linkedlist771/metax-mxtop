@@ -16,6 +16,8 @@ from mxtop.ui import classify
 from mxtop.ui.classify import host_graph_context
 from mxtop.ui.panels import MIN_SCREEN_WIDTH, render_main_screen
 from mxtop.ui.state import DIRECT_SORT_KEYS, LayoutMode, UiState, keep_selection, next_sort, sort_processes
+from mxtop.ui.signals import SIGNAL_KEYS, send_signal
+from mxtop.models import ProcessSnapshot
 
 # Line classification and value parsing live in mxtop.ui.classify, shared with
 # the ANSI renderer. Local aliases keep this module's call sites short.
@@ -537,10 +539,33 @@ def _move_selection(state: UiState, frame: FrameSnapshot, delta: int) -> None:
     state.selected_key = processes[state.selected_index].selection_key
 
 
+def _selected_process(state: UiState, frame: FrameSnapshot | None) -> ProcessSnapshot | None:
+    if frame is None:
+        return None
+    procs = sort_processes(frame.processes, state.process_sort, state.reverse_sort)
+    for proc in procs:
+        if proc.selection_key == state.selected_key:
+            return proc
+    return None
+
+
 def _handle_key(key: int, state: UiState, frame: FrameSnapshot | None, sampler: SnapshotSampler) -> bool:
     if key in {ord("q"), ord("Q"), 27, 3}:
         return False
     if key == -1:
+        return True
+    if state.pending_signal is not None:
+        label, signum = state.pending_signal
+        state.pending_signal = None
+        if key in {ord("y"), ord("Y")}:
+            target = _selected_process(state, frame)
+            if target is None:
+                state.status_message = "no process selected"
+            else:
+                err = send_signal(target.pid, signum)
+                state.status_message = err or f"sent {label} to pid {target.pid}"
+        else:
+            state.status_message = "cancelled"
         return True
     if state.pending_sort_key:
         state.pending_sort_key = False
@@ -565,6 +590,14 @@ def _handle_key(key: int, state: UiState, frame: FrameSnapshot | None, sampler: 
         state.reverse_sort = not state.reverse_sort
     elif key == ord("o"):
         state.pending_sort_key = True
+    elif 0 <= key <= 255 and chr(key) in SIGNAL_KEYS and frame is not None:
+        target = _selected_process(state, frame)
+        if target is None:
+            state.status_message = "no process selected"
+        else:
+            label, signum = SIGNAL_KEYS[chr(key)]
+            state.pending_signal = (label, signum)
+            state.status_message = f"send {label} to pid {target.pid}? (y/n)"
     elif key == curses.KEY_MOUSE:
         try:
             _, _, _, _, button_state = curses.getmouse()

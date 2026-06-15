@@ -59,6 +59,8 @@ class UiState:
     reverse_sort: bool = False
     show_help: bool = False
     pending_sort_key: bool = False
+    pending_signal: tuple[str, int] | None = None
+    status_message: str | None = None
 
 
 def process_sort_key(sort: ProcessSort, process: ProcessSnapshot) -> tuple[object, ...]:
