@@ -59,7 +59,7 @@ class UiState:
     reverse_sort: bool = False
     show_help: bool = False
     pending_sort_key: bool = False
-    pending_signal: tuple[str, int] | None = None
+    pending_signal: tuple[str, int, int] | None = None
     status_message: str | None = None
 
 

@@ -555,15 +555,11 @@ def _handle_key(key: int, state: UiState, frame: FrameSnapshot | None, sampler: 
     if key == -1:
         return True
     if state.pending_signal is not None:
-        label, signum = state.pending_signal
+        label, signum, pid = state.pending_signal
         state.pending_signal = None
         if key in {ord("y"), ord("Y")}:
-            target = _selected_process(state, frame)
-            if target is None:
-                state.status_message = "no process selected"
-            else:
-                err = send_signal(target.pid, signum)
-                state.status_message = err or f"sent {label} to pid {target.pid}"
+            err = send_signal(pid, signum)
+            state.status_message = err or f"sent {label} to pid {pid}"
         else:
             state.status_message = "cancelled"
         return True
@@ -596,7 +592,7 @@ def _handle_key(key: int, state: UiState, frame: FrameSnapshot | None, sampler: 
             state.status_message = "no process selected"
         else:
             label, signum = SIGNAL_KEYS[chr(key)]
-            state.pending_signal = (label, signum)
+            state.pending_signal = (label, signum, target.pid)
             state.status_message = f"send {label} to pid {target.pid}? (y/n)"
     elif key == curses.KEY_MOUSE:
         try:

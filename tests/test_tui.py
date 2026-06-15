@@ -201,3 +201,20 @@ def test_n_cancels_pending_signal(monkeypatch):
     tui._handle_key(ord("n"), state, frame, _DummySampler())
     assert not calls
     assert state.pending_signal is None
+
+
+def test_y_signals_prompted_pid_not_current_selection(monkeypatch):
+    """Confirming with y must signal the PID shown in the prompt, even if the
+    selection moved (e.g. a refresh reordered the list) between key presses."""
+    import mxtop.tui as tui
+    from mxtop.ui.state import UiState
+    calls = []
+    monkeypatch.setattr(tui, "send_signal", lambda pid, sig: calls.append((pid, sig)) or None)
+    state = UiState(selected_key="0:111")
+    frame = _frame_two_procs()
+    tui._handle_key(ord("T"), state, frame, _DummySampler())
+    assert state.pending_signal is not None
+    state.selected_key = "0:222"  # selection drifts before the user confirms
+    tui._handle_key(ord("y"), state, frame, _DummySampler())
+    assert calls, "no signal was sent"
+    assert calls[0][0] == 111, f"signalled wrong pid {calls[0][0]}, expected 111"
