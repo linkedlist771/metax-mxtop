@@ -1,63 +1,71 @@
-# mxtop CLI Gallery
+# mxtop Output Gallery
 
-Each tile below shows the rendered stdout for a common ``mxtop`` invocation. All scenes use deterministic synthetic telemetry so you can compare output across flags.
+Every image is generated from fixed-time canonical MetaX telemetry. PNG metadata records a digest of the exact rendered text.
 
-Re-render this gallery with ``uv run --with pillow --with psutil python scripts/render_gallery.py``.
+Re-render with ``uv run --locked --with pillow --with psutil python scripts/render_gallery.py``; verify freshness with the same command plus ``--check``.
 
 ## Snapshot modes
 
 | Command | Preview |
 | --- | --- |
-| `mxtop --once`<br><sub>Default colored snapshot (3 active GPUs, mixed load).</sub> | ![once-default](assets/gallery/once-default.png) |
-| `mxtop --once --no-color`<br><sub>Plain ASCII snapshot for logs and pipes.</sub> | ![once-no-color](assets/gallery/once-no-color.png) |
-| `mxtop --json`<br><sub>JSON snapshot suitable for piping into jq / Prometheus exporters.</sub> | ![json-default](assets/gallery/json-default.png) |
+| `mxtop --once`<br><sub>Default colored snapshot with mixed MetaX load.</sub> | ![once-default](assets/gallery/once-default.png) |
+| `mxtop --once --no-color`<br><sub>Uncolored Unicode snapshot for logs and pipes.</sub> | ![once-no-color](assets/gallery/once-no-color.png) |
+| `mxtop --json`<br><sub>Complete valid JSON snapshot from a one-GPU fixture.</sub> | ![json-default](assets/gallery/json-default.png) |
 
 ## Color and palette
 
 | Command | Preview |
 | --- | --- |
-| `mxtop --once --colorful`<br><sub>Five-tier intensity palette (bright green / green / yellow / bright yellow / red / bright red).</sub> | ![once-colorful](assets/gallery/once-colorful.png) |
-| `mxtop --once --light`<br><sub>Light terminal theme — dim foreground swapped for readability on white backgrounds.</sub> | ![once-light](assets/gallery/once-light.png) |
+| `mxtop --once --colorful`<br><sub>Spectrum-like utilization bars.</sub> | ![once-colorful](assets/gallery/once-colorful.png) |
+| `mxtop --once --light`<br><sub>Snapshot rendered for a light terminal theme.</sub> | ![once-light](assets/gallery/once-light.png) |
 
-## Layout modes
-
-| Command | Preview |
-| --- | --- |
-| `mxtop --once --monitor full`<br><sub>Full device panel — two rows per GPU with MEM/MBW/UTL/PWR bars.</sub> | ![once-full](assets/gallery/once-full.png) |
-| `mxtop --once --monitor compact`<br><sub>Compact device panel — one row per GPU, no bars.</sub> | ![once-compact](assets/gallery/once-compact.png) |
-
-## Filters
+## Interactive layouts
 
 | Command | Preview |
 | --- | --- |
-| `mxtop --once --only 0 2`<br><sub>Filter to specific GPU indices.</sub> | ![once-only](assets/gallery/once-only.png) |
-| `mxtop --once --user alice`<br><sub>Filter processes by owner.</sub> | ![once-user](assets/gallery/once-user.png) |
-| `mxtop --once --pid 423901 512377`<br><sub>Filter processes by PID.</sub> | ![once-pid](assets/gallery/once-pid.png) |
-| `mxtop --once --only-compute`<br><sub>Show only compute processes when the type field is available.</sub> | ![once-only-compute](assets/gallery/once-only-compute.png) |
+| `mxtop --monitor full`<br><sub>Representative interactive full-mode frame.</sub> | ![monitor-full](assets/gallery/monitor-full.png) |
+| `mxtop --monitor compact`<br><sub>Representative interactive compact-mode frame.</sub> | ![monitor-compact](assets/gallery/monitor-compact.png) |
+
+## Device and owner filters
+
+| Command | Preview |
+| --- | --- |
+| `mxtop --once --only 0 2`<br><sub>Only GPU indices 0 and 2 and their processes.</sub> | ![once-only](assets/gallery/once-only.png) |
+| `mxtop --once --user alice`<br><sub>Only processes owned by alice.</sub> | ![once-user](assets/gallery/once-user.png) |
+| `mxtop --once --pid 423901 512377`<br><sub>Only the selected process IDs.</sub> | ![once-pid](assets/gallery/once-pid.png) |
+
+## Process-type filters
+
+| Command | Preview |
+| --- | --- |
+| `mxtop --once --compute`<br><sub>Processes with a compute context, including mixed C+G.</sub> | ![once-compute](assets/gallery/once-compute.png) |
+| `mxtop --once --only-compute`<br><sub>Processes with an exact compute-only context.</sub> | ![once-only-compute](assets/gallery/once-only-compute.png) |
+| `mxtop --once --graphics`<br><sub>Processes with a graphics context, including mixed C+G.</sub> | ![once-graphics](assets/gallery/once-graphics.png) |
+| `mxtop --once --only-graphics`<br><sub>Processes with an exact graphics-only context.</sub> | ![once-only-graphics](assets/gallery/once-only-graphics.png) |
 
 ## Custom intensity thresholds
 
 | Command | Preview |
 | --- | --- |
-| `mxtop --once --gpu-util-thresh 30 60`<br><sub>Custom GPU intensity thresholds — yellow at 30%, red at 60%.</sub> | ![once-gpu-thresh](assets/gallery/once-gpu-thresh.png) |
-| `mxtop --once --mem-util-thresh 20 50`<br><sub>Custom memory intensity thresholds — yellow at 20%, red at 50%.</sub> | ![once-mem-thresh](assets/gallery/once-mem-thresh.png) |
+| `mxtop --once --gpu-util-thresh 30 60`<br><sub>Custom GPU intensity thresholds at 30% and 60%.</sub> | ![once-gpu-thresh](assets/gallery/once-gpu-thresh.png) |
+| `mxtop --once --mem-util-thresh 20 50`<br><sub>Custom memory intensity thresholds at 20% and 50%.</sub> | ![once-mem-thresh](assets/gallery/once-mem-thresh.png) |
 
 ## Load profiles
 
 | Command | Preview |
 | --- | --- |
-| `mxtop --once  # idle 3-GPU host`<br><sub>Idle baseline — almost everything green, P8 power state.</sub> | ![once-idle](assets/gallery/once-idle.png) |
-| `mxtop --once  # heavy 4-GPU run`<br><sub>Saturation across the cluster — most bars cross the red threshold.</sub> | ![once-heavy](assets/gallery/once-heavy.png) |
+| `mxtop --once`<br><sub>Three-GPU idle fixture.</sub> | ![once-idle](assets/gallery/once-idle.png) |
+| `mxtop --once`<br><sub>Four-GPU saturation fixture.</sub> | ![once-heavy](assets/gallery/once-heavy.png) |
 
-## Multi-GPU layouts
-
-| Command | Preview |
-| --- | --- |
-| `mxtop --once  # 8 GPUs`<br><sub>8-GPU host with mixed load — auto-layout chooses the wide device panel.</sub> | ![once-many-8](assets/gallery/once-many-8.png) |
-| `mxtop --once  # 16 GPUs`<br><sub>16-GPU host with mixed load — auto layout drops into the 8+8 compact grid.</sub> | ![once-many-16](assets/gallery/once-many-16.png) |
-
-## Edge cases
+## Multi-GPU fixtures
 
 | Command | Preview |
 | --- | --- |
-| `mxtop --once  # backend with missing telemetry`<br><sub>Graceful N/A rendering when the backend cannot report a metric.</sub> | ![once-missing](assets/gallery/once-missing.png) |
+| `mxtop --once`<br><sub>Eight-GPU mixed-load fixture at 170 columns.</sub> | ![once-many-8](assets/gallery/once-many-8.png) |
+| `mxtop --once`<br><sub>Sixteen-GPU mixed-load fixture at 180 columns.</sub> | ![once-many-16](assets/gallery/once-many-16.png) |
+
+## Missing telemetry
+
+| Command | Preview |
+| --- | --- |
+| `mxtop --once`<br><sub>Unavailable backend fields rendered as N/A.</sub> | ![once-missing](assets/gallery/once-missing.png) |

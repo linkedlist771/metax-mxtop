@@ -17,7 +17,12 @@ BORDER_CHARS = {
 }
 
 DEVICE_ROW_RE = re.compile(r"^│\s*\d+\s+\S")
-PROCESS_ROW_RE = re.compile(r"^│[ >]\s*\d+\s+\d+\s")
+DENSE_DEVICE_CELL_RE = re.compile(
+    r"^\s*(?P<gpu>\d+)\s+(?:N/A|MAX|MIN|[+-]?\d+C)"
+    r"\s+(?:N/A|MAX|MIN|[+-]?\d+%)\s+(?:N/A|MAX|MIN|[+-]?\d+%)"
+    r"\s+(?:N/A|MAX|MIN|[+-]?\d+W)\s*$"
+)
+PROCESS_ROW_RE = re.compile(r"^│[ =>]\s*\d+\s+\d+\s")
 BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
 GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
 WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
@@ -26,7 +31,7 @@ MEMORY_RATIO_RE = re.compile(
 )
 CELL_GPU_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
 PROCESS_ROW_FIELDS_RE = re.compile(
-    r"^(?P<prefix>│[ >]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
+    r"^(?P<prefix>│[ =>]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
     r"(?P<gpu_mem>N/A|\d+(?:\.\d+)?(?:B|KiB|MiB|GiB|TiB))"
     r"(?P<before_sm>\s+)(?P<sm>\S+)"
     r"(?P<before_gmbw>\s+)(?P<gmbw>\S+)"
@@ -85,6 +90,7 @@ def is_header_line(line: str) -> bool:
         or "GPU      PID" in line
         or "GPU  Name" in line
         or "GPU Fan Temp" in line
+        or "GPU TEMP UTIL MEM%" in line
         or "Fan  Temp" in line
         or "Processes:" in line
     )
@@ -100,6 +106,22 @@ def is_device_data_line(line: str) -> bool:
     if DEVICE_ROW_RE.match(line) and "MiB" not in line[:24]:
         return True
     return any(token in line for token in (" Pwr:", "GPU-Util", " UTL:", " PWR:"))
+
+
+def dense_device_cell_spans(line: str) -> tuple[tuple[int, int, int], ...]:
+    """Return ``(start, end, gpu_index)`` spans for a dense fleet row."""
+
+    if not line.startswith("│") or not line.endswith("│"):
+        return ()
+    spans: list[tuple[int, int, int]] = []
+    start = 1
+    for cell in line[1:-1].split("│"):
+        end = start + len(cell)
+        match = DENSE_DEVICE_CELL_RE.fullmatch(cell)
+        if match is not None:
+            spans.append((start, end, int(match.group("gpu"))))
+        start = end + 1
+    return tuple(spans)
 
 
 def is_process_data_line(line: str) -> bool:

@@ -52,6 +52,64 @@ def test_enrich_processes_calculates_cpu_percent_from_elapsed_cpu_time(monkeypat
     assert process.cpu_percent == 50.0
 
 
+def test_enrich_processes_samples_a_pid_shared_by_multiple_gpus_once(monkeypatch):
+    samples = iter(
+        [
+            SimpleNamespace(user=20.0, system=4.0),
+            SimpleNamespace(user=20.5, system=4.0),
+        ]
+    )
+    process_calls = 0
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            nonlocal process_calls
+            process_calls += 1
+            assert pid == 456
+
+        def name(self) -> str:
+            return "python"
+
+        def username(self) -> str:
+            return "alice"
+
+        def cmdline(self) -> list[str]:
+            return ["python", "distributed.py"]
+
+        def memory_info(self) -> SimpleNamespace:
+            return SimpleNamespace(rss=4096)
+
+        def create_time(self) -> float:
+            return 150.0
+
+        def cpu_times(self) -> SimpleNamespace:
+            return next(samples)
+
+    fake_psutil = SimpleNamespace(Process=FakeProcess, Error=Exception)
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    sample_time = 300.0
+    monkeypatch.setattr("mxtop.host.time.time", lambda: sample_time)
+
+    processes = [
+        ProcessSnapshot(gpu_index=0, pid=456, name="mx-worker"),
+        ProcessSnapshot(gpu_index=1, pid=456),
+    ]
+    enrich_processes(processes)
+
+    assert process_calls == 1
+    assert [process.name for process in processes] == ["mx-worker", "python"]
+    assert [process.cpu_percent for process in processes] == [None, None]
+
+    sample_time = 301.0
+    enrich_processes(processes)
+
+    assert process_calls == 2
+    assert [process.cpu_percent for process in processes] == [50.0, 50.0]
+    assert {process.command for process in processes} == {"python distributed.py"}
+    assert {process.host_memory_bytes for process in processes} == {4096}
+    assert {process.create_time for process in processes} == {150.0}
+
+
 def test_enrich_processes_fallback_reads_proc_metrics(monkeypatch, tmp_path):
     proc = tmp_path / "proc" / "123"
     proc.mkdir(parents=True)
@@ -67,8 +125,11 @@ def test_enrich_processes_fallback_reads_proc_metrics(monkeypatch, tmp_path):
     real_open = open
     real_stat = __import__("os").stat
 
+    opened: list[str] = []
+
     def fake_open(path, *args, **kwargs):
         if isinstance(path, str) and path.startswith("/proc/123/"):
+            opened.append(path)
             return real_open(str(proc / path.rsplit("/", 1)[1]), *args, **kwargs)
         return real_open(path, *args, **kwargs)
 
@@ -85,17 +146,23 @@ def test_enrich_processes_fallback_reads_proc_metrics(monkeypatch, tmp_path):
     monkeypatch.setattr("mxtop.host.time.time", lambda: 250.0)
 
     process = ProcessSnapshot(gpu_index=0, pid=123)
-    enrich_processes([process])
+    peer = ProcessSnapshot(gpu_index=1, pid=123)
+    enrich_processes([process, peer])
 
     assert process.name == "python"
     assert process.command == "python train.py"
     assert process.user == "31965"
     assert process.runtime_seconds == 50.0
     assert process.host_memory_bytes == 2048 * 1024
+    assert peer.cpu_percent == process.cpu_percent
+    assert peer.create_time == process.create_time
+    assert len(opened) == 4
 
     stat_fields[13] = "1050"
     (proc / "stat").write_text(" ".join(stat_fields), encoding="utf-8")
     monkeypatch.setattr("mxtop.host.time.time", lambda: 251.0)
-    enrich_processes([process])
+    enrich_processes([process, peer])
 
     assert process.cpu_percent == 50.0
+    assert peer.cpu_percent == 50.0
+    assert len(opened) == 8

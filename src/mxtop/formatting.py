@@ -19,33 +19,41 @@ def format_bytes(value: int | None) -> str:
     return f"{amount:.1f}TiB"
 
 
-def format_compact_bytes(value: int | None) -> str:
+def format_compact_bytes(value: int | None, *, min_unit: str = "B") -> str:
     if value is None:
         return "N/A"
-    amount = float(value)
-    units = ["B", "KiB", "MiB", "GiB", "TiB"]
-    for unit in units:
-        if abs(amount) < 1024 or unit == units[-1]:
-            if unit == "B":
-                return f"{int(amount)}B"
-            if unit == "KiB":
-                return f"{amount:.1f}KiB"
-            if unit == "MiB":
-                return f"{amount:.2f}MiB" if amount < 100 else f"{amount:.1f}MiB"
-            return f"{amount:.2f}{unit}"
-        amount /= 1024
-    return f"{amount:.2f}TiB"
+    amount = int(round(value))
+    kib = 1024
+    mib = kib**2
+    gib = kib**3
+    tib = kib**4
+    pib = kib**5
+    minimum = {"B": 1, "KiB": kib, "MiB": mib, "GiB": gib, "TiB": tib}.get(min_unit, 1)
+    if amount < kib and minimum < kib:
+        return f"{amount}B"
+    if amount < mib and minimum <= kib:
+        return f"{round(amount / kib)}KiB"
+    if amount < 100 * mib and minimum <= mib:
+        return f"{amount / mib:.2f}MiB"
+    if amount < 1000 * mib and minimum <= mib:
+        return f"{amount / mib:.1f}MiB"
+    if amount < 20 * gib and minimum <= mib:
+        return f"{round(amount / mib)}MiB"
+    if amount < 100 * gib and minimum <= gib:
+        return f"{amount / gib:.2f}GiB"
+    if amount < 1000 * gib and minimum <= gib:
+        return f"{amount / gib:.1f}GiB"
+    if amount < 100 * tib and minimum <= tib:
+        return f"{amount / tib:.2f}TiB"
+    if amount < 1000 * tib and minimum <= tib:
+        return f"{amount / tib:.1f}TiB"
+    if amount < 100 * pib:
+        return f"{amount / pib:.2f}PiB"
+    return f"{amount / pib:.1f}PiB"
 
 
 def format_mib(value: int | None) -> str:
-    if value is None:
-        return "N/A"
-    amount = value / 1024**2
-    if amount >= 1000:
-        return f"{amount:.0f}MiB"
-    if amount >= 100:
-        return f"{amount:.1f}MiB"
-    return f"{amount:.2f}MiB"
+    return format_compact_bytes(value)
 
 
 def _finite(value: float | None) -> bool:
@@ -82,7 +90,7 @@ def format_duration(value: float | None) -> str:
     if value is None:
         return "N/A"
     seconds = max(0, int(value))
-    if seconds >= 86400:
+    if seconds >= 4 * 86400:
         return f"{seconds / 86400:.1f} days"
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)

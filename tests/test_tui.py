@@ -1,5 +1,11 @@
+import sys
+from types import SimpleNamespace
+
 from mxtop import tui
-from mxtop.models import FrameSnapshot
+from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
+from mxtop.rendering import dense_device_row_context
+from mxtop.ui.panels import render_device_panel
+from mxtop.ui.state import LayoutMode, ProcessSignal, ProcessSort, ScreenMode
 
 
 class FakeScreen:
@@ -20,6 +26,24 @@ class FakeBackend:
         return FrameSnapshot(devices=[], processes=[])
 
 
+class FakeSampler:
+    def __init__(self):
+        self.refreshed = False
+
+    def refresh_now(self):
+        self.refreshed = True
+
+
+def process_frame() -> FrameSnapshot:
+    return FrameSnapshot(
+        devices=[],
+        processes=[
+            ProcessSnapshot(gpu_index=0, pid=10, user="alice", create_time=100.0),
+            ProcessSnapshot(gpu_index=0, pid=20, user="alice", create_time=200.0),
+        ],
+    )
+
+
 def test_draw_line_does_not_write_past_current_width(monkeypatch):
     monkeypatch.setattr(tui.curses, "has_colors", lambda: False)
     screen = FakeScreen()
@@ -27,6 +51,15 @@ def test_draw_line_does_not_write_past_current_width(monkeypatch):
     tui._draw_line(screen, 5, "0    MXC500   74% [████████████] text", width=8)
 
     assert screen.calls
+
+
+def test_safe_addnstr_keeps_the_terminal_last_column():
+    screen = FakeScreen(column_limit=4)
+
+    end = tui._safe_addnstr(screen, 0, 0, "abcd", width=4)
+
+    assert end == 4
+    assert screen.calls[-1][2] == "abcd"
 
 
 def test_run_tui_treats_keyboard_interrupt_as_clean_exit(monkeypatch):
@@ -54,17 +87,6 @@ def test_scroll_delta_handles_mouse_wheel_constants(monkeypatch):
     assert tui._mouse_scroll_delta(0) == 0
 
 
-def test_outer_border_helpers():
-    assert tui._can_draw_outer_border(10, 81)
-    assert not tui._can_draw_outer_border(9, 81)
-    assert not tui._can_draw_outer_border(10, 80)
-    assert tui._with_outer_text_border(["MXTOP"], 9) == [
-        "╒═══════╕",
-        "│MXTOP  │",
-        "╘═══════╛",
-    ]
-
-
 def test_dim_pair_is_visible_on_dark_terminals(monkeypatch):
     # Regression: borders/separators were drawn with COLOR_BLACK foreground,
     # which is invisible on dark terminals (live TUI showed no borders even
@@ -81,30 +103,434 @@ def test_dim_pair_is_visible_on_dark_terminals(monkeypatch):
 
     dim_fg, _ = pairs[tui.PAIR_DIM]
     assert dim_fg != tui.curses.COLOR_BLACK
+    assert pairs[tui.PAIR_SELECTED] == (tui.curses.COLOR_CYAN, -1)
+    assert pairs[tui.PAIR_TREE_SELECTED] == (tui.curses.COLOR_GREEN, -1)
 
     monkeypatch.setattr(tui.curses, "color_pair", lambda pair: 0, raising=False)
     assert tui._attr(tui.PAIR_DIM) & tui.curses.A_DIM
 
 
+def test_light_theme_uses_dark_foreground_for_normal_and_dim_text(monkeypatch):
+    pairs: dict[int, tuple[int, int]] = {}
+    monkeypatch.setattr(tui._rendering, "LIGHT_THEME", True)
+    monkeypatch.setattr(tui.curses, "has_colors", lambda: True)
+    monkeypatch.setattr(tui.curses, "start_color", lambda: None, raising=False)
+    monkeypatch.setattr(tui.curses, "use_default_colors", lambda: None, raising=False)
+    monkeypatch.setattr(
+        tui.curses,
+        "init_pair",
+        lambda pair, fg, bg: pairs.__setitem__(pair, (fg, bg)),
+        raising=False,
+    )
+
+    tui._setup_colors()
+
+    assert pairs[tui.PAIR_VALUE][0] == tui.curses.COLOR_BLACK
+    assert pairs[tui.PAIR_DIM][0] == tui.curses.COLOR_BLACK
+
+
+def test_unowned_tree_tag_keeps_dim_attribute(monkeypatch):
+    monkeypatch.setattr(tui.curses, "has_colors", lambda: False)
+    monkeypatch.setattr(tui, "_is_superuser", lambda: False)
+    monkeypatch.setattr(tui.getpass, "getuser", lambda: "alice")
+
+    attr = tui._tree_tagged_attr("bob")
+
+    assert attr & tui.curses.A_BOLD
+    assert attr & tui.curses.A_DIM
+
+
 def test_handle_key_updates_sort_and_layout(monkeypatch):
-    class FakeSampler:
-        def __init__(self):
-            self.refreshed = False
-
-        def refresh_now(self):
-            self.refreshed = True
-
     state = tui.UiState()
     sampler = FakeSampler()
 
     assert tui._handle_key(ord("."), state, None, sampler)
-    assert state.process_sort.value == "gpu_memory"
+    assert state.process_sort == ProcessSort.PID
     assert tui._handle_key(ord("/"), state, None, sampler)
     assert state.reverse_sort is True
     assert tui._handle_key(ord("c"), state, None, sampler)
     assert state.layout.value == "compact"
     assert tui._handle_key(ord("r"), state, None, sampler)
     assert sampler.refreshed is True
+
+
+def test_page_keys_move_whole_main_screen_one_row():
+    state = tui.UiState(main_screen_offset=3)
+    sampler = FakeSampler()
+
+    assert tui._handle_key(tui.curses.KEY_PPAGE, state, process_frame(), sampler)
+    assert state.main_screen_offset == 2
+    assert state.scroll_offset == 0
+    assert state.follow_selection is False
+
+    assert tui._handle_key(tui.curses.KEY_NPAGE, state, process_frame(), sampler)
+    assert state.main_screen_offset == 3
+
+
+def test_selection_starts_clear_and_escape_does_not_quit():
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+
+    assert state.selected_key is None
+    assert tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+    assert state.selected_key == frame.processes[0].selection_key
+    assert tui._handle_key(27, state, frame, sampler)
+    assert state.selected_key is None
+    assert not tui._handle_key(ord("q"), state, frame, sampler)
+
+
+def test_selection_identity_rejects_pid_reuse_between_frames():
+    state = tui.UiState()
+    first = process_frame()
+    state.selected_key = first.processes[0].selection_key
+    state.selected_index = 0
+    replacement = ProcessSnapshot(gpu_index=0, pid=10, user="alice", create_time=999.0)
+
+    tui.keep_selection(state, [replacement])
+
+    assert state.selected_key is None
+
+
+def test_navigation_aliases_and_tags_follow_nvitop():
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+
+    tui._handle_key(ord("\t"), state, frame, sampler)
+    assert state.selected_index == 0
+    tui._handle_key(ord(" "), state, frame, sampler)
+    assert state.tagged_pids == {10}
+    assert state.selected_index == 1
+    tui._handle_key(tui.curses.KEY_HOME, state, frame, sampler)
+    assert state.selected_index == 0
+    tui._handle_key(tui.curses.KEY_END, state, frame, sampler)
+    assert state.selected_index == 1
+
+
+def test_direct_sort_bindings_use_case_for_direction():
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    for key, expected in {
+        "n": ProcessSort.DEFAULT,
+        "p": ProcessSort.PID,
+        "u": ProcessSort.USER,
+        "g": ProcessSort.GPU_MEMORY,
+        "s": ProcessSort.GPU_UTIL,
+        "b": ProcessSort.GPU_MEMORY_BANDWIDTH,
+        "c": ProcessSort.CPU,
+        "m": ProcessSort.HOST_MEMORY,
+        "t": ProcessSort.TIME,
+    }.items():
+        tui._handle_key(ord("o"), state, None, sampler)
+        tui._handle_key(ord(key), state, None, sampler)
+        assert state.process_sort == expected
+        assert state.reverse_sort is False
+        tui._handle_key(ord("o"), state, None, sampler)
+        tui._handle_key(ord(key.upper()), state, None, sampler)
+        assert state.process_sort == expected
+        assert state.reverse_sort is True
+
+
+def test_screen_routes_return_without_quitting():
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+
+    tui._handle_key(ord("h"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.HELP
+    tui._handle_key(ord("x"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.MAIN
+
+
+def test_tree_route_transfers_selection_and_supports_tagging():
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+
+    tui._handle_key(ord("t"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.TREE
+    assert state.selected_key is None
+    assert state.screen_selection_active
+
+    state.screen_selection_ids = ("tree:10:100", "tree:20:200")
+    state.screen_selected_index = 1
+    state.screen_target_pid = 20
+    state.screen_target_create_time = 200.0
+    state.screen_target_user = "alice"
+    tui._handle_key(ord(" "), state, frame, sampler)
+    assert state.tagged_pids == {20}
+
+    tui._handle_key(ord("q"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.MAIN
+    assert state.selected_key == frame.processes[1].selection_key
+    assert state.tagged_pids == set()
+    tui._handle_key(ord("t"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.TREE
+    tui._handle_key(ord("q"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.MAIN
+
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+    tui._handle_key(ord("e"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.ENVIRON
+    tui._handle_key(27, state, frame, sampler)
+    assert state.active_screen == ScreenMode.MAIN
+    tui._handle_key(ord("\n"), state, frame, sampler)
+    assert state.active_screen == ScreenMode.METRICS
+    tui._handle_key(27, state, frame, sampler)
+    assert state.active_screen == ScreenMode.MAIN
+
+
+def test_tree_refresh_clears_missing_or_reused_process_selection():
+    state = tui.UiState(
+        active_screen=ScreenMode.TREE,
+        screen_selection_active=True,
+        screen_selected_index=1,
+        screen_target_pid=20,
+        screen_target_create_time=200.0,
+        screen_target_user="alice",
+        screen_target_command="python",
+    )
+    reused = tui.ProcessTreeEntry(
+        pid=20,
+        ppid=1,
+        user="alice",
+        command="other process",
+        device="Host",
+        create_time=None,
+    )
+
+    tui._sync_tree_selection(state, [reused])
+
+    assert not state.screen_selection_active
+    assert state.screen_target_pid is None
+    assert state.screen_target_create_time is None
+
+
+def test_tree_refresh_preserves_exact_process_identity():
+    state = tui.UiState(
+        active_screen=ScreenMode.TREE,
+        screen_selection_active=True,
+        screen_target_pid=20,
+        screen_target_create_time=200.0,
+    )
+    entries = [
+        tui.ProcessTreeEntry(10, 1, "alice", "first", "Host", 100.0),
+        tui.ProcessTreeEntry(20, 1, "alice", "second", "GPU 0", 200.005),
+    ]
+
+    tui._sync_tree_selection(state, entries)
+
+    assert state.screen_selection_active
+    assert state.screen_selected_index == 1
+
+
+def test_tree_refresh_interval_tracks_nvitop_cadence():
+    assert tui._tree_snapshot_interval(0.3) == 0.1
+    assert tui._tree_snapshot_interval(1.5) == 0.5
+    assert tui._tree_snapshot_interval(30.0) == 1.0
+
+
+def test_reused_or_missing_tag_identity_is_pruned():
+    state = tui.UiState(
+        tagged_pids={20, 30},
+        tagged_processes={20: (200.0, "alice"), 30: (300.0, "alice")},
+    )
+
+    tui._prune_tags(state, {20: 999.0})
+
+    assert state.tagged_pids == set()
+    assert state.tagged_processes == {}
+
+
+def test_environment_without_selection_replaces_a_stale_target_with_host(monkeypatch):
+    class Process:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return 123.0
+
+        def username(self):
+            return "alice"
+
+        def cmdline(self):
+            return ["python", "-m", "mxtop"]
+
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=Process, Error=Exception))
+    monkeypatch.setattr(tui.os, "getpid", lambda: 77)
+    state = tui.UiState(
+        screen_target_pid=20,
+        screen_target_create_time=200.0,
+        screen_target_user="stale",
+        screen_target_command="old",
+    )
+
+    tui._remember_selected_target(state, process_frame(), fallback_host=True)
+
+    assert state.screen_target_pid == 77
+    assert state.screen_target_create_time == 123.0
+    assert state.screen_target_user == "alice"
+    assert state.screen_target_command == "python -m mxtop"
+
+
+def test_offscreen_untagged_selection_is_not_actionable():
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+    assert state.selected_visible
+
+    tui._handle_key(tui.curses.KEY_NPAGE, state, frame, sampler)
+    tui._handle_key(ord("K"), state, frame, sampler)
+
+    assert not state.selected_visible
+    assert state.pending_signal is None
+
+
+def test_offscreen_tags_remain_actionable(monkeypatch):
+    monkeypatch.setattr(tui.getpass, "getuser", lambda: "alice")
+    monkeypatch.setattr(tui.os, "geteuid", lambda: 1000)
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+    tui._handle_key(ord(" "), state, frame, sampler)
+    tui._handle_key(tui.curses.KEY_NPAGE, state, frame, sampler)
+
+    tui._handle_key(ord("K"), state, frame, sampler)
+
+    assert state.pending_signal == ProcessSignal.KILL
+    assert state.pending_signal_targets == ((10, 100.0),)
+
+
+def test_readonly_blocks_signal_dialog():
+    state = tui.UiState(readonly=True)
+    sampler = FakeSampler()
+    frame = process_frame()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+
+    tui._handle_key(ord("K"), state, frame, sampler, readonly=True)
+
+    assert state.pending_signal is None
+    assert "readonly" in (state.status_message or "")
+
+
+def test_unowned_selection_does_not_open_signal_dialog(monkeypatch):
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+    for process in frame.processes:
+        process.user = "bob"
+    monkeypatch.setattr(tui.getpass, "getuser", lambda: "alice")
+    monkeypatch.setattr(tui.os, "geteuid", lambda: 1000)
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+
+    tui._handle_key(ord("K"), state, frame, sampler)
+
+    assert state.pending_signal is None
+    assert "another user" in (state.status_message or "")
+
+
+def test_signal_confirmation_validates_process_creation_time(monkeypatch):
+    calls: list[str] = []
+
+    class Error(Exception):
+        pass
+
+    class Process:
+        def __init__(self, pid):
+            assert pid == 10
+
+        def create_time(self):
+            return 100.0
+
+        def username(self):
+            return "alice"
+
+        def kill(self):
+            calls.append("kill")
+
+        def terminate(self):
+            calls.append("terminate")
+
+        def send_signal(self, _signal):
+            calls.append("interrupt")
+
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=Process, Error=Error))
+    monkeypatch.setattr(tui.getpass, "getuser", lambda: "alice")
+    monkeypatch.setattr(tui.os, "geteuid", lambda: 1000)
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+
+    tui._handle_key(ord("K"), state, frame, sampler)
+    assert state.pending_signal == ProcessSignal.KILL
+    tui._handle_key(ord("\n"), state, frame, sampler)
+
+    assert calls == ["kill"]
+    assert state.pending_signal is None
+
+
+def test_signal_confirmation_rejects_reused_pid(monkeypatch):
+    calls: list[str] = []
+
+    class Error(Exception):
+        pass
+
+    class Process:
+        def __init__(self, _pid):
+            pass
+
+        def create_time(self):
+            return 999.0
+
+        def username(self):
+            return "alice"
+
+        def kill(self):
+            calls.append("kill")
+
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(Process=Process, Error=Error))
+    monkeypatch.setattr(tui.getpass, "getuser", lambda: "alice")
+    monkeypatch.setattr(tui.os, "geteuid", lambda: 1000)
+    state = tui.UiState()
+    sampler = FakeSampler()
+    frame = process_frame()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+
+    tui._handle_key(ord("K"), state, frame, sampler)
+    tui._handle_key(ord("\n"), state, frame, sampler)
+
+    assert calls == []
+    assert "identity changed" in (state.status_message or "")
+
+
+def test_mouse_click_selects_mapped_process_row(monkeypatch):
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+    button = getattr(tui.curses, "BUTTON1_CLICKED", 0x4)
+    monkeypatch.setattr(tui.curses, "getmouse", lambda: (0, 4, 12, 0, button))
+
+    tui._handle_key(tui.curses.KEY_MOUSE, state, frame, sampler, mouse_rows={12: 1})
+
+    assert state.selected_key == frame.processes[1].selection_key
+
+
+def test_shift_mouse_wheel_scrolls_host_columns(monkeypatch):
+    state = tui.UiState()
+    sampler = FakeSampler()
+    button = getattr(tui.curses, "BUTTON5_PRESSED", 1 << 21)
+    shift = getattr(tui.curses, "BUTTON_SHIFT", 0)
+    monkeypatch.setattr(tui.curses, "getmouse", lambda: (0, 4, 12, 0, button | shift))
+
+    tui._handle_key(tui.curses.KEY_MOUSE, state, process_frame(), sampler)
+
+    assert state.command_offset == 2
 
 
 def test_new_layout_rows_are_detected_for_colored_drawing():
@@ -122,7 +548,7 @@ def test_new_layout_rows_are_detected_for_colored_drawing():
     assert tui._is_version_line(version_row)
 
 
-def test_device_usage_fields_use_independent_tui_colors(monkeypatch):
+def test_device_core_cells_use_combined_tui_color(monkeypatch):
     monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: pair)
     screen = FakeScreen(column_limit=160)
     line = (
@@ -130,12 +556,12 @@ def test_device_usage_fields_use_independent_tui_colors(monkeypatch):
         "      4%      Default │"
     )
 
-    tui._draw_device_data_line(screen, 0, line, 120)
+    tui._draw_device_data_line(screen, 0, line, 120, display_level=0)
 
     colored_segments = {(text, attr) for _, _, text, _, attr in screen.calls}
-    assert ("20W / 350W", tui.PAIR_GOOD) in colored_segments
-    assert ("4.00GiB / 64.00GiB", tui.PAIR_GOOD) in colored_segments
-    assert ("4%", tui.PAIR_GOOD) in colored_segments
+    assert any("20W / 350W" in text and attr == tui.PAIR_GOOD for text, attr in colored_segments)
+    assert any("4.00GiB / 64.00GiB" in text and attr == tui.PAIR_GOOD for text, attr in colored_segments)
+    assert any("4%" in text and attr == tui.PAIR_GOOD for text, attr in colored_segments)
 
     hot_screen = FakeScreen(column_limit=160)
     hot_line = (
@@ -143,9 +569,91 @@ def test_device_usage_fields_use_independent_tui_colors(monkeypatch):
         "     94%      Default │"
     )
 
-    tui._draw_device_data_line(hot_screen, 0, hot_line, 120)
+    tui._draw_device_data_line(hot_screen, 0, hot_line, 120, display_level=2)
 
     hot_segments = {(text, attr) for _, _, text, _, attr in hot_screen.calls}
-    assert ("330W / 350W", tui.PAIR_HOT) in hot_segments
-    assert ("56.00GiB / 64.00GiB", tui.PAIR_HOT) in hot_segments
-    assert ("94%", tui.PAIR_HOT) in hot_segments
+    assert any("330W / 350W" in text and attr == tui.PAIR_HOT for text, attr in hot_segments)
+    assert any("56.00GiB / 64.00GiB" in text and attr == tui.PAIR_HOT for text, attr in hot_segments)
+    assert any("94%" in text and attr == tui.PAIR_HOT for text, attr in hot_segments)
+
+
+def test_unselected_device_rows_are_dimmed(monkeypatch):
+    monkeypatch.setattr(tui.curses, "has_colors", lambda: False)
+    screen = FakeScreen(column_limit=160)
+    line = "│ N/A   N/A  N/A     20W / 350W │   4.00GiB / 64.00GiB │      4%      Default │"
+
+    tui._draw_device_data_line(screen, 0, line, 120, display_level=0, dim=True)
+
+    core_attrs = [attr for _, _, text, _, attr in screen.calls if "20W / 350W" in text]
+    assert core_attrs and core_attrs[0] & tui.curses.A_DIM
+
+
+def test_dense_device_cells_color_and_dim_independently(monkeypatch):
+    monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: (pair, extra))
+    devices = [
+        DeviceSnapshot(
+            index=index,
+            temperature_c=40,
+            power_w=80,
+            gpu_util_percent=value,
+            memory_util_percent=value,
+        )
+        for index, value in enumerate((4.0, 45.0, 94.0, *([4.0] * 14)))
+    ]
+    frame = FrameSnapshot(devices=devices, processes=[])
+    lines = render_device_panel(frame, 120, LayoutMode.COMPACT, compact=True)
+    contexts = dense_device_row_context(lines, frame)
+    row, context = next(iter(contexts.items()))
+    screen = FakeScreen(column_limit=120)
+
+    tui._draw_dense_device_data_line(
+        screen,
+        0,
+        lines[row],
+        120,
+        context,
+        selected_gpu_index=1,
+    )
+
+    by_gpu = {
+        int(text.split()[0]): attr
+        for _row, _column, text, _count, attr in screen.calls
+        if text.strip() and text.split()[0].isdigit()
+    }
+    assert by_gpu[0][0] == tui.PAIR_GOOD
+    assert by_gpu[1][0] == tui.PAIR_WARN
+    assert by_gpu[2][0] == tui.PAIR_HOT
+    assert by_gpu[0][1] & tui.curses.A_DIM
+    assert not by_gpu[1][1] & tui.curses.A_DIM
+    assert by_gpu[2][1] & tui.curses.A_DIM
+
+
+def test_ascii_lines_keep_semantic_tui_coloring(monkeypatch):
+    monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: pair)
+    device = (
+        "│   0 N/A  N/A N/A    20W / 350W │   4.00GiB / 64.00GiB │"
+        "      4%      Default │ MEM: ███░░ 40% │"
+    )
+    process = "│    0      10 C   alice  512.0MiB   4     1     5     1  1:00  python │"
+    screen = FakeScreen(column_limit=180)
+
+    tui._draw_line(
+        screen,
+        1,
+        tui.render_ascii(device),
+        170,
+        device_level=0,
+        semantic_line=device,
+    )
+    tui._draw_line(
+        screen,
+        2,
+        tui.render_ascii(process),
+        170,
+        process_context=(0, True),
+        semantic_line=process,
+    )
+
+    assert any("20W / 350W" in text and attr == tui.PAIR_GOOD for _, _, text, _, attr in screen.calls)
+    assert any(text == "MEM: " and attr == tui.PAIR_HEADER for _, _, text, _, attr in screen.calls)
+    assert any(text == "0" and attr == tui.PAIR_GOOD for _, _, text, _, attr in screen.calls)

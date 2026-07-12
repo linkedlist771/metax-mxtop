@@ -1,70 +1,51 @@
-"""Render a dummy mxtop frame and save it as a PNG screenshot."""
+"""Render deterministic mxtop frames as PNG terminal previews."""
+
 from __future__ import annotations
 
 import argparse
-import re
-import sys
+from dataclasses import dataclass
+from functools import lru_cache
+import hashlib
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
 from typing import Iterable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(SCRIPT_DIR))
 
-from mxtop import ui  # noqa: E402
-from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot  # noqa: E402
-from mxtop.rendering import render_once  # noqa: E402
-from mxtop.ui import panels as ui_panels  # noqa: E402
-
-
-def _stub_host_metrics() -> tuple[float, str, float, str, float]:
-    return 23.4, "42.3GiB", 33.0, "0B", 0.0
-
-
-def _stub_host_memory_total() -> int:
-    return 128 * 1024**3
-
-
-def _stub_load_average() -> str:
-    return "Load Average:  1.42  1.85  2.07"
-
-
-def _stub_user_host() -> str:
-    return "alice@metax-dgx"
-
-
-ui_panels._host_metrics = _stub_host_metrics  # type: ignore[assignment]
-ui_panels._host_memory_total = _stub_host_memory_total  # type: ignore[assignment]
-ui_panels._load_average_text = _stub_load_average  # type: ignore[assignment]
-ui_panels._user_host = _stub_user_host  # type: ignore[assignment]
-_ = ui  # keep module reference alive
-
-
-def seed_host_history() -> None:
-    """Fill the host graphs with a deterministic waveform so previews show data."""
-    import math
-
-    history = ui_panels._HOST_HISTORY
-    history.reset()
-    now = 0.0
-    for step in range(170):
-        now += 1.1
-        wave = 50 + 45 * math.sin(step / 9)
-        history.sample(
-            cpu=18 + wave / 3,
-            memory=25 + wave / 4,
-            swap=0.0,
-            gpu_memory=30 + wave / 2,
-            gpu_utilization=wave,
-            now=now,
-        )
+from mxtop.rendering import (  # noqa: E402
+    colorize_screen,
+    render_once,
+    reset_intensity_thresholds,
+    set_render_style,
+)
+from mxtop._compat import DATACLASS_SLOTS  # noqa: E402
+from mxtop.ui.panels import render_main_screen  # noqa: E402
+from mxtop.ui.state import LayoutMode, UiState  # noqa: E402
+from synthetic_fixtures import (  # noqa: E402
+    FRAME_BUILDERS,
+    build_frame,
+    prepare_render,
+    utc_timezone,
+)
 
 ANSI_PATTERN = re.compile(r"\x1b\[(\d+(?:;\d+)*)m")
-BRAILLE_SPLIT = re.compile(r"([⠀-⣿]+)")
-# Menlo has no braille glyphs; Apple Symbols carries the full U+2800 block.
-SYMBOL_FONT_PATH = "/System/Library/Fonts/Apple Symbols.ttf"
+SYMBOL_SPLIT = re.compile(r"([█▏▎▍▌▋▊▉\u2800-\u28ff]+)")
+_BLOCK_FRACTIONS = {character: index / 8.0 for index, character in enumerate(" ▏▎▍▌▋▊▉")}
+_BLOCK_FRACTIONS["█"] = 1.0
+SOURCE_HASH_KEY = "mxtop-source-sha256"
+SOURCE_NAME_KEY = "mxtop-source-name"
+THEME_KEY = "mxtop-theme"
+FONT_KEY = "mxtop-font"
+RENDER_CONFIG_KEY = "mxtop-render-config-sha256"
 
 THEMES = {
     "dark": {
@@ -79,6 +60,14 @@ THEMES = {
         "35": (200, 110, 200),
         "36": (90, 200, 215),
         "37": (218, 220, 224),
+        "90": (100, 104, 112),
+        "91": (255, 105, 105),
+        "92": (130, 225, 138),
+        "93": (255, 220, 95),
+        "94": (120, 185, 245),
+        "95": (235, 135, 235),
+        "96": (120, 225, 235),
+        "97": (245, 246, 248),
     },
     "light": {
         "bg": (250, 250, 250),
@@ -92,356 +81,133 @@ THEMES = {
         "35": (160, 70, 175),
         "36": (40, 145, 160),
         "37": (40, 44, 52),
+        "90": (135, 138, 145),
+        "91": (225, 55, 55),
+        "92": (35, 160, 55),
+        "93": (195, 140, 20),
+        "94": (45, 105, 205),
+        "95": (175, 55, 185),
+        "96": (30, 155, 170),
+        "97": (20, 24, 30),
     },
 }
 
 
-def build_frame() -> FrameSnapshot:
-    devices = [
-        DeviceSnapshot(
-            index=0,
-            name="MetaX C500",
-            bdf="0000:1a:00.0",
-            uuid=None,
-            temperature_c=63,
-            power_w=215.4,
-            power_limit_w=350,
-            fan_percent=42,
-            gpu_util_percent=88,
-            memory_util_percent=92.3,
-            memory_bandwidth_util_percent=64,
-            memory_used_bytes=59 * 1024**3,
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P0",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        ),
-        DeviceSnapshot(
-            index=1,
-            name="MetaX C500",
-            bdf="0000:3d:00.0",
-            temperature_c=58,
-            power_w=198.7,
-            power_limit_w=350,
-            fan_percent=39,
-            gpu_util_percent=74,
-            memory_util_percent=71.2,
-            memory_bandwidth_util_percent=48,
-            memory_used_bytes=45 * 1024**3,
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P0",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        ),
-        DeviceSnapshot(
-            index=2,
-            name="MetaX C500",
-            bdf="0000:5e:00.0",
-            temperature_c=41,
-            power_w=78.0,
-            power_limit_w=350,
-            fan_percent=33,
-            gpu_util_percent=0,
-            memory_util_percent=4.5,
-            memory_used_bytes=3 * 1024**3,
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P8",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        ),
-    ]
-    processes = [
-        ProcessSnapshot(
-            gpu_index=0,
-            pid=423901,
-            name="python",
-            user="alice",
-            gpu_memory_bytes=51200 * 1024**2,
-            gpu_util_percent=88,
-            cpu_percent=312.4,
-            host_memory_bytes=18 * 1024**3,
-            memory_util_percent=14.2,
-            runtime_seconds=4 * 3600 + 27 * 60 + 5,
-            command="python train.py --config configs/llama3-70b.yaml --bf16",
-            process_type="C",
-        ),
-        ProcessSnapshot(
-            gpu_index=0,
-            pid=423908,
-            name="python",
-            user="alice",
-            gpu_memory_bytes=4096 * 1024**2,
-            gpu_util_percent=12,
-            cpu_percent=42.1,
-            host_memory_bytes=3 * 1024**3,
-            memory_util_percent=2.4,
-            runtime_seconds=27 * 60 + 5,
-            command="python eval.py --checkpoint /data/ckpt/step-12000",
-            process_type="C",
-        ),
-        ProcessSnapshot(
-            gpu_index=1,
-            pid=512377,
-            name="python",
-            user="bob",
-            gpu_memory_bytes=42000 * 1024**2,
-            gpu_util_percent=74,
-            cpu_percent=215.0,
-            host_memory_bytes=12 * 1024**3,
-            memory_util_percent=9.8,
-            runtime_seconds=86400 * 2 + 5 * 3600,
-            command="python -m vllm.entrypoints.api_server --model qwen2-72b",
-            process_type="C",
-        ),
-        ProcessSnapshot(
-            gpu_index=1,
-            pid=512402,
-            name="python",
-            user="bob",
-            gpu_memory_bytes=3000 * 1024**2,
-            gpu_util_percent=0,
-            cpu_percent=1.2,
-            host_memory_bytes=1 * 1024**3,
-            memory_util_percent=0.9,
-            runtime_seconds=600,
-            command="python sampler.py",
-            process_type="C",
-        ),
-        ProcessSnapshot(
-            gpu_index=2,
-            pid=99001,
-            name="metaxctl",
-            user="root",
-            gpu_memory_bytes=128 * 1024**2,
-            cpu_percent=0.0,
-            host_memory_bytes=80 * 1024**2,
-            memory_util_percent=0.1,
-            runtime_seconds=86400 * 7,
-            command="/opt/mxdriver/bin/metaxctl serve",
-            process_type="C",
-        ),
-    ]
-    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+@dataclass(frozen=True, **DATACLASS_SLOTS)
+class FontSpec:
+    path: Path
+    index: int = 0
+
+    @property
+    def label(self) -> str:
+        return f"{self.path}:{self.index}"
 
 
-def build_idle_frame() -> FrameSnapshot:
-    devices = [
-        DeviceSnapshot(
-            index=i,
-            name="MetaX C500",
-            bdf=f"0000:{0x1a + i * 2:02x}:00.0",
-            temperature_c=37 + i,
-            power_w=72.0 + i * 1.5,
-            power_limit_w=350,
-            fan_percent=30,
-            gpu_util_percent=val,
-            memory_util_percent=mem,
-            memory_bandwidth_util_percent=mbw,
-            memory_used_bytes=int(mem / 100 * 64 * 1024**3),
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P8",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
+@dataclass(frozen=True, **DATACLASS_SLOTS)
+class PreviewSpec:
+    target: str
+    scenario: str
+    width: int = 140
+    theme: str = "dark"
+    height: int | None = None
+
+
+PREVIEW_SPECS = (
+    PreviewSpec("assets/mxtop-preview.png", "small"),
+    PreviewSpec("assets/mxtop-dark.png", "small"),
+    PreviewSpec("assets/mxtop-light.png", "small", theme="light"),
+    PreviewSpec("assets/mxtop-preview-light.png", "small", theme="light"),
+    PreviewSpec("assets/mxtop-preview-idle.png", "idle"),
+    PreviewSpec("assets/mxtop-preview-mixed.png", "mixed"),
+    PreviewSpec("assets/mxtop-preview-heavy.png", "heavy"),
+    PreviewSpec("assets/mxtop-preview-many.png", "sixty-four", width=180, height=44),
+)
+
+_REGULAR_FONT_CANDIDATES = (
+    FontSpec(Path("/System/Library/Fonts/Menlo.ttc"), 0),
+    FontSpec(Path("/Library/Fonts/Menlo.ttc"), 0),
+    FontSpec(Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")),
+    FontSpec(Path("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf")),
+    FontSpec(Path("/usr/share/fonts/truetype/freefont/FreeMono.ttf")),
+    FontSpec(Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")),
+)
+_BOLD_FONT_CANDIDATES = (
+    FontSpec(Path("/System/Library/Fonts/Menlo.ttc"), 1),
+    FontSpec(Path("/Library/Fonts/Menlo.ttc"), 1),
+    FontSpec(Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf")),
+    FontSpec(Path("/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf")),
+    FontSpec(Path("/usr/share/fonts/truetype/freefont/FreeMonoBold.ttf")),
+)
+_SYMBOL_FONT_CANDIDATES = (
+    FontSpec(Path("/System/Library/Fonts/Apple Symbols.ttf")),
+    FontSpec(Path("/usr/share/fonts/opentype/unifont/unifont.otf")),
+    FontSpec(Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")),
+    FontSpec(Path("/usr/share/fonts/truetype/freefont/FreeMono.ttf")),
+)
+
+
+def _env_font(name: str) -> FontSpec | None:
+    value = os.environ.get(name)
+    if not value:
+        return None
+    path_text, separator, index_text = value.rpartition(":")
+    if separator and index_text.isdigit():
+        return FontSpec(Path(path_text), int(index_text))
+    return FontSpec(Path(value))
+
+
+def _fontconfig(pattern: str) -> FontSpec | None:
+    try:
+        result = subprocess.run(
+            ["fc-match", "-f", "%{file}\t%{index}\n", pattern],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-        for i, (val, mem, mbw) in enumerate([(0.0, 3.5, 0.0), (2.0, 4.2, 1.0), (0.0, 2.8, 0.0)])
-    ]
-    processes = [
-        ProcessSnapshot(
-            gpu_index=0,
-            pid=99001,
-            name="metaxctl",
-            user="root",
-            gpu_memory_bytes=128 * 1024**2,
-            cpu_percent=0.1,
-            host_memory_bytes=64 * 1024**2,
-            memory_util_percent=0.1,
-            runtime_seconds=86400 * 12,
-            command="/opt/mxdriver/bin/metaxctl serve",
-            process_type="C",
-        ),
-    ]
-    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    first = result.stdout.splitlines()[0] if result.stdout else ""
+    path_text, _, index_text = first.partition("\t")
+    path = Path(path_text)
+    if not path.is_file():
+        return None
+    return FontSpec(path, int(index_text or "0"))
 
 
-def build_mixed_frame() -> FrameSnapshot:
-    devices = [
-        DeviceSnapshot(
-            index=0,
-            name="MetaX C500",
-            bdf="0000:1a:00.0",
-            temperature_c=72,
-            power_w=312.0,
-            power_limit_w=350,
-            fan_percent=68,
-            gpu_util_percent=94,
-            memory_util_percent=88,
-            memory_bandwidth_util_percent=42,
-            memory_used_bytes=56 * 1024**3,
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P0",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        ),
-        DeviceSnapshot(
-            index=1,
-            name="MetaX C500",
-            bdf="0000:3d:00.0",
-            temperature_c=58,
-            power_w=160.0,
-            power_limit_w=350,
-            fan_percent=42,
-            gpu_util_percent=45,
-            memory_util_percent=72,
-            memory_bandwidth_util_percent=18,
-            memory_used_bytes=46 * 1024**3,
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P0",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        ),
-        DeviceSnapshot(
-            index=2,
-            name="MetaX C500",
-            bdf="0000:5e:00.0",
-            temperature_c=41,
-            power_w=78.0,
-            power_limit_w=350,
-            fan_percent=33,
-            gpu_util_percent=4,
-            memory_util_percent=6,
-            memory_bandwidth_util_percent=2,
-            memory_used_bytes=4 * 1024**3,
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P8",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        ),
-    ]
-    processes = [
-        ProcessSnapshot(
-            gpu_index=0, pid=423901, name="python", user="alice",
-            gpu_memory_bytes=51200 * 1024**2, gpu_util_percent=94, cpu_percent=298.4,
-            host_memory_bytes=22 * 1024**3, memory_util_percent=17.2,
-            runtime_seconds=6 * 3600 + 14 * 60,
-            command="python train.py --config configs/llama3-70b.yaml --bf16",
-            process_type="C",
-        ),
-        ProcessSnapshot(
-            gpu_index=1, pid=512377, name="python", user="bob",
-            gpu_memory_bytes=42000 * 1024**2, gpu_util_percent=45, cpu_percent=128.0,
-            host_memory_bytes=14 * 1024**3, memory_util_percent=10.9,
-            runtime_seconds=86400 + 3 * 3600,
-            command="python -m vllm.entrypoints.api_server --model qwen2-72b",
-            process_type="C",
-        ),
-        ProcessSnapshot(
-            gpu_index=2, pid=99001, name="metaxctl", user="root",
-            gpu_memory_bytes=128 * 1024**2, cpu_percent=0.0,
-            host_memory_bytes=80 * 1024**2, memory_util_percent=0.1,
-            runtime_seconds=86400 * 7,
-            command="/opt/mxdriver/bin/metaxctl serve",
-            process_type="C",
-        ),
-    ]
-    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+def discover_font(kind: str = "regular") -> FontSpec | None:
+    """Resolve a usable font without assuming a particular operating system."""
+    if kind == "bold":
+        env_name = "MXTOP_PREVIEW_BOLD_FONT"
+        candidates = _BOLD_FONT_CANDIDATES
+        pattern = "monospace:style=Bold"
+    elif kind == "symbols":
+        env_name = "MXTOP_PREVIEW_SYMBOL_FONT"
+        candidates = _SYMBOL_FONT_CANDIDATES
+        pattern = "Unifont"
+    else:
+        env_name = "MXTOP_PREVIEW_FONT"
+        candidates = _REGULAR_FONT_CANDIDATES
+        pattern = "monospace:style=Regular"
+    configured = _env_font(env_name)
+    if configured is not None and configured.path.is_file():
+        return configured
+    for candidate in candidates:
+        if candidate.path.is_file():
+            return candidate
+    return _fontconfig(pattern)
 
 
-def build_heavy_frame() -> FrameSnapshot:
-    devices = [
-        DeviceSnapshot(
-            index=i,
-            name="MetaX C500",
-            bdf=f"0000:{0x1a + i * 2:02x}:00.0",
-            temperature_c=78 + i,
-            power_w=320.0 + i,
-            power_limit_w=350,
-            fan_percent=85,
-            gpu_util_percent=96.0 - i * 1.5,
-            memory_util_percent=93.0 - i * 0.8,
-            memory_bandwidth_util_percent=88.0 - i * 1.2,
-            memory_used_bytes=int((93 - i * 0.8) / 100 * 64 * 1024**3),
-            memory_total_bytes=64 * 1024**3,
-            performance_state="P0",
-            ecc_errors=0,
-            persistence_mode="Enabled",
-            driver_version="2.31.0.5",
-        )
-        for i in range(4)
-    ]
-    processes = [
-        ProcessSnapshot(
-            gpu_index=i,
-            pid=410000 + i * 17,
-            name="python",
-            user=["alice", "bob", "carol", "dave"][i],
-            gpu_memory_bytes=int((92 - i * 0.5) / 100 * 60 * 1024**3),
-            gpu_util_percent=96.0 - i * 1.5,
-            cpu_percent=320.0 - i * 12,
-            host_memory_bytes=(20 - i) * 1024**3,
-            memory_util_percent=15.0 + i,
-            runtime_seconds=4 * 3600 + i * 600,
-            command=f"python -m train --rank {i} --config configs/llama3.yaml",
-            process_type="C",
-        )
-        for i in range(4)
-    ]
-    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
-
-
-def build_many_frame() -> FrameSnapshot:
-    devices: list[DeviceSnapshot] = []
-    utils = [88, 74, 0, 92, 12, 67, 81, 55, 19, 99, 24, 41, 73, 60, 8, 35]
-    for i in range(16):
-        util = utils[i]
-        mem_pct = min(99.0, max(2.0, util * 0.85 + (i * 1.7)))
-        devices.append(
-            DeviceSnapshot(
-                index=i,
-                name="MetaX C500",
-                bdf=f"0000:{0x1a + i * 2:02x}:00.0",
-                temperature_c=38 + (util // 4),
-                power_w=70 + util * 2.4,
-                power_limit_w=350,
-                fan_percent=30 + (util // 5),
-                gpu_util_percent=float(util),
-                memory_util_percent=mem_pct,
-                memory_used_bytes=int(mem_pct / 100 * 64 * 1024**3),
-                memory_total_bytes=64 * 1024**3,
-                performance_state="P0" if util > 0 else "P8",
-                ecc_errors=0,
-                persistence_mode="Enabled",
-                driver_version="2.31.0.5",
-            )
-        )
-    processes: list[ProcessSnapshot] = []
-    users = ["alice", "bob", "carol", "dave"]
-    for i, util in enumerate(utils[:12]):
-        if util <= 0:
-            continue
-        processes.append(
-            ProcessSnapshot(
-                gpu_index=i,
-                pid=410000 + i * 17,
-                name="python",
-                user=users[i % len(users)],
-                gpu_memory_bytes=int(util / 100 * 60 * 1024**3),
-                gpu_util_percent=float(util),
-                cpu_percent=20 + (i * 19) % 200,
-                host_memory_bytes=int((2 + i % 5) * 1024**3),
-                memory_util_percent=2.0 + (i % 5),
-                runtime_seconds=600 + i * 1234,
-                command=f"python -m train --rank {i} --config configs/llama3.yaml",
-                process_type="C",
-            )
-        )
-    return FrameSnapshot(devices=devices, processes=processes, backend="pymxsml")
+def _load_font(spec: FontSpec | None, font_size: int):
+    if spec is not None:
+        try:
+            return ImageFont.truetype(str(spec.path), font_size, index=spec.index)
+        except OSError:
+            pass
+    try:
+        return ImageFont.load_default(size=font_size)
+    except TypeError:  # Pillow < 10.1
+        return ImageFont.load_default()
 
 
 def parse_segments(line: str) -> Iterable[tuple[str, list[str]]]:
@@ -450,8 +216,7 @@ def parse_segments(line: str) -> Iterable[tuple[str, list[str]]]:
     for match in ANSI_PATTERN.finditer(line):
         if match.start() > cursor:
             yield line[cursor : match.start()], list(state)
-        codes = match.group(1).split(";")
-        for code in codes:
+        for code in match.group(1).split(";"):
             if code in {"", "0"}:
                 state = []
             else:
@@ -461,24 +226,91 @@ def parse_segments(line: str) -> Iterable[tuple[str, list[str]]]:
         yield line[cursor:], list(state)
 
 
-def render_to_png(output: str, theme_name: str, target: Path) -> None:
-    theme = THEMES[theme_name]
-    font_path = "/System/Library/Fonts/Menlo.ttc"
-    font_size = 18
-    font = ImageFont.truetype(font_path, font_size)
-    bold_font = ImageFont.truetype(font_path, font_size, index=1)
+def source_digest(output: str) -> str:
+    return hashlib.sha256(output.encode("utf-8")).hexdigest()
+
+
+@lru_cache(maxsize=None)
+def _font_fingerprint(spec: FontSpec | None) -> str:
+    if spec is None:
+        return "Pillow default"
     try:
-        symbol_font = ImageFont.truetype(SYMBOL_FONT_PATH, font_size)
+        digest = hashlib.sha256(spec.path.read_bytes()).hexdigest()
     except OSError:
-        symbol_font = None
-    char_width = font.getbbox("M")[2]
+        digest = "unreadable"
+    return f"{spec.label}:{digest}"
+
+
+def render_config_digest(
+    theme_name: str,
+    font_size: int,
+    regular_spec: FontSpec | None,
+    bold_spec: FontSpec | None,
+    symbol_spec: FontSpec | None,
+) -> str:
+    renderer_source = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    payload = {
+        "font_size": font_size,
+        "fonts": [
+            _font_fingerprint(regular_spec),
+            _font_fingerprint(bold_spec),
+            _font_fingerprint(symbol_spec),
+        ],
+        "renderer": renderer_source,
+        "theme": THEMES[theme_name],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _colorized_screen(frame, width: int, height: int | None) -> str:
+    if height is None:
+        return render_once(frame, use_color=True, width=width)
+    screen = render_main_screen(
+        frame,
+        UiState(layout=LayoutMode.AUTO),
+        width=width,
+        height=height,
+    )
+    return "\n".join(colorize_screen(frame, screen.lines))
+
+
+def render_preview_text(
+    scenario: str = "small",
+    *,
+    width: int = 140,
+    height: int | None = None,
+    theme: str = "dark",
+) -> str:
+    reset_intensity_thresholds()
+    set_render_style(light=theme == "light", colorful=False)
+    prepare_render()
+    with utc_timezone():
+        return _colorized_screen(build_frame(scenario), width, height)
+
+
+def render_to_png(
+    output: str,
+    theme_name: str,
+    target: Path,
+    *,
+    source_name: str = "",
+    font_size: int = 18,
+) -> None:
+    theme = THEMES[theme_name]
+    regular_spec = discover_font("regular")
+    bold_spec = discover_font("bold") or regular_spec
+    symbol_spec = discover_font("symbols") or regular_spec
+    font = _load_font(regular_spec, font_size)
+    bold_font = _load_font(bold_spec, font_size)
+    symbol_font = _load_font(symbol_spec, font_size)
+    char_width = max(1, round(float(font.getlength("M"))))
     line_height = font_size + 6
 
     lines = output.split("\n")
     max_cols = max((len(ANSI_PATTERN.sub("", line)) for line in lines), default=80)
     width = char_width * (max_cols + 2)
     height = line_height * (len(lines) + 2)
-
     image = Image.new("RGB", (width, height), theme["bg"])
     draw = ImageDraw.Draw(image)
 
@@ -488,7 +320,7 @@ def render_to_png(output: str, theme_name: str, target: Path) -> None:
         for text, state in parse_segments(raw_line):
             bold = "1" in state
             reverse = "7" in state
-            fg_code = next((c for c in state if c in theme), "37")
+            fg_code = next((code for code in reversed(state) if code in theme), "37")
             fg = theme.get(fg_code, theme["fg"])
             bg = theme["bg"]
             if "2" in state:
@@ -501,28 +333,83 @@ def render_to_png(output: str, theme_name: str, target: Path) -> None:
             if bg != theme["bg"]:
                 draw.rectangle((x, y, x + text_width, y + line_height), fill=bg)
             chosen_font = bold_font if bold else font
-            if symbol_font is not None and BRAILLE_SPLIT.search(text):
-                run_x = x
-                for part in BRAILLE_SPLIT.split(text):
-                    if not part:
-                        continue
-                    if BRAILLE_SPLIT.fullmatch(part):
-                        # Keep the character grid: draw each braille cell at
-                        # its own column since Apple Symbols is not monospace.
-                        for column, char in enumerate(part):
-                            draw.text((run_x + char_width * column, y), char, fill=fg, font=symbol_font)
-                    else:
-                        draw.text((run_x, y), part, fill=fg, font=chosen_font)
-                    run_x += char_width * len(part)
-            else:
-                draw.text((x, y), text, fill=fg, font=chosen_font)
+            run_x = x
+            for part in SYMBOL_SPLIT.split(text):
+                if not part:
+                    continue
+                if SYMBOL_SPLIT.fullmatch(part):
+                    for column, char in enumerate(part):
+                        cell_x = run_x + char_width * column
+                        fraction = _BLOCK_FRACTIONS.get(char)
+                        if fraction is None:
+                            draw.text((cell_x, y), char, fill=fg, font=symbol_font)
+                        else:
+                            block_width = max(1, round(char_width * fraction))
+                            draw.rectangle(
+                                (cell_x, y, cell_x + block_width - 1, y + font_size + 1),
+                                fill=fg,
+                            )
+                else:
+                    draw.text((run_x, y), part, fill=fg, font=chosen_font)
+                run_x += char_width * len(part)
             x += text_width
+
+    metadata = PngImagePlugin.PngInfo()
+    metadata.add_text(SOURCE_HASH_KEY, source_digest(output))
+    metadata.add_text(SOURCE_NAME_KEY, source_name)
+    metadata.add_text(THEME_KEY, theme_name)
+    metadata.add_text(FONT_KEY, regular_spec.label if regular_spec is not None else "Pillow default")
+    metadata.add_text(
+        RENDER_CONFIG_KEY,
+        render_config_digest(theme_name, font_size, regular_spec, bold_spec, symbol_spec),
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
-    image.save(target)
+    image.save(target, pnginfo=metadata)
 
 
-def _dim(color: tuple[int, int, int], bg: tuple[int, int, int]) -> tuple[int, int, int]:
-    return tuple(int(c * 0.6 + b * 0.4) for c, b in zip(color, bg))
+def asset_is_fresh(target: Path, output: str, theme: str) -> bool:
+    if not target.is_file():
+        return False
+    try:
+        regular_spec = discover_font("regular")
+        bold_spec = discover_font("bold") or regular_spec
+        symbol_spec = discover_font("symbols") or regular_spec
+        with Image.open(target) as image:
+            return (
+                image.info.get(SOURCE_HASH_KEY) == source_digest(output)
+                and image.info.get(THEME_KEY) == theme
+                and image.info.get(FONT_KEY)
+                == (regular_spec.label if regular_spec is not None else "Pillow default")
+                and image.info.get(RENDER_CONFIG_KEY)
+                == render_config_digest(theme, 18, regular_spec, bold_spec, symbol_spec)
+                and image.width > 0
+                and image.height > 0
+            )
+    except OSError:
+        return False
+
+
+def render_preview_spec(spec: PreviewSpec, *, check: bool = False) -> bool:
+    output = render_preview_text(
+        spec.scenario,
+        width=spec.width,
+        height=spec.height,
+        theme=spec.theme,
+    )
+    target = PROJECT_ROOT / spec.target
+    if check:
+        return asset_is_fresh(target, output, spec.theme)
+    render_to_png(output, spec.theme, target, source_name=spec.target)
+    print(f"wrote {target.relative_to(PROJECT_ROOT)}")
+    return True
+
+
+def _matching_spec(target: Path) -> PreviewSpec | None:
+    resolved = target if target.is_absolute() else PROJECT_ROOT / target
+    for spec in PREVIEW_SPECS:
+        if resolved == PROJECT_ROOT / spec.target:
+            return spec
+    return None
 
 
 def main() -> int:
@@ -530,40 +417,43 @@ def main() -> int:
     parser.add_argument("--theme", choices=list(THEMES), default="dark")
     parser.add_argument("--output", default="assets/mxtop-preview.png", type=Path)
     parser.add_argument("--width", type=int, default=140)
-    parser.add_argument(
-        "--scenario",
-        choices=["small", "many", "idle", "mixed", "heavy"],
-        default="small",
-    )
+    parser.add_argument("--height", type=int, default=None)
+    parser.add_argument("--scenario", choices=sorted(FRAME_BUILDERS), default="small")
+    parser.add_argument("--all", action="store_true", help="render every README preview asset")
+    parser.add_argument("--check", action="store_true", help="check embedded source digests without writing")
     args = parser.parse_args()
 
-    builders = {
-        "small": build_frame,
-        "many": build_many_frame,
-        "idle": build_idle_frame,
-        "mixed": build_mixed_frame,
-        "heavy": build_heavy_frame,
-    }
-    frame = builders[args.scenario]()
-    seed_host_history()
-    if args.scenario == "many":
-        from mxtop.ui.panels import render_main_screen
-        from mxtop.ui.state import UiState, LayoutMode
-        from mxtop.rendering import _colorize_line, host_graph_context
-        screen = render_main_screen(frame, UiState(layout=LayoutMode.AUTO), width=args.width, height=50)
-        host_context = host_graph_context(screen.lines)
-        rendered = "\n".join(
-            _colorize_line(row, line, host_context.get(row))
-            for row, line in enumerate(screen.lines)
-        )
+    if args.all:
+        stale = [spec.target for spec in PREVIEW_SPECS if not render_preview_spec(spec, check=args.check)]
+        if stale:
+            print("stale preview assets: " + ", ".join(stale), file=sys.stderr)
+            return 1
+        return 0
+
+    target = args.output if args.output.is_absolute() else PROJECT_ROOT / args.output
+    spec = _matching_spec(args.output)
+    if spec is not None and (
+        args.scenario,
+        args.width,
+        args.height,
+        args.theme,
+    ) == ("small", 140, None, "dark"):
+        scenario, width, height, theme = spec.scenario, spec.width, spec.height, spec.theme
     else:
-        rendered = render_once(frame, use_color=True, width=args.width)
-    target = args.output
-    if not target.is_absolute():
-        target = PROJECT_ROOT / target
-    render_to_png(rendered, args.theme, target)
+        scenario, width, height, theme = args.scenario, args.width, args.height, args.theme
+    output = render_preview_text(scenario, width=width, height=height, theme=theme)
+    if args.check:
+        if asset_is_fresh(target, output, theme):
+            return 0
+        print(f"stale preview asset: {target}", file=sys.stderr)
+        return 1
+    render_to_png(output, theme, target, source_name=str(args.output))
     print(f"wrote {target}")
     return 0
+
+
+def _dim(color: tuple[int, int, int], bg: tuple[int, int, int]) -> tuple[int, int, int]:
+    return tuple(int(component * 0.6 + background * 0.4) for component, background in zip(color, bg))
 
 
 if __name__ == "__main__":

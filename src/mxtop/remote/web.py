@@ -7,23 +7,14 @@ Server-Sent-Events stream, plus a single self-contained HTML page.
 from __future__ import annotations
 
 import json
-import math
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from mxtop.jsonutil import sanitize_json_value
 from mxtop.models import ClusterSnapshot
 
-
-def _sanitize(value: Any) -> Any:
-    """Replace non-finite floats (NaN/Inf) with None so the JSON stays valid."""
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, dict):
-        return {key: _sanitize(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_sanitize(item) for item in value]
-    return value
+_sanitize = sanitize_json_value
 
 
 class SnapshotHolder:
@@ -35,7 +26,7 @@ class SnapshotHolder:
         self._version = 0
 
     def update(self, cluster: ClusterSnapshot) -> None:
-        payload = json.dumps(_sanitize(cluster.to_dict()))
+        payload = json.dumps(sanitize_json_value(cluster.to_dict()), allow_nan=False)
         with self._condition:
             self._payload = payload
             self._version += 1

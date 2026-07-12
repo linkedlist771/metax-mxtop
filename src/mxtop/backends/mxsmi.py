@@ -146,6 +146,12 @@ def parse_dmon_csv(output: str, known_devices: dict[int, DeviceSnapshot] | None 
                 fan_percent=_float(_first(values, "fan", "fanspeed")),
                 performance_state=_first(values, "pstate", "perf", "performancestate"),
                 ecc_status=_first(values, "ecc", "eccstatus"),
+                gpu_clock_mhz=_float(
+                    _first(values, "gpuclock", "gpu_clock", "coreclock", "core_clock", "smclock", "sm_clock")
+                ),
+                memory_clock_mhz=_float(
+                    _first(values, "memoryclock", "memory_clock", "memclock", "mem_clock", "vramclock")
+                ),
             )
         )
     return devices

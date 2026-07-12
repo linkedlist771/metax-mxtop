@@ -52,6 +52,17 @@ def test_parse_dmon_csv_uses_known_device_names():
     assert devices[0].uuid == "MX-abc"
 
 
+def test_parse_dmon_csv_reads_optional_clock_columns():
+    sample = """dev, gpu clock, memory-clock, gpu, total
+0, 1800 MHz, 1600 MHz, 71, 64
+"""
+
+    device = parse_dmon_csv(sample)[0]
+
+    assert device.gpu_clock_mhz == 1800.0
+    assert device.memory_clock_mhz == 1600.0
+
+
 def test_parse_list_output_builds_device_map():
     devices = parse_list_output("""
 GPU 0: MXC500 (UUID: MX-abc)

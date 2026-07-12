@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from mxtop.models import FrameSnapshot
+import getpass
+import math
+import re
+
+from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 from mxtop.ui import classify
 from mxtop.ui.classify import host_graph_context
-from mxtop.ui.panels import render_main_screen
-from mxtop.ui.state import UiState
+from mxtop.ui.panels import render_snapshot_screen
 
 # Line classification and value parsing live in mxtop.ui.classify, shared with
 # the curses TUI. Local aliases keep this module's call sites short.
@@ -16,15 +19,10 @@ _is_host_line = classify.is_host_overlay
 _is_process_data_line = classify.is_process_data_line
 _is_process_title = classify.is_process_title
 _parse_percent = classify.parse_percent
-_float_text = classify.float_text
-_ratio_percent = classify.ratio_percent
 _BAR_RE = classify.BAR_RE
 _BRAILLE_RUN_RE = classify.BRAILLE_RUN_RE
-_CELL_GPU_PERCENT_RE = classify.CELL_GPU_PERCENT_RE
 _GPU_METRIC_RE = classify.GPU_METRIC_RE
-_MEMORY_RATIO_RE = classify.MEMORY_RATIO_RE
 _PROCESS_ROW_FIELDS_RE = classify.PROCESS_ROW_FIELDS_RE
-_WATT_RATIO_RE = classify.WATT_RATIO_RE
 
 WIDE_MIN_WIDTH = 110
 RESET = "\x1b[0m"
@@ -63,14 +61,156 @@ BORDER_CHARS = classify.BORDER_CHARS
 
 
 def render_once(frame: FrameSnapshot, use_color: bool = True, width: int = 120) -> str:
-    rendered = render_main_screen(frame, UiState(), width=width)
+    rendered = render_snapshot_screen(frame, width=width)
     if not use_color:
         return "\n".join(rendered.lines)
-    host_context = host_graph_context(rendered.lines)
-    return "\n".join(
-        _colorize_line(row, line, host_context.get(row))
-        for row, line in enumerate(rendered.lines)
-    )
+    return "\n".join(colorize_screen(frame, rendered.lines))
+
+
+def colorize_screen(frame: FrameSnapshot, lines: list[str]) -> list[str]:
+    """Apply nvitop-compatible ANSI spans to a rendered MetaX screen."""
+
+    host_context = host_graph_context(lines)
+    device_context = device_row_levels(lines, frame)
+    dense_device_context = dense_device_row_context(lines, frame)
+    process_context = process_row_levels(lines, frame)
+    return [
+        _colorize_line(
+            row,
+            line,
+            host_context.get(row),
+            device_color=_level_color(device_context.get(row)),
+            dense_devices=dense_device_context.get(row),
+            process_context=_process_color_context(process_context.get(row)),
+        )
+        for row, line in enumerate(lines)
+    ]
+
+
+_DEVICE_INDEX_RE = re.compile(r"^│\s*(\d+)\s+")
+
+
+def device_row_levels(lines: list[str], frame: FrameSnapshot) -> dict[int, int]:
+    """Map rendered device rows to their combined memory/GPU load level."""
+
+    devices = {device.index: device for device in frame.devices}
+    return {
+        row: device_display_level(devices[index])
+        for row, index in device_row_indices(lines, frame).items()
+    }
+
+
+def device_row_indices(lines: list[str], frame: FrameSnapshot) -> dict[int, int]:
+    """Map rendered device rows to physical MetaX device indices."""
+
+    devices = {device.index: device for device in frame.devices}
+    context: dict[int, int] = {}
+    current: DeviceSnapshot | None = None
+    for row, line in enumerate(lines):
+        if classify.dense_device_cell_spans(line):
+            current = None
+            continue
+        match = _DEVICE_INDEX_RE.match(line)
+        if match is not None and int(match.group(1)) in devices:
+            current = devices[int(match.group(1))]
+        if current is not None and _is_device_data_line(line):
+            context[row] = current.index
+        if line.startswith(("├", "╞", "╘")) and not _is_device_data_line(line):
+            if line.startswith("╘"):
+                current = None
+    return context
+
+
+def dense_device_row_context(
+    lines: list[str],
+    frame: FrameSnapshot,
+) -> dict[int, tuple[tuple[int, int, int, int], ...]]:
+    """Map dense fleet cells to their text span, GPU index, and load level."""
+
+    devices = {device.index: device for device in frame.devices}
+    context: dict[int, tuple[tuple[int, int, int, int], ...]] = {}
+    for row, line in enumerate(lines):
+        cells = tuple(
+            (start, end, index, device_display_level(devices[index]))
+            for start, end, index in classify.dense_device_cell_spans(line)
+            if index in devices
+        )
+        if cells:
+            context[row] = cells
+    return context
+
+
+def device_display_level(device: DeviceSnapshot) -> int:
+    """Return 0/1/2 for light/moderate/heavy combined device load."""
+
+    levels: list[int] = []
+    for value, thresholds in (
+        (_device_memory_percent(device), MEM_THRESHOLDS),
+        (device.gpu_util_percent, GPU_THRESHOLDS),
+    ):
+        if value is None or not math.isfinite(float(value)):
+            continue
+        if value >= thresholds[1]:
+            levels.append(2)
+        elif value >= thresholds[0]:
+            levels.append(1)
+        else:
+            levels.append(0)
+    return max(levels, default=1)
+
+
+def _device_memory_percent(device: DeviceSnapshot) -> float | None:
+    value = device.memory_util_percent
+    if value is not None:
+        return float(value)
+    if device.memory_used_bytes is None or not device.memory_total_bytes:
+        return None
+    return 100.0 * device.memory_used_bytes / device.memory_total_bytes
+
+
+def process_row_levels(lines: list[str], frame: FrameSnapshot) -> dict[int, tuple[int, bool]]:
+    """Map process rows to their device level and current-user ownership."""
+
+    devices = {device.index: device_display_level(device) for device in frame.devices}
+    processes: dict[tuple[int, int], list[ProcessSnapshot]] = {}
+    for process in frame.processes:
+        processes.setdefault((process.gpu_index, process.pid), []).append(process)
+    owner = getpass.getuser()
+    for line in lines:
+        if _is_process_title(line) and "@" in line:
+            matches = re.findall(r"([^\s│@]+)@([^\s│]+)", line)
+            if matches:
+                owner = matches[-1][0]
+            break
+    context: dict[int, tuple[int, bool]] = {}
+    for row, line in enumerate(lines):
+        match = _PROCESS_ROW_FIELDS_RE.search(line)
+        if match is None:
+            continue
+        try:
+            gpu_index = int(match.group("gpu"))
+            remainder = match.group("before_mem")
+            pid_match = re.match(r"\s+(\d+)", remainder)
+            if pid_match is None:
+                continue
+            pid = int(pid_match.group(1))
+        except (TypeError, ValueError):
+            continue
+        process = next(iter(processes.get((gpu_index, pid), ())), None)
+        owned = owner == "root" or process is None or process.user == owner
+        context[row] = (devices.get(gpu_index, 1), owned)
+    return context
+
+
+def _level_color(level: int | None) -> str | None:
+    return None if level is None else (FG_GREEN, FG_YELLOW, FG_RED)[level]
+
+
+def _process_color_context(context: tuple[int, bool] | None) -> tuple[str, bool] | None:
+    if context is None:
+        return None
+    level, owned = context
+    return (FG_GREEN, FG_YELLOW, FG_RED)[level], owned
 
 
 
@@ -85,30 +225,54 @@ def _colorize_line(
     row: int,
     line: str,
     host_context: tuple[str, float | None, bool] | None = None,
+    *,
+    device_color: str | None = None,
+    dense_devices: tuple[tuple[int, int, int, int], ...] | None = None,
+    process_context: tuple[str, bool] | None = None,
 ) -> str:
     if not line:
         return line
     if row == 0:
         return _colorize_title(line)
+    if "SUPERUSER LOGGED-IN" in line or "send signals)" in line:
+        return _colorize_process_action_line(line)
     if "backend error" in line or "error=" in line:
         return _style(line, BOLD, FG_RED)
     if _is_process_title(line):
         return _colorize_process_title(line)
     if _is_process_data_line(line):
-        return _colorize_process_row(line)
+        return _colorize_process_row(line, process_context)
+    if dense_devices:
+        return _colorize_dense_device_row(line, dense_devices)
     if _is_device_data_line(line):
-        return _colorize_device_row(line)
+        return _colorize_device_row(line, device_color)
+    if line.startswith("[ CPU:") or line.startswith("[ MEM:"):
+        return _colorize_compact_host_line(line)
     if host_context is not None or _is_host_line(line):
         return _colorize_host_line(line, host_context)
     if _is_border_line(line):
-        return _style(line, DIM, _dim_fg())
+        return line
     if "MXTOP" in line and "Driver Version" in line:
-        return _style(line, BOLD, FG_WHITE)
+        return line
     if _is_header_line(line):
-        return _style(line, BOLD, FG_CYAN)
+        return line
     if _is_graph_line(line):
         return _style(line, DIM, _dim_fg())
-    return _style(line, FG_WHITE)
+    return line
+
+
+def _colorize_dense_device_row(
+    line: str,
+    contexts: tuple[tuple[int, int, int, int], ...],
+) -> str:
+    output: list[str] = []
+    cursor = 0
+    for start, end, _index, level in contexts:
+        output.append(line[cursor:start])
+        output.append(_style(line[start:end], BOLD, _level_color(level) or FG_YELLOW))
+        cursor = end
+    output.append(line[cursor:])
+    return "".join(output)
 
 
 DEFAULT_GPU_UTILIZATION_THRESHOLDS: tuple[int, int] = (10, 75)
@@ -144,20 +308,7 @@ def _intensity_color(value: float | None, *, memory: bool) -> str:
         return FG_YELLOW
     thresholds = MEM_THRESHOLDS if memory else GPU_THRESHOLDS
     if COLORFUL_MODE:
-        low, high = thresholds
-        mid_low = low + (high - low) / 3
-        mid_high = low + 2 * (high - low) / 3
-        if value >= high + (100 - high) / 2:
-            return FG_BRIGHT_RED
-        if value >= high:
-            return FG_RED
-        if value >= mid_high:
-            return FG_BRIGHT_YELLOW
-        if value >= mid_low:
-            return FG_YELLOW
-        if value >= low:
-            return FG_BRIGHT_GREEN
-        return FG_GREEN
+        return _spectrum_color(value / 100.0)
     if value >= thresholds[1]:
         return FG_RED
     if value >= thresholds[0]:
@@ -165,80 +316,45 @@ def _intensity_color(value: float | None, *, memory: bool) -> str:
     return FG_GREEN
 
 
+def _spectrum_color(fraction: float) -> str:
+    colors = (
+        FG_GREEN,
+        FG_BRIGHT_GREEN,
+        FG_YELLOW,
+        FG_BRIGHT_YELLOW,
+        FG_RED,
+        FG_BRIGHT_RED,
+    )
+    index = min(len(colors) - 1, max(0, round((len(colors) - 1) * fraction)))
+    return colors[index]
+
+
 def _bar_color(label: str, pct_text: str) -> str:
     return _intensity_color(_parse_percent(pct_text), memory=label in {"MEM", "MBW"})
 
 
-def _colorize_device_row(line: str) -> str:
-    return _colorize_device_cells(line)
+def _colorize_device_row(line: str, display_color: str | None = None) -> str:
+    return _colorize_device_cells(line, display_color)
 
 
-def _colorize_device_cells(line: str) -> str:
+def _colorize_device_cells(line: str, display_color: str | None = None) -> str:
     pieces = line.split("│")
     if len(pieces) < 3:
-        return _style(line, BOLD, FG_WHITE)
+        return _style(line, BOLD, display_color or FG_YELLOW)
     out: list[str] = []
     for index, piece in enumerate(pieces):
         if index:
-            out.append(_style("│", DIM, _dim_fg()))
+            out.append("│")
         if not piece:
             continue
         if index == 0:
-            out.append(_style(piece, BOLD, FG_WHITE))
+            out.append(piece)
             continue
-        role = (index - 1) % 4
-        out.append(_colorize_device_cell(piece, role))
+        if index <= 3:
+            out.append(_style(piece, BOLD, display_color or FG_YELLOW))
+        else:
+            out.append(_style_bar_cell(piece))
     return "".join(out)
-
-
-def _colorize_device_cell(text: str, role: int) -> str:
-    if role == 0:
-        return _style_watt_ratio(text)
-    if role == 1:
-        return _style_memory_ratio(text)
-    if role == 2:
-        return _style_gpu_percent(text)
-    return _style_bar_cell(text)
-
-
-def _style_watt_ratio(text: str) -> str:
-    match = _WATT_RATIO_RE.search(text)
-    if not match:
-        return _style(text, BOLD, FG_WHITE)
-    used = _float_text(match.group(1))
-    limit = _float_text(match.group(2))
-    value = None if used is None or not limit else min(100.0, max(0.0, used / limit * 100))
-    return _style_with_span(
-        text,
-        match.start(),
-        match.end(),
-        _intensity_color(value, memory=False),
-    )
-
-
-def _style_memory_ratio(text: str) -> str:
-    match = _MEMORY_RATIO_RE.search(text)
-    if not match:
-        return _style(text, BOLD, FG_WHITE)
-    value = _ratio_percent(match.group(1), match.group(2), match.group(3), match.group(4))
-    return _style_with_span(
-        text,
-        match.start(),
-        match.end(),
-        _intensity_color(value, memory=True),
-    )
-
-
-def _style_gpu_percent(text: str) -> str:
-    match = _CELL_GPU_PERCENT_RE.search(text)
-    if not match:
-        return _style(text, BOLD, FG_WHITE)
-    return _style_with_span(
-        text,
-        match.start(),
-        match.end(),
-        _intensity_color(_parse_percent(match.group(1)), memory=False),
-    )
 
 
 def _style_bar_cell(text: str) -> str:
@@ -251,28 +367,31 @@ def _style_bar_cell(text: str) -> str:
         color = _bar_color(label, pct_text)
         out.append(_style(text[cursor : match.start()], BOLD, FG_WHITE))
         out.append(_style(f"{label}: ", BOLD, FG_CYAN))
-        out.append(_style(bar, BOLD, color))
+        if COLORFUL_MODE:
+            denominator = max(1, len(bar) - 1)
+            out.extend(
+                _style(
+                    character,
+                    BOLD,
+                    _spectrum_color(index / denominator)
+                    if character not in {"░", " "}
+                    else color,
+                )
+                for index, character in enumerate(bar)
+            )
+        else:
+            out.append(_style(bar, BOLD, color))
         out.append(_style(f" {pct_text}", BOLD, color))
         cursor = match.end()
     out.append(_style(text[cursor:], BOLD, FG_WHITE))
     return "".join(out)
 
 
-def _style_with_span(text: str, start: int, end: int, color: str) -> str:
-    return "".join(
-        [
-            _style(text[:start], BOLD, FG_WHITE),
-            _style(text[start:end], BOLD, color),
-            _style(text[end:], BOLD, FG_WHITE),
-        ]
-    )
-
-
 def _colorize_title(line: str) -> str:
     hint_start = line.find("(Press ")
     if hint_start < 0:
-        return _style(line, BOLD, FG_WHITE)
-    output = [_style(line[:hint_start], BOLD, FG_WHITE)]
+        return line
+    output = [line[:hint_start]]
     hint = line[hint_start:]
     for token in ("h", "q"):
         prefix, found, rest = hint.partition(token)
@@ -285,6 +404,25 @@ def _colorize_title(line: str) -> str:
     return "".join(output)
 
 
+def _colorize_process_action_line(line: str) -> str:
+    spans: list[tuple[int, int, tuple[str, ...]]] = []
+    caution = "!CAUTION: SUPERUSER LOGGED-IN."
+    if (start := line.find(caution)) >= 0:
+        spans.append((start, start + 1, (BOLD, FG_RED)))
+        spans.append((start + 1, start + len(caution), (FG_YELLOW,)))
+    for match in re.finditer(r"(\^C|T|K)(\((?:INT|TERM|KILL)\))", line):
+        spans.append((match.start(1), match.end(1), (BOLD, FG_MAGENTA)))
+        spans.append((match.start(2), match.end(2), (BOLD, FG_RED)))
+    output: list[str] = []
+    cursor = 0
+    for start, end, codes in sorted(spans):
+        output.append(_style(line[cursor:start], DIM, _dim_fg()))
+        output.append(_style(line[start:end], *codes))
+        cursor = end
+    output.append(_style(line[cursor:], DIM, _dim_fg()))
+    return "".join(output)
+
+
 def _colorize_process_title(line: str) -> str:
     at = line.rfind("@")
     if at <= 0:
@@ -293,10 +431,11 @@ def _colorize_process_title(line: str) -> str:
     start = 0 if start < 0 else start + 1
     end = line.find("│", at)
     end = len(line) if end < 0 else end
+    user_color = FG_YELLOW if line[start:at] == "root" else FG_MAGENTA
     return "".join(
         [
             _style(line[:start], BOLD, FG_CYAN),
-            _style(line[start:at], BOLD, FG_MAGENTA),
+            _style(line[start:at], BOLD, user_color),
             _style("@", BOLD, FG_CYAN),
             _style(line[at + 1 : end], BOLD, FG_GREEN),
             _style(line[end:], BOLD, FG_CYAN),
@@ -304,32 +443,55 @@ def _colorize_process_title(line: str) -> str:
     )
 
 
-def _colorize_process_row(line: str) -> str:
+def _colorize_process_row(
+    line: str,
+    context: tuple[str, bool] | None = None,
+) -> str:
     if line.startswith("│>"):
-        return _style(line, BOLD, REVERSE, FG_WHITE)
-    if " root " in line:
-        return _style(line, DIM, _dim_fg())
+        return _style(line, BOLD, REVERSE, FG_CYAN)
     if len(line) < 5:
-        return _style(line, FG_WHITE)
+        return line
     match = _PROCESS_ROW_FIELDS_RE.search(line)
+    device_color, owned = context or (FG_GREEN, True)
     if not match:
-        return "".join([_style(line[:2], FG_WHITE), _style(line[2:5], BOLD, FG_GREEN), _style(line[5:], FG_WHITE)])
-    out = [
-        _style(match.group("prefix"), FG_WHITE),
-        _style(match.group("gpu"), BOLD, FG_GREEN),
-        _style(match.group("before_mem"), FG_WHITE),
-        _style(match.group("gpu_mem"), FG_WHITE),
-        _style(match.group("before_sm"), FG_WHITE),
-        _style(match.group("sm"), BOLD, _intensity_color(_parse_percent(match.group("sm")), memory=False)),
-        _style(match.group("before_gmbw"), FG_WHITE),
-        _style(match.group("gmbw"), BOLD, _intensity_color(_parse_percent(match.group("gmbw")), memory=True)),
-        _style(match.group("before_cpu"), FG_WHITE),
-        _style(match.group("cpu"), BOLD, _intensity_color(_parse_percent(match.group("cpu")), memory=False)),
-        _style(match.group("before_mem_pct"), FG_WHITE),
-        _style(match.group("mem_pct"), BOLD, _intensity_color(_parse_percent(match.group("mem_pct")), memory=True)),
-        _style(line[match.end() :], FG_WHITE),
-    ]
-    return "".join(out)
+        return "".join([line[:2], _style(line[2:5], BOLD, device_color), line[5:]])
+    before_gpu = match.group("prefix")
+    after_gpu = line[match.end("gpu") :]
+    if line.startswith("│="):
+        codes = (BOLD, FG_YELLOW) if owned else (BOLD, DIM, FG_YELLOW)
+        before_gpu = _style(before_gpu, *codes)
+        after_gpu = _style(after_gpu, *codes)
+    elif not owned:
+        before_gpu = _style(before_gpu, DIM, _dim_fg())
+        after_gpu = _style(after_gpu, DIM, _dim_fg())
+    return "".join(
+        [
+            before_gpu,
+            _style(match.group("gpu"), BOLD, device_color),
+            after_gpu,
+        ]
+    )
+
+
+def _colorize_compact_host_line(line: str) -> str:
+    if line.startswith("[ CPU:"):
+        end = line.find("]") + 1
+        if end <= 0:
+            return _style(line, BOLD, FG_CYAN)
+        return _style(line[:end], BOLD, FG_CYAN) + line[end:]
+    end = line.find("]") + 1
+    if end <= 0:
+        return _style(line, BOLD, FG_MAGENTA)
+    second = line.find("[", end)
+    if second < 0:
+        return _style(line, BOLD, FG_MAGENTA)
+    return "".join(
+        [
+            _style(line[:end], BOLD, FG_MAGENTA),
+            line[end:second],
+            _style(line[second:], BOLD, FG_BLUE),
+        ]
+    )
 
 
 def _host_left_color(text: str) -> str:
@@ -389,5 +551,3 @@ def _colorize_host_line(line: str, host_context: tuple[str, float | None, bool] 
         out.append(_style(extra, FG_WHITE))
         out.append(_style("│", DIM, _dim_fg()))
     return "".join(out)
-
-

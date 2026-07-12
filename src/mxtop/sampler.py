@@ -4,11 +4,12 @@ from dataclasses import dataclass
 import threading
 import time
 
+from mxtop._compat import DATACLASS_SLOTS
 from mxtop.backends import TelemetryBackend
 from mxtop.models import FrameSnapshot
 
 
-@dataclass(slots=True)
+@dataclass(**DATACLASS_SLOTS)
 class SamplerState:
     frame: FrameSnapshot | None = None
     error: str | None = None
