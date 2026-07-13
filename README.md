@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview.png" alt="mxtop terminal preview"/>
+  <img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview.png?v=readme-native-1" alt="mxtop terminal preview" width="994"/>
 </p>
 
 <p align="center"><em>Colors follow nvitop's intensity model: each device summary uses its dominant GPU or memory load, while the detailed <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bars retain metric-specific colors (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>

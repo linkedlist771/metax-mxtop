@@ -126,10 +126,12 @@ class PreviewSpec:
     width: int = 140
     theme: str = "dark"
     height: int | None = None
+    font_size: int = 18
 
 
 PREVIEW_SPECS = (
-    PreviewSpec("assets/mxtop-preview.png", "small"),
+    # Match the README content width so thin box strokes are not resampled.
+    PreviewSpec("assets/mxtop-preview.png", "small", font_size=12),
     PreviewSpec("assets/mxtop-dark.png", "small"),
     PreviewSpec("assets/mxtop-light.png", "small", theme="light"),
     PreviewSpec("assets/mxtop-preview-light.png", "small", theme="light"),
@@ -495,7 +497,13 @@ def _draw_cell_glyph(
     draw.text((cell_x, y), glyph, fill=color, font=glyph_font)
 
 
-def asset_is_fresh(target: Path, output: str, theme: str) -> bool:
+def asset_is_fresh(
+    target: Path,
+    output: str,
+    theme: str,
+    *,
+    font_size: int = 18,
+) -> bool:
     if not target.is_file():
         return False
     try:
@@ -509,7 +517,13 @@ def asset_is_fresh(target: Path, output: str, theme: str) -> bool:
                 and image.info.get(FONT_KEY)
                 == (regular_spec.label if regular_spec is not None else "Pillow default")
                 and image.info.get(RENDER_CONFIG_KEY)
-                == render_config_digest(theme, 18, regular_spec, bold_spec, symbol_spec)
+                == render_config_digest(
+                    theme,
+                    font_size,
+                    regular_spec,
+                    bold_spec,
+                    symbol_spec,
+                )
                 and image.info.get(PIXEL_HASH_KEY) == pixel_digest(image)
                 and image.width > 0
                 and image.height > 0
@@ -527,8 +541,19 @@ def render_preview_spec(spec: PreviewSpec, *, check: bool = False) -> bool:
     )
     target = PROJECT_ROOT / spec.target
     if check:
-        return asset_is_fresh(target, output, spec.theme)
-    render_to_png(output, spec.theme, target, source_name=spec.target)
+        return asset_is_fresh(
+            target,
+            output,
+            spec.theme,
+            font_size=spec.font_size,
+        )
+    render_to_png(
+        output,
+        spec.theme,
+        target,
+        source_name=spec.target,
+        font_size=spec.font_size,
+    )
     print(f"wrote {target.relative_to(PROJECT_ROOT)}")
     return True
 
@@ -576,11 +601,13 @@ def main() -> int:
         args.theme,
     ) == ("small", 140, None, "dark"):
         scenario, width, height, theme = spec.scenario, spec.width, spec.height, spec.theme
+        font_size = spec.font_size
     else:
         scenario, width, height, theme = args.scenario, args.width, args.height, args.theme
+        font_size = 18
     output = render_preview_text(scenario, width=width, height=height, theme=theme)
     if args.check:
-        if asset_is_fresh(target, output, theme):
+        if asset_is_fresh(target, output, theme, font_size=font_size):
             return 0
         print(f"stale preview asset: {target}", file=sys.stderr)
         return 1
@@ -589,6 +616,7 @@ def main() -> int:
         theme,
         target,
         source_name=str(args.output),
+        font_size=font_size,
         canonical_fonts=not args.custom_fonts,
     )
     print(f"wrote {target}")

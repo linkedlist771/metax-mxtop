@@ -428,9 +428,31 @@ def test_committed_preview_assets_are_fresh() -> None:
             height=spec.height,
             theme=spec.theme,
         )
-        if not previews.asset_is_fresh(PROJECT_ROOT / spec.target, output, spec.theme):
+        if not previews.asset_is_fresh(
+            PROJECT_ROOT / spec.target,
+            output,
+            spec.theme,
+            font_size=spec.font_size,
+        ):
             stale.append(spec.target)
     assert stale == []
+
+
+def test_readme_primary_preview_uses_native_display_resolution() -> None:
+    previews = _with_pillow("generate_preview")
+    spec = next(
+        item for item in previews.PREVIEW_SPECS if item.target == "assets/mxtop-preview.png"
+    )
+
+    assert spec.font_size == 12
+    with previews.Image.open(PROJECT_ROOT / spec.target) as image:
+        assert 900 <= image.width <= 1024
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        assert (
+            f'mxtop-preview.png?v=readme-native-1" '
+            f'alt="mxtop terminal preview" width="{image.width}"'
+            in readme
+        )
 
 
 def test_committed_gallery_assets_are_fresh_and_complete() -> None:
