@@ -194,6 +194,86 @@ def test_png_renderer_discovers_portable_fonts_and_embeds_freshness(
         assert image.info[previews.RENDER_CONFIG_KEY]
 
 
+def test_png_renderer_keeps_ansi_segments_on_the_same_pixel_grid(
+    tmp_path: Path,
+) -> None:
+    previews = _with_pillow("generate_preview")
+    plain = "╒" + "═" * 118 + "╕"
+    segmented = "".join(f"\x1b[37m{character}\x1b[0m" for character in plain)
+    target = tmp_path / "cell-grid.png"
+
+    previews.render_to_png(f"{plain}\n{segmented}", "dark", target)
+
+    with previews.Image.open(target) as image:
+        rgb = image.convert("RGB")
+        background = previews.THEMES["dark"]["bg"]
+        line_height = image.height // 4
+
+        def right_edge(row: int) -> int:
+            top = line_height * (row + 1)
+            return max(
+                x
+                for y in range(top, top + line_height)
+                for x in range(image.width)
+                if rgb.getpixel((x, y)) != background
+            )
+
+        assert right_edge(0) == right_edge(1)
+
+
+def test_png_renderer_shapes_combining_marks_with_their_base_cell(
+    tmp_path: Path,
+) -> None:
+    previews = _with_pillow("generate_preview")
+    image_chops = pytest.importorskip("PIL.ImageChops")
+    lines = ("é", "e\u0301", "e\x1b[37m\u0301\x1b[0m")
+    target = tmp_path / "combining-mark.png"
+
+    previews.render_to_png("\n".join(lines), "dark", target)
+
+    with previews.Image.open(target) as image:
+        line_height = image.height // (len(lines) + 2)
+        rendered_lines = [
+            image.crop(
+                (
+                    0,
+                    line_height * (row + 1),
+                    image.width,
+                    line_height * (row + 2),
+                )
+            ).convert("RGB")
+            for row in range(len(lines))
+        ]
+        assert all(
+            image_chops.difference(rendered_lines[0], rendered).getbbox() is None
+            for rendered in rendered_lines[1:]
+        )
+
+
+def test_png_renderer_sizes_wide_text_by_terminal_cells(tmp_path: Path) -> None:
+    previews = _with_pillow("generate_preview")
+    output = "│界│"
+    target = tmp_path / "wide-cell.png"
+
+    previews.render_to_png(output, "dark", target)
+
+    regular = previews.discover_font("regular")
+    font = previews._load_font(regular, 18)
+    pixel_cell_width = max(1, round(float(font.getlength("M"))))
+    with previews.Image.open(target) as image:
+        assert image.width == pixel_cell_width * (cell_width(output) + 2)
+
+
+def test_png_renderer_keeps_plain_spaces_transparent(tmp_path: Path) -> None:
+    previews = _with_pillow("generate_preview")
+    target = tmp_path / "spaces.png"
+
+    previews.render_to_png("   ", "dark", target)
+
+    with previews.Image.open(target) as image:
+        assert set(image.getdata()) == {previews.THEMES["dark"]["bg"]}
+
+
 def test_canonical_fonts_are_vendored_hashed_and_ignore_host_configuration(
     monkeypatch,
     tmp_path: Path,

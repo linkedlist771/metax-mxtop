@@ -123,11 +123,11 @@ def render_device_panel(
     else:
         lines.append(_header_line_one(right_width))
         lines.append(_header_line_two(right_width))
-    lines.append(_header_data_divider(right_width, draw_bars))
+    lines.append(_header_data_divider(right_width))
 
     for index, device in enumerate(frame.devices):
         if index > 0:
-            lines.append(_row_divider(right_width, draw_bars))
+            lines.append(_row_divider(right_width))
         if compact:
             row = _device_row_compact(device)
             if draw_bars and right_width >= 3:
@@ -177,23 +177,48 @@ def _render_dense_device_panel(frame: FrameSnapshot, width: int) -> list[str]:
     width = max(MIN_SCREEN_WIDTH, width)
     columns = _dense_device_columns(width, len(frame.devices))
     cell_widths = _dense_device_cell_widths(width, columns)
+    verticals = _dense_device_verticals(cell_widths)
     lines = [
         "╒" + "═" * (width - 2) + "╕",
         _version_line(_driver_version(frame), width - CORE_WIDTH, _maca_version(frame)),
-        _dense_fleet_divider(width, len(frame.devices)),
+        _dense_fleet_divider(width, len(frame.devices), cell_widths),
         _dense_device_line(cell_widths, header=True),
-        "╞" + "═" * (width - 2) + "╡",
+        _double_horizontal_rule(width, verticals, verticals),
     ]
     for offset in range(0, len(frame.devices), columns):
         row_devices = frame.devices[offset : offset + columns]
         lines.append(_dense_device_line(cell_widths, devices=row_devices))
-    lines.append("╘" + "═" * (width - 2) + "╛")
+    lines.append(_double_horizontal_rule(width, verticals, frozenset()))
     return lines
 
 
-def _dense_fleet_divider(width: int, device_count: int) -> str:
+def _dense_fleet_divider(
+    width: int,
+    device_count: int,
+    cell_widths: tuple[int, ...],
+) -> str:
     label = f" GPUs: {device_count} "
-    return "├" + label + "─" * max(0, width - len(label) - 2) + "┤"
+    line = "├" + label + "─" * max(0, width - len(label) - 2) + "┤"
+    return _replace_characters(
+        line,
+        {index: "┬" for index in _dense_device_separator_indices(cell_widths)},
+    )
+
+
+def _dense_device_separator_indices(
+    cell_widths: tuple[int, ...],
+) -> tuple[int, ...]:
+    cursor = 0
+    separators: list[int] = []
+    for column_width in cell_widths[:-1]:
+        cursor += column_width + 1
+        separators.append(cursor)
+    return tuple(separators)
+
+
+def _dense_device_verticals(cell_widths: tuple[int, ...]) -> frozenset[int]:
+    width = sum(cell_widths) + len(cell_widths) + 1
+    return frozenset((0, *_dense_device_separator_indices(cell_widths), width - 1))
 
 
 def _dense_device_line(
@@ -251,8 +276,8 @@ def render_host_panel(
 ) -> list[str]:
     history = history if history is not None else _HOST_HISTORY
     draw_graphs = width >= HOST_GRAPH_MIN_WIDTH
-    right_width = max(0, width - CORE_WIDTH) if draw_graphs else 0
-    right_inner = max(0, right_width - 1)
+    right_width = max(0, width - CORE_WIDTH)
+    right_inner = max(0, right_width - 1) if draw_graphs else 0
     cpu, memory_used_text, memory_pct, swap_used_text, swap_pct = _host_metrics()
     aggregate_gpu_mem = _weighted_memory_percent(frame.devices)
     aggregate_gpu_util = _average_percent(d.gpu_util_percent for d in frame.devices)
@@ -334,7 +359,7 @@ def render_host_panel(
     lines: list[str] = [_host_top_border(right_width)]
     for left, right in zip(top_rows, right_top):
         lines.append(_host_data_line(left, right, right_width))
-    lines.append(_host_time_axis(right_width))
+    lines.append(_host_time_axis(right_width, draw_graphs=draw_graphs))
     for left, right in zip(bottom_rows, right_bottom):
         lines.append(_host_data_line(left, right, right_width))
     lines.append(_host_bottom_border(right_width))
@@ -524,7 +549,6 @@ def render_main_screen(
         height,
         width,
     )
-    dense_devices = _uses_dense_device_grid(frame, compact=device_compact)
     selected_gpu_index = _selected_gpu_index(frame, state)
     lines: list[str] = [render_title(frame, width, error)]
     lines.extend(
@@ -533,17 +557,16 @@ def render_main_screen(
     if host_compact:
         lines.extend(render_host_panel(frame, width, compact=True, history=history))
     else:
-        if not dense_devices and lines and lines[-1].startswith("╘"):
-            lines.pop()
-        lines.extend(
-            render_host_panel(
-                frame,
-                width,
-                compact=False,
-                history=history,
-                selected_gpu_index=selected_gpu_index,
-            )
+        host_lines = render_host_panel(
+            frame,
+            width,
+            compact=False,
+            history=history,
+            selected_gpu_index=selected_gpu_index,
         )
+        if lines and host_lines and lines[-1].startswith("╘"):
+            host_lines[0] = _merge_double_horizontal_borders(lines.pop(), host_lines[0])
+        lines.extend(host_lines)
     lines.append("")
 
     process_panel_top = len(lines)
@@ -754,24 +777,24 @@ def _header_line_compact(right_width: int) -> str:
     return base
 
 
-def _header_data_divider(right_width: int, draw_bars: bool) -> str:
+def _header_data_divider(right_width: int) -> str:
     base = (
         "╞" + "═" * LEFT_INNER + "╪" + "═" * MID_INNER + "╪" + "═" * RIGHT_INNER + "╡"
     )
     if right_width:
-        connector = "╪" if draw_bars else "╡"
-        base = base[:-1] + connector + "═" * (right_width - 1) + "╕"
-    return base
+        base = base[:-1] + "╤" + "═" * (right_width - 1) + "╡"
+    separator = _device_bar_separator_index(right_width)
+    return _replace_characters(base, {separator: "╤"} if separator is not None else {})
 
 
-def _row_divider(right_width: int, draw_bars: bool) -> str:
+def _row_divider(right_width: int) -> str:
     base = (
         "├" + "─" * LEFT_INNER + "┼" + "─" * MID_INNER + "┼" + "─" * RIGHT_INNER + "┤"
     )
     if right_width:
-        connector = "┼" if draw_bars else "┤"
-        base = base[:-1] + connector + "─" * (right_width - 1) + "┤"
-    return base
+        base = base[:-1] + "┼" + "─" * (right_width - 1) + "┤"
+    separator = _device_bar_separator_index(right_width)
+    return _replace_characters(base, {separator: "┼"} if separator is not None else {})
 
 
 def _bottom_border(right_width: int) -> str:
@@ -780,7 +803,66 @@ def _bottom_border(right_width: int) -> str:
     )
     if right_width:
         base = base[:-1] + "╧" + "═" * (right_width - 1) + "╛"
-    return base
+    separator = _device_bar_separator_index(right_width)
+    return _replace_characters(base, {separator: "╧"} if separator is not None else {})
+
+
+def _replace_characters(line: str, replacements: dict[int, str]) -> str:
+    if not replacements:
+        return line
+    characters = list(line)
+    for index, character in replacements.items():
+        if 0 <= index < len(characters):
+            characters[index] = character
+    return "".join(characters)
+
+
+def _double_horizontal_rule(
+    width: int,
+    vertical_above: frozenset[int],
+    vertical_below: frozenset[int],
+) -> str:
+    characters = ["═"] * width
+    internal = {
+        (False, True): "╤",
+        (True, False): "╧",
+        (True, True): "╪",
+    }
+    left = {
+        (False, True): "╒",
+        (True, False): "╘",
+        (True, True): "╞",
+    }
+    right = {
+        (False, True): "╕",
+        (True, False): "╛",
+        (True, True): "╡",
+    }
+    for index in vertical_above | vertical_below:
+        directions = (index in vertical_above, index in vertical_below)
+        junctions = left if index == 0 else right if index == width - 1 else internal
+        characters[index] = junctions[directions]
+    return "".join(characters)
+
+
+_DOUBLE_VERTICAL_UP = frozenset("│╞╡╪╘╧╛")
+_DOUBLE_VERTICAL_DOWN = frozenset("│╞╡╪╒╤╕")
+
+
+def _merge_double_horizontal_borders(upper: str, lower: str) -> str:
+    if len(upper) != len(lower):
+        return lower
+    vertical_above = frozenset(
+        index
+        for index, character in enumerate(upper)
+        if character in _DOUBLE_VERTICAL_UP
+    )
+    vertical_below = frozenset(
+        index
+        for index, character in enumerate(lower)
+        if character in _DOUBLE_VERTICAL_DOWN
+    )
+    return _double_horizontal_rule(len(lower), vertical_above, vertical_below)
 
 
 def _device_row_one(device: DeviceSnapshot) -> str:
@@ -835,9 +917,9 @@ def _device_bars(
     inner = right_width - 1
     if inner <= 0:
         return "", ""
-    if right_width >= 44:
-        left = (right_width - 6 + 1) // 2 - 1
-        right = (right_width - 6) // 2 + 1
+    bar_widths = _device_bar_widths(right_width)
+    if bar_widths is not None:
+        left, right = bar_widths
         top_right_label = "UTL" if compact else "MBW"
         top_right_value = (
             device.gpu_util_percent if compact else device.memory_bandwidth_util_percent
@@ -906,6 +988,23 @@ def _device_bars(
     return top, bot
 
 
+def _device_bar_widths(right_width: int) -> tuple[int, int] | None:
+    if right_width < 44:
+        return None
+    return (
+        (right_width - 6 + 1) // 2 - 1,
+        (right_width - 6) // 2 + 1,
+    )
+
+
+def _device_bar_separator_index(right_width: int) -> int | None:
+    bar_widths = _device_bar_widths(right_width)
+    if bar_widths is None:
+        return None
+    left, _right = bar_widths
+    return CORE_WIDTH + left + 2
+
+
 def _clock_text(value: float | None) -> str:
     return (
         "" if value is None or not math.isfinite(float(value)) else f"@ {value:.0f}MHz"
@@ -958,11 +1057,9 @@ def _bar_suffix_text(value: float | None) -> str:
 
 
 def _host_top_border(right_width: int) -> str:
-    base = (
-        "╞" + "═" * LEFT_INNER + "╧" + "═" * MID_INNER + "╧" + "═" * RIGHT_INNER + "╡"
-    )
+    base = "╒" + "═" * CORE_INNER + "╕"
     if right_width:
-        base = base[:-1] + "╪" + "═" * (right_width - 1) + "╡"
+        base = base[:-1] + "╤" + "═" * (right_width - 1) + "╕"
     return base
 
 
@@ -974,11 +1071,11 @@ def _host_data_line(left: str, right: str, right_width: int) -> str:
     return line
 
 
-def _host_time_axis(right_width: int) -> str:
+def _host_time_axis(right_width: int, *, draw_graphs: bool) -> str:
     axis = "├────────────╴120s├─────────────────────────╴60s├──────────╴30s├──────────────┤"
     if right_width:
         inner = right_width - 1
-        right_axis = _time_axis_right(inner)
+        right_axis = _time_axis_right(inner) if draw_graphs else "─" * inner
         axis = axis[:-1] + "┼" + right_axis + "┤"
     return axis
 

@@ -31,6 +31,7 @@ from mxtop.rendering import (  # noqa: E402
 from mxtop._compat import DATACLASS_SLOTS  # noqa: E402
 from mxtop.ui.panels import render_main_screen  # noqa: E402
 from mxtop.ui.state import LayoutMode, UiState  # noqa: E402
+from mxtop.ui.text import character_cell_width, cell_width  # noqa: E402
 from synthetic_fixtures import (  # noqa: E402
     FRAME_BUILDERS,
     build_frame,
@@ -56,6 +57,7 @@ CANONICAL_REGULAR_FONT = FONT_DIR / "LiberationMono-Regular.ttf"
 CANONICAL_BOLD_FONT = FONT_DIR / "LiberationMono-Bold.ttf"
 CANONICAL_PILLOW_VERSION = "11.3.0"
 BRAILLE_RENDERER_VERSION = "bitmap-2x4-v1"
+TERMINAL_GRID_RENDERER_VERSION = "integer-cell-v1"
 
 THEMES = {
     "dark": {
@@ -306,6 +308,7 @@ def render_config_digest(
     renderer_source = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     payload = {
         "braille_renderer": BRAILLE_RENDERER_VERSION,
+        "terminal_grid_renderer": TERMINAL_GRID_RENDERER_VERSION,
         "font_size": font_size,
         "fonts": [
             _font_fingerprint(regular_spec),
@@ -366,7 +369,10 @@ def render_to_png(
     line_height = font_size + 6
 
     lines = output.split("\n")
-    max_cols = max((len(ANSI_PATTERN.sub("", line)) for line in lines), default=80)
+    max_cols = max(
+        (cell_width(ANSI_PATTERN.sub("", line)) for line in lines),
+        default=80,
+    )
     width = char_width * (max_cols + 2)
     height = line_height * (len(lines) + 2)
     image = Image.new("RGB", (width, height), theme["bg"])
@@ -375,6 +381,7 @@ def render_to_png(
     for row, raw_line in enumerate(lines):
         x = char_width
         y = line_height * (row + 1)
+        pending_glyph = None
         for text, state in parse_segments(raw_line):
             bold = "1" in state
             reverse = "7" in state
@@ -387,32 +394,49 @@ def render_to_png(
                 fg, bg = bg, fg
                 if bg == theme["bg"]:
                     bg = theme["selection_bg"]
-            text_width = char_width * len(text)
-            if bg != theme["bg"]:
-                draw.rectangle((x, y, x + text_width, y + line_height), fill=bg)
+            text_width = char_width * cell_width(text)
+            if bg != theme["bg"] and text_width:
+                draw.rectangle(
+                    (x, y, x + text_width - 1, y + line_height - 1),
+                    fill=bg,
+                )
             chosen_font = bold_font if bold else font
-            run_x = x
-            for part in SYMBOL_SPLIT.split(text):
-                if not part:
+            cell_offset = 0
+            for character in text:
+                character_width = character_cell_width(character)
+                if character_width == 0 and pending_glyph is not None:
+                    glyph, cell_x, glyph_fg, glyph_font = pending_glyph
+                    pending_glyph = (
+                        glyph + character,
+                        cell_x,
+                        glyph_fg,
+                        glyph_font,
+                    )
                     continue
-                if SYMBOL_SPLIT.fullmatch(part):
-                    for column, char in enumerate(part):
-                        cell_x = run_x + char_width * column
-                        fraction = _BLOCK_FRACTIONS.get(char)
-                        if 0x2800 <= ord(char) <= 0x28FF and canonical_fonts:
-                            _draw_braille(draw, cell_x, y, char, char_width, font_size, fg)
-                        elif fraction is None:
-                            draw.text((cell_x, y), char, fill=fg, font=symbol_font)
-                        else:
-                            block_width = max(1, round(char_width * fraction))
-                            draw.rectangle(
-                                (cell_x, y, cell_x + block_width - 1, y + font_size + 1),
-                                fill=fg,
-                            )
-                else:
-                    draw.text((run_x, y), part, fill=fg, font=chosen_font)
-                run_x += char_width * len(part)
+                if pending_glyph is not None:
+                    _draw_cell_glyph(
+                        draw,
+                        pending_glyph,
+                        y=y,
+                        char_width=char_width,
+                        font_size=font_size,
+                        symbol_font=symbol_font,
+                        canonical_fonts=canonical_fonts,
+                    )
+                cell_x = x + char_width * cell_offset
+                pending_glyph = (character, cell_x, fg, chosen_font)
+                cell_offset += character_width
             x += text_width
+        if pending_glyph is not None:
+            _draw_cell_glyph(
+                draw,
+                pending_glyph,
+                y=y,
+                char_width=char_width,
+                font_size=font_size,
+                symbol_font=symbol_font,
+                canonical_fonts=canonical_fonts,
+            )
 
     metadata = PngImagePlugin.PngInfo()
     metadata.add_text(SOURCE_HASH_KEY, source_digest(output))
@@ -428,6 +452,47 @@ def render_to_png(
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     image.save(target, pnginfo=metadata)
+
+
+def _draw_cell_glyph(
+    draw: ImageDraw.ImageDraw,
+    glyph_state,
+    *,
+    y: int,
+    char_width: int,
+    font_size: int,
+    symbol_font,
+    canonical_fonts: bool,
+) -> None:
+    glyph, cell_x, color, chosen_font = glyph_state
+    if len(glyph) == 1:
+        fraction = _BLOCK_FRACTIONS.get(glyph)
+        if 0x2800 <= ord(glyph) <= 0x28FF and canonical_fonts:
+            _draw_braille(
+                draw,
+                cell_x,
+                y,
+                glyph,
+                char_width,
+                font_size,
+                color,
+            )
+            return
+        if fraction is not None:
+            if fraction > 0:
+                block_width = max(1, round(char_width * fraction))
+                draw.rectangle(
+                    (
+                        cell_x,
+                        y,
+                        cell_x + block_width - 1,
+                        y + font_size + 1,
+                    ),
+                    fill=color,
+                )
+            return
+    glyph_font = symbol_font if SYMBOL_SPLIT.fullmatch(glyph) else chosen_font
+    draw.text((cell_x, y), glyph, fill=color, font=glyph_font)
 
 
 def asset_is_fresh(target: Path, output: str, theme: str) -> bool:
