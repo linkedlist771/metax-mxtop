@@ -42,13 +42,20 @@ def _process(gpu_index: int, pid: int) -> ProcessSnapshot:
 def _frame(device_count: int = 2, process_count: int = 2) -> FrameSnapshot:
     return FrameSnapshot(
         devices=[_device(index) for index in range(device_count)],
-        processes=[_process(index % max(1, device_count), 100 + index) for index in range(process_count)],
+        processes=[
+            _process(index % max(1, device_count), 100 + index)
+            for index in range(process_count)
+        ],
     )
 
 
 def test_snapshot_uses_full_devices_compact_host_and_natural_processes(monkeypatch):
-    monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
-    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0)
+    )
+    monkeypatch.setattr(
+        panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00"
+    )
     monkeypatch.setattr(panels, "_uptime_text", lambda: "2:00:00")
     screen = render_snapshot_screen(_frame(), width=140)
 
@@ -57,7 +64,10 @@ def test_snapshot_uses_full_devices_compact_host_and_natural_processes(monkeypat
     assert sum(line.startswith("[ CPU:") for line in screen.lines) == 1
     assert sum(line.startswith("[ MEM:") for line in screen.lines) == 1
     assert not any(" CPU: " in line and line.startswith("│") for line in screen.lines)
-    assert any(line.startswith("├") and len(line) == 140 for line in screen.lines[screen.process_start :])
+    assert any(
+        line.startswith("├") and len(line) == 140
+        for line in screen.lines[screen.process_start :]
+    )
     assert not any(line.startswith("│>") for line in screen.lines)
 
 
@@ -74,19 +84,43 @@ def test_live_auto_compacts_device_then_host_then_process():
 
     assert any("GPU  Name" in line for line in full)
     assert any("GPU Fan Temp" in line for line in device_compact)
-    assert any("Load Average:" in line and line.startswith("│") for line in device_compact)
+    assert any(
+        "Load Average:" in line and line.startswith("│") for line in device_compact
+    )
     assert any(line.startswith("[ CPU:") for line in host_compact)
-    assert any(line.startswith("├") for line in host_compact[host_screen.process_start :])
-    assert not any(line.startswith("├") for line in process_screen.lines[process_screen.process_start :])
+    assert any(
+        line.startswith("├") for line in host_compact[host_screen.process_start :]
+    )
+    assert not any(
+        line.startswith("├")
+        for line in process_screen.lines[process_screen.process_start :]
+    )
 
 
-def test_wide_device_header_stays_79_and_data_region_extends():
+def test_wide_device_panel_uses_one_consistent_width():
     lines = render_device_panel(_frame(), 140, LayoutMode.FULL, compact=False)
 
-    assert all(len(line) == 79 for line in lines[:5])
-    assert len(lines[5]) == 140
-    assert len(next(line for line in lines if "MetaX C500" in line)) == 140
-    assert len(lines[-1]) == 140
+    assert all(cell_width(line) == 140 for line in lines)
+
+
+def test_device_panels_fill_every_supported_viewport_width():
+    for width in (79, 92, 100, 140, 180):
+        for compact in (False, True):
+            layout = LayoutMode.COMPACT if compact else LayoutMode.FULL
+            for device_count in (0, 1, 16, 32, 64):
+                lines = render_device_panel(
+                    _frame(device_count=device_count, process_count=0),
+                    width,
+                    layout,
+                    compact=compact,
+                )
+
+                assert all(cell_width(line) == width for line in lines), (
+                    width,
+                    compact,
+                    device_count,
+                    [cell_width(line) for line in lines],
+                )
 
 
 def test_compact_devices_remain_one_vertical_list_and_keep_bars():
@@ -104,14 +138,18 @@ def test_empty_device_panel_has_no_device_column_headers():
     lines = render_device_panel(FrameSnapshot(devices=[], processes=[]), 140)
 
     assert len(lines) == 5
-    assert all(len(line) == 79 for line in lines)
+    assert all(cell_width(line) == 140 for line in lines)
     assert "No visible devices found" in lines[3]
     assert not any("GPU  Name" in line or "Fan  Temp" in line for line in lines)
 
 
 def test_compact_host_is_two_unboxed_rows(monkeypatch):
-    monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
-    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0)
+    )
+    monkeypatch.setattr(
+        panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00"
+    )
     monkeypatch.setattr(panels, "_uptime_text", lambda: "2:00:00")
 
     lines = render_host_panel(_frame(), 120, compact=True, history=HostHistory())
@@ -124,8 +162,12 @@ def test_compact_host_is_two_unboxed_rows(monkeypatch):
 
 def test_compact_host_keeps_sampling_history(monkeypatch):
     history = HostHistory()
-    monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
-    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0)
+    )
+    monkeypatch.setattr(
+        panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00"
+    )
 
     render_host_panel(_frame(), 120, compact=True, history=history)
 
@@ -172,10 +214,14 @@ def test_process_panel_signal_hint_tracks_actionable_selection(monkeypatch):
     monkeypatch.setattr(panels.getpass, "getuser", lambda: "alice")
 
     screen = render_main_screen(frame, state, width=120)
-    title_row = next(index for index, line in enumerate(screen.lines) if "Processes:" in line)
+    title_row = next(
+        index for index, line in enumerate(screen.lines) if "Processes:" in line
+    )
     assert screen.lines[title_row - 1].startswith("╒")
     assert screen.lines[title_row - 1].endswith("╕")
-    assert "(Press ^C(INT)/T(TERM)/K(KILL) to send signals)" in screen.lines[title_row - 2]
+    assert (
+        "(Press ^C(INT)/T(TERM)/K(KILL) to send signals)" in screen.lines[title_row - 2]
+    )
 
     state.readonly = True
     screen = render_main_screen(frame, state, width=120)
@@ -207,7 +253,7 @@ def test_main_panels_are_terminal_cell_exact_with_cjk_telemetry():
 
     for width in (79, 120):
         screen = render_main_screen(frame, UiState(), width=width)
-        assert all(cell_width(line) in {0, width, 79} for line in screen.lines)
+        assert all(cell_width(line) in {0, width} for line in screen.lines)
         assert all(cell_width(line) <= width for line in screen.lines)
 
 
@@ -221,12 +267,16 @@ def test_process_header_and_host_info_scroll_together():
     frame = FrameSnapshot(devices=[_device(0)], processes=[process])
 
     state = UiState(command_offset=0)
-    lines, _, _ = render_process_panel(frame, state, 120, compact=True, mark_selection=False)
+    lines, _, _ = render_process_panel(
+        frame, state, 120, compact=True, mark_selection=False
+    )
     assert "%CPU  %MEM  TIME  COMMAND" in lines[2]
     assert " 120     5  1:05  python job-100.py" in lines[4]
 
     state.command_offset = 18
-    lines, _, _ = render_process_panel(frame, state, 120, compact=True, mark_selection=False)
+    lines, _, _ = render_process_panel(
+        frame, state, 120, compact=True, mark_selection=False
+    )
     assert "%GMBW  COMMAND" in lines[2]
     assert "%CPU" not in lines[2]
     assert " 120 " not in lines[4]
@@ -276,7 +326,9 @@ def test_live_title_surfaces_backend_error_while_showing_stale_frame():
 
 
 def test_missing_device_fields_remain_na():
-    frame = FrameSnapshot(devices=[DeviceSnapshot(index=0, name="MetaX C500")], processes=[])
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, name="MetaX C500")], processes=[]
+    )
     lines = render_device_panel(frame, 79, LayoutMode.FULL, compact=False)
     rows = [line for line in lines if line.startswith("│") and "MetaX C500" in line]
 
@@ -295,11 +347,18 @@ def test_memory_formatting_matches_nvitop_unit_thresholds():
 
 def test_host_gpu_memory_average_is_weighted(monkeypatch):
     frame = FrameSnapshot(
-        devices=[_device(0, used_gib=8, total_gib=16), _device(1, used_gib=8, total_gib=64)],
+        devices=[
+            _device(0, used_gib=8, total_gib=16),
+            _device(1, used_gib=8, total_gib=64),
+        ],
         processes=[],
     )
-    monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
-    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0)
+    )
+    monkeypatch.setattr(
+        panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00"
+    )
 
     lines = render_host_panel(frame, 120, history=HostHistory())
 
@@ -307,14 +366,21 @@ def test_host_gpu_memory_average_is_weighted(monkeypatch):
 
 
 def test_live_host_uses_selected_device_gpu_labels_and_values(monkeypatch):
-    devices = [_device(0, used_gib=8, total_gib=16), _device(1, used_gib=8, total_gib=64)]
+    devices = [
+        _device(0, used_gib=8, total_gib=16),
+        _device(1, used_gib=8, total_gib=64),
+    ]
     devices[0].gpu_util_percent = 10.0
     devices[1].gpu_util_percent = 90.0
     processes = [_process(0, 100), _process(1, 101)]
     frame = FrameSnapshot(devices=devices, processes=processes)
     state = UiState(selected_key=processes[1].selection_key)
-    monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
-    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0)
+    )
+    monkeypatch.setattr(
+        panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00"
+    )
 
     history = HostHistory()
     lines = render_main_screen(frame, state, width=120, history=history).lines
@@ -329,8 +395,12 @@ def test_switching_selected_gpu_resets_only_gpu_history(monkeypatch):
     frame = _frame(device_count=2, process_count=2)
     state = UiState(selected_key=frame.processes[0].selection_key)
     history = HostHistory(interval=0.0)
-    monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
-    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0)
+    )
+    monkeypatch.setattr(
+        panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00"
+    )
 
     render_main_screen(frame, state, width=120, history=history)
     render_main_screen(frame, state, width=120, history=history)
@@ -357,7 +427,7 @@ def test_live_screen_has_no_status_footer():
     lines = render_main_screen(_frame(), UiState(), width=120, height=34).lines
 
     assert not any(line.startswith("mode=") or "refresh=" in line for line in lines)
-    assert len(lines[0]) == 79
+    assert cell_width(lines[0]) == 120
 
 
 def test_auto_64_gpu_overview_keeps_highest_gpu_and_process_panel_visible():

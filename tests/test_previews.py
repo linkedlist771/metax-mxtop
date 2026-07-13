@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+from mxtop.ui.text import cell_width
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = PROJECT_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -54,10 +56,14 @@ def test_known_devices_have_consistent_memory_and_metax_versions() -> None:
     for name, builder in FRAME_BUILDERS.items():
         for device in builder().devices:
             if device.memory_util_percent is not None:
-                expected_used = round(device.memory_util_percent / 100.0 * DEVICE_MEMORY_BYTES)
+                expected_used = round(
+                    device.memory_util_percent / 100.0 * DEVICE_MEMORY_BYTES
+                )
                 assert device.memory_total_bytes == DEVICE_MEMORY_BYTES, name
                 assert device.memory_used_bytes == expected_used, name
-                assert device.memory_free_bytes == DEVICE_MEMORY_BYTES - expected_used, name
+                assert (
+                    device.memory_free_bytes == DEVICE_MEMORY_BYTES - expected_used
+                ), name
             if device.driver_version is not None:
                 assert device.driver_version == DRIVER_VERSION, name
             if device.maca_version is not None:
@@ -122,7 +128,51 @@ def test_preview_text_is_repeatable_and_uses_fixed_metadata() -> None:
     assert f"UPTIME: {HOST_UPTIME_TEXT}" in plain
 
 
-def test_png_renderer_discovers_portable_fonts_and_embeds_freshness(tmp_path: Path) -> None:
+def _assert_box_rows_fill_width(output: str, width: int, ansi_pattern) -> None:
+    plain_lines = [ansi_pattern.sub("", line) for line in output.splitlines()]
+    box_rows = [
+        line for line in plain_lines if line and line[0] in frozenset("╒╞╘├│┌└╔╚")
+    ]
+    assert box_rows
+    assert all(cell_width(line) == width for line in box_rows), [
+        (cell_width(line), line) for line in box_rows if cell_width(line) != width
+    ]
+
+
+def test_canonical_dashboard_images_use_consistent_box_widths() -> None:
+    previews = _with_pillow("generate_preview")
+    gallery = importlib.import_module("render_gallery")
+    showcase = importlib.import_module("render_showcase")
+
+    for spec in previews.PREVIEW_SPECS:
+        output = previews.render_preview_text(
+            spec.scenario,
+            width=spec.width,
+            height=spec.height,
+            theme=spec.theme,
+        )
+        _assert_box_rows_fill_width(output, spec.width, previews.ANSI_PATTERN)
+
+    for variant in gallery.VARIANTS:
+        if variant.kind != "json":
+            _assert_box_rows_fill_width(
+                gallery.render_variant_text(variant),
+                variant.width,
+                previews.ANSI_PATTERN,
+            )
+
+    for spec in showcase.SHOWCASE_SPECS:
+        if spec.kind in {"tui", "once", "signal"}:
+            _assert_box_rows_fill_width(
+                showcase.render_showcase_text(spec),
+                spec.width,
+                previews.ANSI_PATTERN,
+            )
+
+
+def test_png_renderer_discovers_portable_fonts_and_embeds_freshness(
+    tmp_path: Path,
+) -> None:
     previews = _with_pillow("generate_preview")
     output = "\x1b[1;36m╒═ mxtop ═╕\x1b[0m\n│ braille: ⣿⡇ │\n╘═══════════╛"
     target = tmp_path / "preview.png"
@@ -133,8 +183,13 @@ def test_png_renderer_discovers_portable_fonts_and_embeds_freshness(tmp_path: Pa
         assert image.height > 20
         assert image.getbbox() is not None
         assert image.info[previews.FONT_KEY]
-        assert image.info[previews.PILLOW_VERSION_KEY] == previews.CANONICAL_PILLOW_VERSION
-        assert image.info[previews.FREETYPE_VERSION_KEY] == previews.rasterizer_versions()["freetype"]
+        assert (
+            image.info[previews.PILLOW_VERSION_KEY] == previews.CANONICAL_PILLOW_VERSION
+        )
+        assert (
+            image.info[previews.FREETYPE_VERSION_KEY]
+            == previews.rasterizer_versions()["freetype"]
+        )
         assert image.info[previews.PIXEL_HASH_KEY] == previews.pixel_digest(image)
         assert image.info[previews.RENDER_CONFIG_KEY]
 
@@ -153,14 +208,19 @@ def test_canonical_fonts_are_vendored_hashed_and_ignore_host_configuration(
     for name, digest in expected.items():
         path = previews.FONT_DIR / name
         assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
-    assert "SIL OPEN FONT LICENSE Version 1.1" in previews.FONT_LICENSE.read_text(encoding="utf-8")
+    assert "SIL OPEN FONT LICENSE Version 1.1" in previews.FONT_LICENSE.read_text(
+        encoding="utf-8"
+    )
 
     monkeypatch.setenv("MXTOP_PREVIEW_FONT", str(previews.CANONICAL_BOLD_FONT))
     monkeypatch.setenv("MXTOP_PREVIEW_BOLD_FONT", str(previews.CANONICAL_REGULAR_FONT))
     monkeypatch.setenv("MXTOP_PREVIEW_SYMBOL_FONT", str(previews.CANONICAL_BOLD_FONT))
     regular = previews.discover_font("regular")
     bold = previews.discover_font("bold")
-    assert regular is not None and regular.label == "assets/fonts/LiberationMono-Regular.ttf:0"
+    assert (
+        regular is not None
+        and regular.label == "assets/fonts/LiberationMono-Regular.ttf:0"
+    )
     assert bold is not None and bold.label == "assets/fonts/LiberationMono-Bold.ttf:0"
 
     output = "canonical braille: ⣿⡇"
@@ -175,11 +235,15 @@ def test_canonical_fonts_are_vendored_hashed_and_ignore_host_configuration(
 
     monkeypatch.setattr(previews.PIL, "__version__", "0.0-test")
     assert not previews.asset_is_fresh(target, output, "dark")
-    with pytest.raises(RuntimeError, match="canonical preview rendering requires Pillow"):
+    with pytest.raises(
+        RuntimeError, match="canonical preview rendering requires Pillow"
+    ):
         previews.render_to_png(output, "dark", tmp_path / "wrong-pillow.png")
 
 
-def test_explicit_noncanonical_font_output_remains_available(monkeypatch, tmp_path: Path) -> None:
+def test_explicit_noncanonical_font_output_remains_available(
+    monkeypatch, tmp_path: Path
+) -> None:
     previews = _with_pillow("generate_preview")
     monkeypatch.setenv("MXTOP_PREVIEW_FONT", str(previews.CANONICAL_BOLD_FONT))
     custom = previews.discover_font("regular", canonical=False)
@@ -196,8 +260,12 @@ def test_gallery_and_showcase_markdown_are_generated() -> None:
     _with_pillow("generate_preview")
     gallery = importlib.import_module("render_gallery")
     showcase = importlib.import_module("render_showcase")
-    assert (PROJECT_ROOT / "GALLERY.md").read_text(encoding="utf-8") == gallery.gallery_markdown()
-    assert (PROJECT_ROOT / "SHOWCASE.md").read_text(encoding="utf-8") == showcase.showcase_markdown()
+    assert (PROJECT_ROOT / "GALLERY.md").read_text(
+        encoding="utf-8"
+    ) == gallery.gallery_markdown()
+    assert (PROJECT_ROOT / "SHOWCASE.md").read_text(
+        encoding="utf-8"
+    ) == showcase.showcase_markdown()
 
 
 def test_every_unique_fixture_and_secondary_screen_has_a_canonical_asset() -> None:
@@ -242,11 +310,16 @@ def test_package_readme_uses_release_portable_origin_urls() -> None:
     assert "](GALLERY.md)" not in readme
     assert "](SHOWCASE.md)" not in readme
     assert "](INTRO.md)" not in readme
-    assert "https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/" in readme
+    assert (
+        "https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/"
+        in readme
+    )
 
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '[project.urls]' in pyproject
-    assert 'Repository = "https://github.com/linkedlist771/metax-mxtop.git"' in pyproject
+    assert "[project.urls]" in pyproject
+    assert (
+        'Repository = "https://github.com/linkedlist771/metax-mxtop.git"' in pyproject
+    )
 
 
 def test_canonical_commands_pin_the_pillow_version() -> None:
@@ -258,7 +331,9 @@ def test_canonical_commands_pin_the_pillow_version() -> None:
         assert pillow_arguments, relative_path
         assert set(pillow_arguments) == {expected}, relative_path
 
-    workflow = (PROJECT_ROOT / ".github/workflows/wheels.yml").read_text(encoding="utf-8")
+    workflow = (PROJECT_ROOT / ".github/workflows/wheels.yml").read_text(
+        encoding="utf-8"
+    )
     assert f"pillow=={previews.CANONICAL_PILLOW_VERSION}" in workflow
     assert not re.search(r"\bpillow\b(?!==)", workflow, flags=re.IGNORECASE)
 
@@ -301,4 +376,6 @@ def test_all_committed_pngs_have_real_pixel_variation() -> None:
     for path in sorted((PROJECT_ROOT / "assets").rglob("*.png")):
         with previews.Image.open(path) as image:
             assert image.width > 0 and image.height > 0, path
-            assert any(low != high for low, high in image.convert("RGB").getextrema()), path
+            assert any(
+                low != high for low, high in image.convert("RGB").getextrema()
+            ), path

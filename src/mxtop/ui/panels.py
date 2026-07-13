@@ -59,13 +59,15 @@ class RenderedScreen:
 def render_title(frame: FrameSnapshot, width: int, error: str | None = None) -> str:
     timestamp = datetime.fromtimestamp(frame.timestamp).strftime("%a %b %d %H:%M:%S %Y")
     hint = f"(ERROR: {error})" if error else "(Press h for help or q to quit)"
-    title_width = min(width, CORE_WIDTH)
+    title_width = width
     if title_width <= len(timestamp) + len(hint):
         return ellipsize(f"{timestamp} {hint}", title_width)
     return f"{timestamp}{' ' * (title_width - len(timestamp) - len(hint))}{hint}"
 
 
-def render_small_terminal_message(width: int, height: int | None = None) -> RenderedScreen:
+def render_small_terminal_message(
+    width: int, height: int | None = None
+) -> RenderedScreen:
     message = "Terminal size is too small"
     detail = f"mxtop needs at least {MIN_SCREEN_WIDTH} columns"
     box_width = min(max(len(detail) + 4, len(message) + 4), max(20, width))
@@ -79,7 +81,9 @@ def render_small_terminal_message(width: int, height: int | None = None) -> Rend
     if height is not None and height > len(lines):
         padding = [""] * max(0, (height - len(lines)) // 2)
         lines = padding + lines
-    return RenderedScreen([line.center(width) for line in lines], process_start=0, process_count=0)
+    return RenderedScreen(
+        [line.center(width) for line in lines], process_start=0, process_count=0
+    )
 
 
 def render_device_panel(
@@ -94,27 +98,31 @@ def render_device_panel(
     if _uses_dense_device_grid(frame, compact=compact):
         return _render_dense_device_panel(frame, width)
     draw_bars = width >= BAR_MIN_WIDTH
-    right_width = max(0, width - CORE_WIDTH) if draw_bars else 0
+    right_width = max(0, width - CORE_WIDTH)
     driver_version = _driver_version(frame)
     maca_version = _maca_version(frame)
-    lines = [_top_border(0), _version_line(driver_version, 0, maca_version)]
+    lines = [
+        _top_border(right_width),
+        _version_line(driver_version, right_width, maca_version),
+    ]
 
     if not frame.devices:
+        inner = CORE_INNER + right_width
         lines.extend(
             (
-                "╞" + "═" * CORE_INNER + "╡",
-                _core_line("  No visible devices found"),
-                "╘" + "═" * CORE_INNER + "╛",
+                "╞" + "═" * inner + "╡",
+                _box_content("  No visible devices found", inner + 2),
+                "╘" + "═" * inner + "╛",
             )
         )
         return lines
 
-    lines.append(_header_top_divider(0))
+    lines.append(_header_top_divider(right_width))
     if compact:
-        lines.append(_header_line_compact(0))
+        lines.append(_header_line_compact(right_width))
     else:
-        lines.append(_header_line_one(0))
-        lines.append(_header_line_two(0))
+        lines.append(_header_line_one(right_width))
+        lines.append(_header_line_two(right_width))
     lines.append(_header_data_divider(right_width, draw_bars))
 
     for index, device in enumerate(frame.devices):
@@ -124,6 +132,8 @@ def render_device_panel(
             row = _device_row_compact(device)
             if draw_bars and right_width >= 3:
                 row += _device_bars(device, right_width, compact=True)[0]
+            elif right_width:
+                row += " " * (right_width - 1) + "│"
             lines.append(row)
         else:
             row_one = _device_row_one(device)
@@ -252,7 +262,9 @@ def render_host_panel(
     ]
     if len(frame.devices) > 1 and selected_devices:
         gpu_mem = _weighted_memory_percent(selected_devices)
-        gpu_util = _average_percent(device.gpu_util_percent for device in selected_devices)
+        gpu_util = _average_percent(
+            device.gpu_util_percent for device in selected_devices
+        )
         gpu_label = f"GPU {selected_gpu_index}"
     else:
         gpu_mem = aggregate_gpu_mem
@@ -276,10 +288,17 @@ def render_host_panel(
         width_right = len(load_average) + 4
         width_left = width - 2 - width_right
         cpu_bar = "[ {} ]".format(
-            _named_bar("CPU", cpu, width_left - 4, extra_text=f"UPTIME: {_uptime_text()}")
+            _named_bar(
+                "CPU", cpu, width_left - 4, extra_text=f"UPTIME: {_uptime_text()}"
+            )
         )
         memory_bar = "[ {} ]".format(
-            _named_bar("MEM", memory_pct, width_left - 4, extra_text=f"USED: {memory_used_text}")
+            _named_bar(
+                "MEM",
+                memory_pct,
+                width_left - 4,
+                extra_text=f"USED: {memory_used_text}",
+            )
         )
         swap_bar = "[ {} ]".format(_named_bar("SWP", swap_pct, width_right - 4))
         return [
@@ -293,14 +312,22 @@ def render_host_panel(
     bottom_rows = history.memory.render(CORE_INNER) + history.swap.render(CORE_INNER)
     top_rows[0] = _overlay(top_rows[0], f" {_load_average_text()} ")
     top_rows[1] = _overlay(top_rows[1], f" CPU: {_host_percent_text(cpu)} ")
-    bottom_rows[3] = _overlay(bottom_rows[3], f" MEM: {memory_used_text} ({_host_percent_text(memory_pct)}) ")
-    bottom_rows[4] = _overlay(bottom_rows[4], f" SWP: {swap_used_text} ({_host_percent_text(swap_pct)}) ")
+    bottom_rows[3] = _overlay(
+        bottom_rows[3], f" MEM: {memory_used_text} ({_host_percent_text(memory_pct)}) "
+    )
+    bottom_rows[4] = _overlay(
+        bottom_rows[4], f" SWP: {swap_used_text} ({_host_percent_text(swap_pct)}) "
+    )
 
     if right_inner:
         right_top = history.gpu_memory.render(right_inner)
         right_bottom = history.gpu_utilization.render(right_inner)
-        right_top[0] = _overlay(right_top[0], f" {gpu_label} MEM: {_host_percent_text(gpu_mem)} ")
-        right_bottom[4] = _overlay(right_bottom[4], f" {gpu_label} UTL: {_host_percent_text(gpu_util)} ")
+        right_top[0] = _overlay(
+            right_top[0], f" {gpu_label} MEM: {_host_percent_text(gpu_mem)} "
+        )
+        right_bottom[4] = _overlay(
+            right_bottom[4], f" {gpu_label} UTL: {_host_percent_text(gpu_util)} "
+        )
     else:
         right_top = right_bottom = [""] * 5
 
@@ -366,7 +393,13 @@ def render_process_panel(
     processes = _process_group_order(visible_processes(frame, state), state)
     inner = max(MIN_SCREEN_WIDTH - 2, width - 2)
     user_host = _user_host()
-    time_width = max(4, max((len(format_duration(process.runtime_seconds)) for process in processes), default=4))
+    time_width = max(
+        4,
+        max(
+            (len(format_duration(process.runtime_seconds)) for process in processes),
+            default=4,
+        ),
+    )
     host_memory_total = _host_memory_total()
     max_command_offset = max(
         (
@@ -376,7 +409,11 @@ def render_process_panel(
                 - max(
                     0,
                     inner
-                    - cell_width(_process_gpu_info(process, state=state, mark_selection=mark_selection)),
+                    - cell_width(
+                        _process_gpu_info(
+                            process, state=state, mark_selection=mark_selection
+                        )
+                    ),
                 ),
             )
             for process in processes
@@ -386,7 +423,9 @@ def render_process_panel(
     state.command_offset = max(0, min(state.command_offset, max_command_offset))
     top_border = _process_top_border(inner)
     lines = [top_border, _box_content(_process_title(inner, user_host), width)]
-    lines.append(_box_content(_process_header(inner, state, time_width=time_width), width))
+    lines.append(
+        _box_content(_process_header(inner, state, time_width=time_width), width)
+    )
     lines.append(_middle_border(inner))
     available_rows = None if height is None else max(1, height - len(lines) - 1)
 
@@ -407,19 +446,28 @@ def render_process_panel(
                 state.scroll_offset = state.selected_index - available_rows + 1
         shown = processes[state.scroll_offset : state.scroll_offset + available_rows]
         if not compact:
-            while len(shown) > 1 and _process_body_height(shown, compact=False) > available_rows:
+            while (
+                len(shown) > 1
+                and _process_body_height(shown, compact=False) > available_rows
+            ):
                 shown.pop()
     else:
         shown = processes
 
     if mark_selection:
-        state.selected_visible = any(process.selection_key == state.selected_key for process in shown)
+        state.selected_visible = any(
+            process.selection_key == state.selected_key for process in shown
+        )
         lines[0] = _process_top_border(inner)
 
     process_start = len(lines)
     prev_gpu_index: int | None = None
     for process in shown:
-        if not compact and prev_gpu_index is not None and prev_gpu_index != process.gpu_index:
+        if (
+            not compact
+            and prev_gpu_index is not None
+            and prev_gpu_index != process.gpu_index
+        ):
             lines.append("├" + "─" * inner + "┤")
         lines.append(
             _box_content(
@@ -443,7 +491,8 @@ def _process_body_height(processes: list[ProcessSnapshot], *, compact: bool) -> 
     if compact or not processes:
         return len(processes)
     groups = 1 + sum(
-        left.gpu_index != right.gpu_index for left, right in zip(processes, processes[1:])
+        left.gpu_index != right.gpu_index
+        for left, right in zip(processes, processes[1:])
     )
     return len(processes) + groups - 1
 
@@ -478,7 +527,9 @@ def render_main_screen(
     dense_devices = _uses_dense_device_grid(frame, compact=device_compact)
     selected_gpu_index = _selected_gpu_index(frame, state)
     lines: list[str] = [render_title(frame, width, error)]
-    lines.extend(render_device_panel(frame, width, state.layout, compact=device_compact))
+    lines.extend(
+        render_device_panel(frame, width, state.layout, compact=device_compact)
+    )
     if host_compact:
         lines.extend(render_host_panel(frame, width, compact=True, history=history))
     else:
@@ -577,7 +628,9 @@ def render_snapshot_screen(frame: FrameSnapshot, *, width: int = 120) -> Rendere
         lines,
         process_start=absolute_process_start,
         process_count=process_count,
-        process_keys=tuple(_process_row_keys(lines, absolute_process_start, processes).values()),
+        process_keys=tuple(
+            _process_row_keys(lines, absolute_process_start, processes).values()
+        ),
     )
 
 
@@ -594,10 +647,7 @@ def _process_row_keys(
         for row in range(max(0, process_start), len(lines))
         if _PROCESS_DATA_PREFIX_RE.match(lines[row]) is not None
     ]
-    return {
-        row: process.selection_key
-        for row, process in zip(rows, processes)
-    }
+    return {row: process.selection_key for row, process in zip(rows, processes)}
 
 
 def _layout_compaction(
@@ -655,7 +705,9 @@ def _top_border(right_width: int) -> str:
     return base
 
 
-def _version_line(driver_version: str, right_width: int, maca_version: str | None = None) -> str:
+def _version_line(
+    driver_version: str, right_width: int, maca_version: str | None = None
+) -> str:
     parts = [
         f"MXTOP {__version__}",
         f"Driver Version: {driver_version}",
@@ -673,7 +725,9 @@ def _version_line(driver_version: str, right_width: int, maca_version: str | Non
 
 
 def _header_top_divider(right_width: int) -> str:
-    base = "├" + "─" * LEFT_INNER + "┬" + "─" * MID_INNER + "┬" + "─" * RIGHT_INNER + "┤"
+    base = (
+        "├" + "─" * LEFT_INNER + "┬" + "─" * MID_INNER + "┬" + "─" * RIGHT_INNER + "┤"
+    )
     if right_width:
         base = base[:-1] + "─" * right_width + "┤"
     return base
@@ -701,7 +755,9 @@ def _header_line_compact(right_width: int) -> str:
 
 
 def _header_data_divider(right_width: int, draw_bars: bool) -> str:
-    base = "╞" + "═" * LEFT_INNER + "╪" + "═" * MID_INNER + "╪" + "═" * RIGHT_INNER + "╡"
+    base = (
+        "╞" + "═" * LEFT_INNER + "╪" + "═" * MID_INNER + "╪" + "═" * RIGHT_INNER + "╡"
+    )
     if right_width:
         connector = "╪" if draw_bars else "╡"
         base = base[:-1] + connector + "═" * (right_width - 1) + "╕"
@@ -709,7 +765,9 @@ def _header_data_divider(right_width: int, draw_bars: bool) -> str:
 
 
 def _row_divider(right_width: int, draw_bars: bool) -> str:
-    base = "├" + "─" * LEFT_INNER + "┼" + "─" * MID_INNER + "┼" + "─" * RIGHT_INNER + "┤"
+    base = (
+        "├" + "─" * LEFT_INNER + "┼" + "─" * MID_INNER + "┼" + "─" * RIGHT_INNER + "┤"
+    )
     if right_width:
         connector = "┼" if draw_bars else "┤"
         base = base[:-1] + connector + "─" * (right_width - 1) + "┤"
@@ -717,7 +775,9 @@ def _row_divider(right_width: int, draw_bars: bool) -> str:
 
 
 def _bottom_border(right_width: int) -> str:
-    base = "╘" + "═" * LEFT_INNER + "╧" + "═" * MID_INNER + "╧" + "═" * RIGHT_INNER + "╛"
+    base = (
+        "╘" + "═" * LEFT_INNER + "╧" + "═" * MID_INNER + "╧" + "═" * RIGHT_INNER + "╛"
+    )
     if right_width:
         base = base[:-1] + "╧" + "═" * (right_width - 1) + "╛"
     return base
@@ -727,7 +787,9 @@ def _device_row_one(device: DeviceSnapshot) -> str:
     name_text = device.name or "N/A"
     name = cell_ljust(_cell_tail_ellipsize(name_text, 19), 19)
     persistence = _on_off(device.persistence_mode)
-    bdf = cell_ljust(cell_ellipsize(device.bdf or device.uuid or "N/A", 16, marker=".."), 16)
+    bdf = cell_ljust(
+        cell_ellipsize(device.bdf or device.uuid or "N/A", 16, marker=".."), 16
+    )
     disp = _on_off(device.display_active)
     ecc = _ecc_text(device.ecc_errors)
     left = f" {device.index:>3}  {name} {cell_rjust(persistence, 4)} "
@@ -777,7 +839,9 @@ def _device_bars(
         left = (right_width - 6 + 1) // 2 - 1
         right = (right_width - 6) // 2 + 1
         top_right_label = "UTL" if compact else "MBW"
-        top_right_value = device.gpu_util_percent if compact else device.memory_bandwidth_util_percent
+        top_right_value = (
+            device.gpu_util_percent if compact else device.memory_bandwidth_util_percent
+        )
         top_right_extra = (
             _clock_text(device.gpu_clock_mhz)
             if compact
@@ -792,7 +856,9 @@ def _device_bars(
                 extra_text=format_compact_bytes(device.memory_used_bytes),
             )
             + " │ "
-            + _named_bar(top_right_label, top_right_value, right, extra_text=top_right_extra)
+            + _named_bar(
+                top_right_label, top_right_value, right, extra_text=top_right_extra
+            )
             + " │"
         )
         if compact:
@@ -806,7 +872,12 @@ def _device_bars(
                 extra_text=_clock_text(device.gpu_clock_mhz),
             )
             + " │ "
-            + _named_bar("PWR", _power_util(device), right, extra_text=_power_draw_text(device.power_w))
+            + _named_bar(
+                "PWR",
+                _power_util(device),
+                right,
+                extra_text=_power_draw_text(device.power_w),
+            )
             + " │"
         )
         return top, bot
@@ -836,7 +907,9 @@ def _device_bars(
 
 
 def _clock_text(value: float | None) -> str:
-    return "" if value is None or not math.isfinite(float(value)) else f"@ {value:.0f}MHz"
+    return (
+        "" if value is None or not math.isfinite(float(value)) else f"@ {value:.0f}MHz"
+    )
 
 
 def _power_draw_text(value: float | None) -> str:
@@ -857,7 +930,9 @@ def _device_memory_percent(device: DeviceSnapshot) -> float | None:
     return 100.0 * device.memory_used_bytes / device.memory_total_bytes
 
 
-def _named_bar(label: str, value: float | None, width: int, *, extra_text: str = "") -> str:
+def _named_bar(
+    label: str, value: float | None, width: int, *, extra_text: str = ""
+) -> str:
     if width <= 0:
         return ""
     suffix_text = _bar_suffix_text(value)
@@ -883,7 +958,9 @@ def _bar_suffix_text(value: float | None) -> str:
 
 
 def _host_top_border(right_width: int) -> str:
-    base = "╞" + "═" * LEFT_INNER + "╧" + "═" * MID_INNER + "╧" + "═" * RIGHT_INNER + "╡"
+    base = (
+        "╞" + "═" * LEFT_INNER + "╧" + "═" * MID_INNER + "╧" + "═" * RIGHT_INNER + "╡"
+    )
     if right_width:
         base = base[:-1] + "╪" + "═" * (right_width - 1) + "╡"
     return base
@@ -941,7 +1018,9 @@ def _process_top_border(inner_width: int) -> str:
     return _top_border_simple(inner_width)
 
 
-def _process_action_line(width: int, state: UiState, processes: list[ProcessSnapshot]) -> str:
+def _process_action_line(
+    width: int, state: UiState, processes: list[ProcessSnapshot]
+) -> str:
     caution = "!CAUTION: SUPERUSER LOGGED-IN." if _is_superuser() else ""
     hint = ""
     if not state.readonly and _has_actionable_selection(state, processes):
@@ -969,7 +1048,11 @@ def _has_actionable_selection(state: UiState, processes: list[ProcessSnapshot]) 
     if state.tagged_pids.intersection(live_pids):
         return True
     selected = next(
-        (process for process in processes if process.selection_key == state.selected_key),
+        (
+            process
+            for process in processes
+            if process.selection_key == state.selected_key
+        ),
         None,
     )
     return (
@@ -1065,7 +1148,11 @@ def _host_memory_total() -> int | None:
 
 
 def _average_percent(values) -> float | None:
-    known = [float(value) for value in values if value is not None and math.isfinite(float(value))]
+    known = [
+        float(value)
+        for value in values
+        if value is not None and math.isfinite(float(value))
+    ]
     if not known:
         return None
     return sum(known) / len(known)
@@ -1101,14 +1188,20 @@ def _process_title(width: int, user_host: str) -> str:
     return f"{left}{' ' * (width - left_width - user_host_width - 1)}{user_host} "
 
 
-def _process_header(width: int, state: UiState | None = None, *, time_width: int = 4) -> str:
+def _process_header(
+    width: int, state: UiState | None = None, *, time_width: int = 4
+) -> str:
     gpu_header = " GPU     PID      USER  GPU-MEM %SM %GMBW  "
     host_header = "%CPU  %MEM  " + "TIME".rjust(time_width) + "  COMMAND"
     host_offset = max(0, state.command_offset if state is not None else 0)
     command_start = 14 + time_width
-    visible_host_header = host_header[host_offset:] if host_offset < command_start else "COMMAND"
+    visible_host_header = (
+        host_header[host_offset:] if host_offset < command_start else "COMMAND"
+    )
     base = (gpu_header + visible_host_header).ljust(width)
-    if state is not None and (state.process_sort.value != "default" or state.reverse_sort):
+    if state is not None and (
+        state.process_sort.value != "default" or state.reverse_sort
+    ):
         columns = {
             "default": ("GPU", False),
             "pid": ("PID", False),
@@ -1132,10 +1225,15 @@ def _process_header(width: int, state: UiState | None = None, *, time_width: int
     return ellipsize(base, width).ljust(width)
 
 
-def _process_group_order(processes: list[ProcessSnapshot], state: UiState) -> list[ProcessSnapshot]:
+def _process_group_order(
+    processes: list[ProcessSnapshot], state: UiState
+) -> list[ProcessSnapshot]:
     if state.process_sort.value != "default" or state.reverse_sort:
         return processes
-    return sorted(processes, key=lambda process: (process.gpu_index, process.user or "", process.pid))
+    return sorted(
+        processes,
+        key=lambda process: (process.gpu_index, process.user or "", process.pid),
+    )
 
 
 def _process_row(
@@ -1163,7 +1261,13 @@ def _process_gpu_info(
     selected = state is not None and process.selection_key == state.selected_key
     tagged = state is not None and process.pid in state.tagged_pids
     linked = state is not None and _same_host_process_as_selection(process, state)
-    marker = ">" if selected and mark_selection else "=" if (tagged or linked) and mark_selection else " "
+    marker = (
+        ">"
+        if selected and mark_selection
+        else "="
+        if (tagged or linked) and mark_selection
+        else " "
+    )
     process_type = (process.process_type or "-").replace("C+G", "X")
     process_type = cell_slice(process_type, 0, 1)
     user_text = cell_rjust(cell_ellipsize(process.user or "N/A", 7, marker="+"), 7)
@@ -1190,7 +1294,9 @@ def _same_host_process_as_selection(process: ProcessSnapshot, state: UiState) ->
     if process.create_time is None or len(parts) < 3:
         return True
     try:
-        return abs(process.create_time - float(parts[-1])) <= PROCESS_CREATE_TIME_TOLERANCE
+        return (
+            abs(process.create_time - float(parts[-1])) <= PROCESS_CREATE_TIME_TOLERANCE
+        )
     except ValueError:
         return True
 
@@ -1201,7 +1307,9 @@ def _cell_tail_ellipsize(text: str, width: int, marker: str = "..") -> str:
     marker_width = cell_width(marker)
     if width <= marker_width:
         return cell_slice(text, max(0, cell_width(text) - width), width)
-    return marker + cell_slice(text, cell_width(text) - (width - marker_width), width - marker_width)
+    return marker + cell_slice(
+        text, cell_width(text) - (width - marker_width), width - marker_width
+    )
 
 
 def _process_host_info(
@@ -1218,7 +1326,9 @@ def _process_host_info(
     )
 
 
-def _host_memory_percent(process: ProcessSnapshot, host_memory_total: int | None) -> str:
+def _host_memory_percent(
+    process: ProcessSnapshot, host_memory_total: int | None
+) -> str:
     if process.memory_util_percent is not None:
         return format_percent_value(process.memory_util_percent)
     if process.host_memory_bytes is None or not host_memory_total:

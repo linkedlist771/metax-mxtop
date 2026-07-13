@@ -5,7 +5,11 @@ from mxtop.formatting import format_bar
 from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 from mxtop.rendering import _colorize_line, colorize_screen, render_once
 from mxtop.ui.classify import dense_device_cell_spans, host_graph_context
-from mxtop.ui.panels import render_device_panel, render_main_screen, render_snapshot_screen
+from mxtop.ui.panels import (
+    render_device_panel,
+    render_main_screen,
+    render_snapshot_screen,
+)
 from mxtop.ui.state import LayoutMode, UiState
 from mxtop.ui.text import cell_width
 
@@ -14,7 +18,9 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 def _many_devices(count=16):
     return [
-        DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=12, memory_util_percent=8)
+        DeviceSnapshot(
+            index=i, name="MXC500", gpu_util_percent=12, memory_util_percent=8
+        )
         for i in range(count)
     ]
 
@@ -149,7 +155,9 @@ def test_render_once_survives_nan_and_inf_values():
 
 def test_compact_device_data_region_extends_to_full_width():
     devices = [
-        DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=10, memory_util_percent=10)
+        DeviceSnapshot(
+            index=i, name="MXC500", gpu_util_percent=10, memory_util_percent=10
+        )
         for i in range(8)
     ]
     lines = render_device_panel(
@@ -163,7 +171,7 @@ def test_compact_device_data_region_extends_to_full_width():
     assert all(len(line) == 120 for line in device_lines)
 
 
-def test_wide_device_headers_stay_fixed_while_data_uses_requested_width():
+def test_device_panel_uses_requested_width_with_or_without_bars():
     frame = FrameSnapshot(
         devices=[
             DeviceSnapshot(
@@ -177,15 +185,15 @@ def test_wide_device_headers_stay_fixed_while_data_uses_requested_width():
                 power_w=200,
                 power_limit_w=350,
             ),
-            DeviceSnapshot(index=1, name="MXC500", gpu_util_percent=12, memory_util_percent=8),
+            DeviceSnapshot(
+                index=1, name="MXC500", gpu_util_percent=12, memory_util_percent=8
+            ),
         ],
         processes=[],
     )
     for width in (79, 100, 120, 160, 200):
         lines = render_device_panel(frame, width=width, compact=False)
-        assert all(len(line) == 79 for line in lines[:5])
-        data_width = width if width >= 100 else 79
-        assert all(len(line) == data_width for line in lines[5:])
+        assert all(cell_width(line) == width for line in lines)
 
 
 def test_render_once_host_panel_does_not_duplicate_right_vbar():
@@ -195,7 +203,10 @@ def test_render_once_host_panel_does_not_duplicate_right_vbar():
     )
     rendered = render_main_screen(frame, width=120)
     context = host_graph_context(rendered.lines)
-    coloured = [_colorize_line(row, line, context.get(row)) for row, line in enumerate(rendered.lines)]
+    coloured = [
+        _colorize_line(row, line, context.get(row))
+        for row, line in enumerate(rendered.lines)
+    ]
     for line in coloured:
         plain = ANSI_RE.sub("", line)
         if "GPU MEM:" in plain or "GPU UTL:" in plain:
@@ -210,7 +221,7 @@ def test_colorized_large_fleet_rows_keep_exact_terminal_width_at_all_layouts():
             colored = colorize_screen(frame, rendered.lines)
             plain = [_strip_ansi(line) for line in colored]
 
-            assert all(cell_width(line) in {0, 79, width} for line in plain)
+            assert all(cell_width(line) in {0, width} for line in plain)
             assert all(cell_width(line) <= width for line in plain)
             host_rows = [line for line in plain if " CPU:" in line or " MEM:" in line]
             assert all(not line.endswith("││") for line in host_rows)
@@ -218,7 +229,11 @@ def test_colorized_large_fleet_rows_keep_exact_terminal_width_at_all_layouts():
 
 def test_render_once_shows_bars_on_wide_layout():
     frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83)],
+        devices=[
+            DeviceSnapshot(
+                index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83
+            )
+        ],
         processes=[],
     )
 
@@ -253,7 +268,11 @@ def test_colorful_bars_use_multiple_spectrum_colors():
 
 def test_render_once_hides_bars_on_narrow_layout():
     frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83)],
+        devices=[
+            DeviceSnapshot(
+                index=0, name="MXC500", gpu_util_percent=71, memory_util_percent=83
+            )
+        ],
         processes=[],
     )
 
@@ -268,10 +287,27 @@ def test_render_once_orders_processes_by_gpu_id_then_pid():
     frame = FrameSnapshot(
         devices=[],
         processes=[
-            ProcessSnapshot(gpu_index=2, pid=20, gpu_memory_bytes=900 * 1024**2, command="gpu2-large"),
-            ProcessSnapshot(gpu_index=0, pid=10, gpu_memory_bytes=100 * 1024**2, command="gpu0-small"),
-            ProcessSnapshot(gpu_index=0, pid=11, gpu_memory_bytes=200 * 1024**2, command="gpu0-large"),
-            ProcessSnapshot(gpu_index=1, pid=12, gpu_memory_bytes=300 * 1024**2, command="gpu1-mid"),
+            ProcessSnapshot(
+                gpu_index=2,
+                pid=20,
+                gpu_memory_bytes=900 * 1024**2,
+                command="gpu2-large",
+            ),
+            ProcessSnapshot(
+                gpu_index=0,
+                pid=10,
+                gpu_memory_bytes=100 * 1024**2,
+                command="gpu0-small",
+            ),
+            ProcessSnapshot(
+                gpu_index=0,
+                pid=11,
+                gpu_memory_bytes=200 * 1024**2,
+                command="gpu0-large",
+            ),
+            ProcessSnapshot(
+                gpu_index=1, pid=12, gpu_memory_bytes=300 * 1024**2, command="gpu1-mid"
+            ),
         ],
     )
 
@@ -286,7 +322,13 @@ def test_render_once_includes_host_and_process_gpu_columns():
     frame = FrameSnapshot(
         devices=[],
         processes=[
-            ProcessSnapshot(gpu_index=0, pid=10, gpu_util_percent=33, cpu_percent=22, command="python train.py"),
+            ProcessSnapshot(
+                gpu_index=0,
+                pid=10,
+                gpu_util_percent=33,
+                cpu_percent=22,
+                command="python train.py",
+            ),
         ],
     )
 
@@ -309,7 +351,11 @@ def test_render_once_emits_ansi_color_when_enabled():
                 memory_bandwidth_util_percent=64,
             )
         ],
-        processes=[ProcessSnapshot(gpu_index=0, pid=10, user="alice", gpu_memory_bytes=100 * 1024**2)],
+        processes=[
+            ProcessSnapshot(
+                gpu_index=0, pid=10, user="alice", gpu_memory_bytes=100 * 1024**2
+            )
+        ],
     )
 
     output = render_once(frame, width=140, use_color=True)
@@ -325,7 +371,12 @@ def test_render_once_colors_compact_device_rows_by_combined_load():
     utils = [4] * 8 + [94] * 8
     frame = FrameSnapshot(
         devices=[
-            DeviceSnapshot(index=i, name="MXC500", gpu_util_percent=value, memory_util_percent=value)
+            DeviceSnapshot(
+                index=i,
+                name="MXC500",
+                gpu_util_percent=value,
+                memory_util_percent=value,
+            )
             for i, value in enumerate(utils)
         ],
         processes=[],
@@ -333,8 +384,12 @@ def test_render_once_colors_compact_device_rows_by_combined_load():
 
     rendered = render_main_screen(frame, UiState(layout=LayoutMode.COMPACT), width=170)
     output = "\n".join(colorize_screen(frame, rendered.lines))
-    low_line = next(line for line in output.splitlines() if "│   0 " in _strip_ansi(line))
-    hot_line = next(line for line in output.splitlines() if "│   8 " in _strip_ansi(line))
+    low_line = next(
+        line for line in output.splitlines() if "│   0 " in _strip_ansi(line)
+    )
+    hot_line = next(
+        line for line in output.splitlines() if "│   8 " in _strip_ansi(line)
+    )
 
     assert "GPU Fan Temp Perf" in output
     assert "\x1b[1m\x1b[32m   0 " in low_line
@@ -447,7 +502,9 @@ def test_render_once_colors_only_process_gpu_id_by_device_load():
 def test_compact_16_gpu_wide_terminal_keeps_one_vertical_device_list():
     frame = FrameSnapshot(devices=_many_devices(), processes=[])
 
-    lines = render_device_panel(frame, width=170, layout=LayoutMode.COMPACT, compact=True)
+    lines = render_device_panel(
+        frame, width=170, layout=LayoutMode.COMPACT, compact=True
+    )
 
     assert sum(line.count("GPU Fan Temp") for line in lines) == 1
     assert any("│   0 " in line for line in lines)
@@ -458,7 +515,9 @@ def test_compact_16_gpu_wide_terminal_keeps_one_vertical_device_list():
 def test_compact_16_gpu_narrow_terminal_keeps_one_vertical_device_list():
     frame = FrameSnapshot(devices=_many_devices(), processes=[])
 
-    lines = render_device_panel(frame, width=120, layout=LayoutMode.COMPACT, compact=True)
+    lines = render_device_panel(
+        frame, width=120, layout=LayoutMode.COMPACT, compact=True
+    )
     output = "\n".join(lines)
 
     assert "│  15 " in output
@@ -479,7 +538,9 @@ def test_dense_32_and_64_gpu_fleets_fit_adaptive_exact_width_grids():
             spans = [span for line in lines for span in dense_device_cell_spans(line)]
 
             assert all(len(line) == width for line in lines)
-            assert [gpu_index for _start, _end, gpu_index in spans] == list(range(count))
+            assert [gpu_index for _start, _end, gpu_index in spans] == list(
+                range(count)
+            )
             assert f"GPUs: {count}" in lines[2]
             assert len(lines) <= 28
 
@@ -553,7 +614,9 @@ def test_dense_fleet_cells_receive_independent_ansi_load_colors():
 
 
 def test_render_once_omits_ansi_color_when_disabled():
-    frame = FrameSnapshot(devices=[DeviceSnapshot(index=0, name="MXC500")], processes=[])
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0, name="MXC500")], processes=[]
+    )
 
     output = render_once(frame, width=140, use_color=False)
 
@@ -562,14 +625,20 @@ def test_render_once_omits_ansi_color_when_disabled():
 
 def test_render_once_merges_device_bottom_border_into_host_top():
     frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10)],
+        devices=[
+            DeviceSnapshot(
+                index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10
+            )
+        ],
         processes=[],
     )
 
     lines = render_main_screen(frame, width=79).lines
 
     host_top = next(i for i, line in enumerate(lines) if "Load Average:" in line) - 1
-    assert lines[host_top].startswith("╞"), "host panel should start with the merged border"
+    assert lines[host_top].startswith("╞"), (
+        "host panel should start with the merged border"
+    )
     assert not lines[host_top - 1].startswith("╘"), (
         "device bottom border must merge into the host top border (nvitop overlay)"
     )
@@ -577,15 +646,23 @@ def test_render_once_merges_device_bottom_border_into_host_top():
 
 def test_render_once_host_panel_has_five_rows_below_time_axis():
     frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10)],
+        devices=[
+            DeviceSnapshot(
+                index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10
+            )
+        ],
         processes=[],
     )
 
     lines = render_main_screen(frame, width=79).lines
 
     axis = next(i for i, line in enumerate(lines) if "╴120s├" in line)
-    bottom = next(i for i, line in enumerate(lines[axis:], start=axis) if line.startswith("╘"))
-    assert bottom - axis - 1 == 5, "host panel should have 4 MEM rows + 1 SWP row below the axis"
+    bottom = next(
+        i for i, line in enumerate(lines[axis:], start=axis) if line.startswith("╘")
+    )
+    assert bottom - axis - 1 == 5, (
+        "host panel should have 4 MEM rows + 1 SWP row below the axis"
+    )
     assert "Load Average:" in lines[axis - 5]
     assert " CPU: " in lines[axis - 4]
     assert " MEM: " in lines[bottom - 2]
@@ -594,7 +671,11 @@ def test_render_once_host_panel_has_five_rows_below_time_axis():
 
 def test_render_once_extends_time_axis_labels_on_wide_terminals():
     frame = FrameSnapshot(
-        devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10)],
+        devices=[
+            DeviceSnapshot(
+                index=0, name="MXC500", gpu_util_percent=10, memory_util_percent=10
+            )
+        ],
         processes=[],
     )
 
@@ -602,7 +683,9 @@ def test_render_once_extends_time_axis_labels_on_wide_terminals():
     axis = next(line for line in lines if "╴120s├" in line)
     assert axis.count("╴30s├") == 2
     assert axis.count("╴60s├") == 2
-    assert "╴180s├" not in axis.split("┼")[0], "left axis keeps the classic 79-col labels"
+    assert "╴180s├" not in axis.split("┼")[0], (
+        "left axis keeps the classic 79-col labels"
+    )
 
 
 def test_render_once_colors_host_history_graphs_by_section():
@@ -614,9 +697,15 @@ def test_render_once_colors_host_history_graphs_by_section():
         now = 0.0
         for _ in range(60):
             now += 1.1
-            history.sample(cpu=80, memory=60, swap=30, gpu_memory=70, gpu_utilization=90, now=now)
+            history.sample(
+                cpu=80, memory=60, swap=30, gpu_memory=70, gpu_utilization=90, now=now
+            )
         frame = FrameSnapshot(
-            devices=[DeviceSnapshot(index=0, name="MXC500", gpu_util_percent=90, memory_util_percent=70)],
+            devices=[
+                DeviceSnapshot(
+                    index=0, name="MXC500", gpu_util_percent=90, memory_util_percent=70
+                )
+            ],
             processes=[],
         )
 
