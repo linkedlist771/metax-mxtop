@@ -719,7 +719,11 @@ def test_render_once_colors_host_history_graphs_by_section():
         cpu_row = next(i for i, line in enumerate(plain) if "Load Average:" in line) + 2
         mem_row = cpu_row + 4
 
-        assert "\x1b[36m⣿" in lines[cpu_row], "CPU graph should be cyan"
-        assert "\x1b[35m" in lines[mem_row], "MEM graph should be magenta"
+        assert re.search(r"\x1b\[36m[\u2800-\u28ff]", lines[cpu_row]), (
+            "CPU graph should be cyan"
+        )
+        assert re.search(r"\x1b\[35m[\u2800-\u28ff]", lines[mem_row]), (
+            "MEM graph should be magenta"
+        )
     finally:
         panels.reset_host_history()
