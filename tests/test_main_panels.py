@@ -12,6 +12,7 @@ from mxtop.ui.panels import (
     render_snapshot_screen,
 )
 from mxtop.ui.state import LayoutMode, ProcessSort, UiState
+from mxtop.ui.text import cell_width
 
 
 def _device(index: int, *, used_gib: int = 8, total_gib: int = 64) -> DeviceSnapshot:
@@ -121,15 +122,17 @@ def test_compact_host_is_two_unboxed_rows(monkeypatch):
     assert all(len(line) == 120 for line in lines)
 
 
-def test_compact_host_does_not_sample_history(monkeypatch):
+def test_compact_host_keeps_sampling_history(monkeypatch):
     history = HostHistory()
     monkeypatch.setattr(panels, "_host_metrics", lambda: (25.0, "8.00GiB", 50.0, "0.00GiB", 0.0))
     monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
 
     render_host_panel(_frame(), 120, compact=True, history=history)
 
-    assert history._last_flush is None
-    assert all(not samples for samples in history._buffer.values())
+    assert history._last_flush is not None
+    assert history._buffer["cpu"] == [25.0]
+    assert history._buffer["memory"] == [50.0]
+    assert history._buffer["gpu_utilization"] == [42.0]
 
 
 def test_process_sort_arrow_and_compact_grouping():
@@ -168,12 +171,44 @@ def test_process_panel_signal_hint_tracks_actionable_selection(monkeypatch):
     monkeypatch.setattr(panels, "_is_superuser", lambda: False)
     monkeypatch.setattr(panels.getpass, "getuser", lambda: "alice")
 
-    lines, _, _ = render_process_panel(frame, state, 120)
-    assert "(Press ^C(INT)/T(TERM)/K(KILL) to send signals)" in lines[0]
+    screen = render_main_screen(frame, state, width=120)
+    title_row = next(index for index, line in enumerate(screen.lines) if "Processes:" in line)
+    assert screen.lines[title_row - 1].startswith("╒")
+    assert screen.lines[title_row - 1].endswith("╕")
+    assert "(Press ^C(INT)/T(TERM)/K(KILL) to send signals)" in screen.lines[title_row - 2]
 
     state.readonly = True
-    lines, _, _ = render_process_panel(frame, state, 120)
-    assert "send signals" not in lines[0]
+    screen = render_main_screen(frame, state, width=120)
+    assert not any("send signals" in line for line in screen.lines)
+
+
+def test_same_host_process_on_another_gpu_uses_link_marker_independently_of_tags():
+    first = _process(0, 100)
+    second = _process(1, 100)
+    first.create_time = second.create_time = 123.0
+    frame = FrameSnapshot(devices=[_device(0), _device(1)], processes=[first, second])
+    state = UiState(selected_key=first.selection_key)
+
+    lines, _, _ = render_process_panel(frame, state, 120, compact=True)
+
+    assert any(line.startswith("│>") and "  0 " in line for line in lines)
+    assert any(line.startswith("│=") and "  1 " in line for line in lines)
+    assert state.tagged_pids == set()
+
+
+def test_main_panels_are_terminal_cell_exact_with_cjk_telemetry():
+    device = _device(0)
+    device.name = "沐曦超长加速卡名称"
+    device.compute_mode = "默认计算模式"
+    process = _process(0, 100)
+    process.user = "开发者用户"
+    process.command = "python 训练.py --模型 大模型"
+    frame = FrameSnapshot(devices=[device], processes=[process])
+
+    for width in (79, 120):
+        screen = render_main_screen(frame, UiState(), width=width)
+        assert all(cell_width(line) in {0, width, 79} for line in screen.lines)
+        assert all(cell_width(line) <= width for line in screen.lines)
 
 
 def test_process_header_and_host_info_scroll_together():

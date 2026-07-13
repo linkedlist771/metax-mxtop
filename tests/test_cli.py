@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -53,7 +56,9 @@ def test_cli_json_replaces_non_finite_telemetry_with_null(capsys):
         def snapshot(self):
             return FrameSnapshot(
                 devices=[DeviceSnapshot(index=0, gpu_util_percent=float("nan"))],
-                processes=[ProcessSnapshot(gpu_index=0, pid=1, cpu_percent=float("inf"))],
+                processes=[
+                    ProcessSnapshot(gpu_index=0, pid=1, cpu_percent=float("inf"))
+                ],
             )
 
     rc = main(["--json"], backend=NonFiniteBackend())
@@ -83,7 +88,9 @@ def test_cli_reports_snapshot_errors_without_traceback(capsys):
     assert "MXTOP ERROR: telemetry unavailable" in captured.err
 
 
-def test_cli_once_resamples_process_cpu_when_first_snapshot_is_unknown(monkeypatch, capsys):
+def test_cli_once_resamples_process_cpu_when_first_snapshot_is_unknown(
+    monkeypatch, capsys
+):
     class TwoFrameBackend:
         name = "two-frame"
 
@@ -116,7 +123,9 @@ def test_cli_once_resamples_process_cpu_when_first_snapshot_is_unknown(monkeypat
     assert "  50 " in captured.out
 
 
-def test_cli_json_resamples_process_cpu_when_first_snapshot_is_unknown(monkeypatch, capsys):
+def test_cli_json_resamples_process_cpu_when_first_snapshot_is_unknown(
+    monkeypatch, capsys
+):
     class TwoFrameBackend:
         name = "two-frame"
 
@@ -184,7 +193,16 @@ def test_cli_rejects_too_small_interval(capsys):
 def test_cli_applies_threshold_flags_to_rendering(capsys):
     try:
         rc = main(
-            ["--once", "--no-color", "--gpu-util-thresh", "5", "70", "--mem-util-thresh", "5", "70"],
+            [
+                "--once",
+                "--no-color",
+                "--gpu-util-thresh",
+                "5",
+                "70",
+                "--mem-util-thresh",
+                "5",
+                "70",
+            ],
             backend=StaticBackend(),
         )
         assert rc == 0
@@ -208,6 +226,32 @@ def test_cli_reads_mxtop_threshold_env(monkeypatch, capsys):
         rendering.reset_intensity_thresholds()
 
 
+@pytest.mark.parametrize(
+    "value",
+    ("inf,80", "10.5,80", "1e1,80", "10,80,bad", "garbage", "10"),
+)
+def test_cli_ignores_malformed_threshold_environments(value):
+    assert cli._parse_threshold_env(value) is None
+
+
+def test_cli_threshold_environment_accepts_two_strict_integers():
+    assert cli._parse_threshold_env("80,10") == (10, 80)
+
+
+def test_cli_thresholds_accept_equal_boundaries():
+    assert cli._parse_threshold_env("42,42") == (42, 42)
+    assert cli._coerce_threshold([42.0, 42.0]) == (42, 42)
+
+
+def test_cli_malformed_threshold_environment_never_crashes(monkeypatch, capsys):
+    monkeypatch.setenv("MXTOP_GPU_UTILIZATION_THRESHOLDS", "inf,80")
+
+    rc = main(["--once", "--no-color"], backend=StaticBackend())
+
+    assert rc == 0
+    assert "MXTOP" in capsys.readouterr().out
+
+
 def test_cli_accepts_style_flags(capsys):
     try:
         rc = main(["--once", "--colorful", "--light"], backend=StaticBackend())
@@ -227,7 +271,9 @@ def test_cli_force_color_emits_ansi_when_piped(capsys, monkeypatch):
     assert "\x1b[" in out
 
 
-def test_cli_empty_force_color_environment_value_still_forces_color(capsys, monkeypatch):
+def test_cli_empty_force_color_environment_value_still_forces_color(
+    capsys, monkeypatch
+):
     monkeypatch.delenv("ANSI_COLORS_DISABLED", raising=False)
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("FORCE_COLOR", "")
@@ -257,11 +303,14 @@ def test_cli_color_precedence_matrix(monkeypatch, argv, environment, tty, expect
         monkeypatch.setenv(name, value)
     args = build_parser().parse_args(["--once", *argv])
 
-    assert cli._should_use_color(
-        no_color=args.no_color,
-        force_color=args.force_color,
-        stdout_is_tty=tty,
-    ) is expected
+    assert (
+        cli._should_use_color(
+            no_color=args.no_color,
+            force_color=args.force_color,
+            stdout_is_tty=tty,
+        )
+        is expected
+    )
 
 
 def test_cli_plain_output_is_default_when_piped(capsys, monkeypatch):
@@ -286,6 +335,32 @@ def test_cli_accepts_nvitop_short_aliases():
     assert args.compute and args.only_graphics
 
 
+def test_cli_help_has_stable_program_name_and_groups(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--help"])
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert output.startswith("usage: mxtop ")
+    assert "coloring:" in output
+    assert "device filtering:" in output
+    assert "process filtering:" in output
+    assert "remote mode:" in output
+
+
+def test_cli_non_tty_width_uses_nvitop_fallback(monkeypatch):
+    observed = {}
+
+    def fake_terminal_size(fallback):
+        observed["fallback"] = fallback
+        return os.terminal_size(fallback)
+
+    monkeypatch.setattr(cli.shutil, "get_terminal_size", fake_terminal_size)
+
+    assert cli._snapshot_width() == 79
+    assert observed["fallback"] == (79, 24)
+
+
 def test_cli_once_and_monitor_are_mutually_exclusive(capsys):
     try:
         build_parser().parse_args(["--once", "--monitor"])
@@ -304,6 +379,92 @@ def test_cli_json_and_once_are_mutually_exclusive(capsys):
     else:
         raise AssertionError("parser accepted mutually exclusive output modes")
     assert "not allowed with argument" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ("--once", "--json", "--monitor"))
+def test_cli_remote_mode_is_mutually_exclusive_with_local_modes(mode, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--remote-mode", mode, "--nodes", "node-a"], backend=StaticBackend())
+
+    assert exc_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ("--nodes", "node-a", "--once"),
+        ("--nodes-file", "nodes.txt", "--once"),
+        ("--port", "9000", "--once"),
+        ("--bind", "0.0.0.0", "--once"),
+        ("--remote-mxsmi-path", "/opt/mx-smi", "--once"),
+        ("--open", "--once"),
+    ),
+)
+def test_cli_remote_arguments_require_remote_mode(argv, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(list(argv), backend=StaticBackend())
+
+    assert exc_info.value.code == 2
+    assert "requires --remote-mode" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "local_args",
+    (
+        ("--backend", "mxsmi"),
+        ("--back", "mxsmi"),
+        ("--only", "0"),
+        ("--compute",),
+        ("--comp",),
+        ("--graphics",),
+        ("--no-color",),
+        ("--gpu-util-thresh", "10", "80"),
+    ),
+)
+def test_cli_remote_mode_rejects_local_only_arguments(local_args, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--remote-mode", "--nodes", "node-a", *local_args])
+
+    assert exc_info.value.code == 2
+    assert "is not supported with --remote-mode" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("port", ("0", "65536", "-1"))
+def test_cli_rejects_invalid_remote_ports(port, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--remote-mode", "--nodes", "node-a", f"--port={port}"])
+
+    assert exc_info.value.code == 2
+    assert "port must be between 1 and 65535" in capsys.readouterr().err
+
+
+def test_cli_reports_remote_inventory_errors_without_traceback(tmp_path, capsys):
+    missing = tmp_path / "missing-nodes.txt"
+
+    rc = main(["--remote-mode", "--nodes-file", str(missing)])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert captured.err.startswith("MXTOP ERROR: ")
+    assert "missing-nodes.txt" in captured.err
+
+
+def test_cli_reports_remote_startup_errors_on_stderr(monkeypatch, capsys):
+    from mxtop.remote import app as remote_app
+
+    def fail_remote(*_args, **_kwargs):
+        raise RuntimeError("remote dependency unavailable")
+
+    monkeypatch.setattr(remote_app, "run_remote", fail_remote)
+
+    rc = main(["--remote-mode", "--nodes", "node-a"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert captured.err == "MXTOP ERROR: remote dependency unavailable\n"
 
 
 def test_cli_rejects_non_finite_intervals(capsys):
@@ -379,7 +540,9 @@ def test_cli_monitor_uses_environment_mode_and_readonly(monkeypatch):
     monkeypatch.setattr(
         cli,
         "run_tui",
-        lambda backend, interval, options: captured.update(interval=interval, options=options) or 0,
+        lambda backend, interval, options: (
+            captured.update(interval=interval, options=options) or 0
+        ),
     )
 
     rc = main(["--monitor"], backend=StaticBackend())
@@ -419,3 +582,72 @@ def test_cli_ascii_translates_box_and_graph_characters(capsys):
     assert rc == 0
     assert "╒" not in output
     assert "│" not in output
+
+
+def test_cli_context_filter_reports_unavailable_backend_telemetry(capsys):
+    class UnknownContextBackend:
+        name = "mx-smi"
+
+        def snapshot(self):
+            return FrameSnapshot(
+                devices=[DeviceSnapshot(index=0)],
+                processes=[ProcessSnapshot(gpu_index=0, pid=123, cpu_percent=0.0)],
+                backend=self.name,
+            )
+
+    rc = main(["--json", "--compute"], backend=UnknownContextBackend())
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert (
+        "process context filtering is unavailable for backend 'mx-smi'" in captured.err
+    )
+    assert "process type telemetry was not reported" in captured.err
+
+
+def test_cli_context_filter_allows_an_idle_backend(capsys):
+    class IdleBackend:
+        name = "mx-smi"
+
+        def snapshot(self):
+            return FrameSnapshot(
+                devices=[DeviceSnapshot(index=0)], processes=[], backend=self.name
+            )
+
+    rc = main(["--json", "--compute"], backend=IdleBackend())
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["processes"] == []
+
+
+def test_cli_context_filter_rejects_backend_known_not_to_support_graphics(capsys):
+    class ComputeOnlyBackend:
+        name = "compute-only"
+        process_context_types = frozenset({"C"})
+
+        def snapshot(self):
+            return FrameSnapshot(
+                devices=[DeviceSnapshot(index=0)], processes=[], backend=self.name
+            )
+
+    rc = main(["--json", "--graphics"], backend=ComputeOnlyBackend())
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "graphics context telemetry is not supported" in captured.err
+
+
+def test_python_m_mxtop_runs_the_cli_module():
+    result = subprocess.run(
+        [sys.executable, "-m", "mxtop", "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"mxtop {cli.__version__}\n"
+    assert result.stderr == ""

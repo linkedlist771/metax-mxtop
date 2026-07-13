@@ -14,7 +14,8 @@ import subprocess
 import sys
 from typing import Iterable
 
-from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
+import PIL
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin, features
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -46,6 +47,15 @@ SOURCE_NAME_KEY = "mxtop-source-name"
 THEME_KEY = "mxtop-theme"
 FONT_KEY = "mxtop-font"
 RENDER_CONFIG_KEY = "mxtop-render-config-sha256"
+PIXEL_HASH_KEY = "mxtop-pixel-sha256"
+PILLOW_VERSION_KEY = "mxtop-pillow-version"
+FREETYPE_VERSION_KEY = "mxtop-freetype-version"
+FONT_DIR = PROJECT_ROOT / "assets" / "fonts"
+FONT_LICENSE = FONT_DIR / "LICENSE-Liberation-Fonts.txt"
+CANONICAL_REGULAR_FONT = FONT_DIR / "LiberationMono-Regular.ttf"
+CANONICAL_BOLD_FONT = FONT_DIR / "LiberationMono-Bold.ttf"
+CANONICAL_PILLOW_VERSION = "11.3.0"
+BRAILLE_RENDERER_VERSION = "bitmap-2x4-v1"
 
 THEMES = {
     "dark": {
@@ -100,7 +110,11 @@ class FontSpec:
 
     @property
     def label(self) -> str:
-        return f"{self.path}:{self.index}"
+        try:
+            path = self.path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+        except ValueError:
+            path = str(self.path)
+        return f"{path}:{self.index}"
 
 
 @dataclass(frozen=True, **DATACLASS_SLOTS)
@@ -145,6 +159,11 @@ _SYMBOL_FONT_CANDIDATES = (
     FontSpec(Path("/usr/share/fonts/truetype/freefont/FreeMono.ttf")),
 )
 
+_CANONICAL_FONTS = {
+    "regular": FontSpec(CANONICAL_REGULAR_FONT),
+    "bold": FontSpec(CANONICAL_BOLD_FONT),
+}
+
 
 def _env_font(name: str) -> FontSpec | None:
     value = os.environ.get(name)
@@ -175,8 +194,15 @@ def _fontconfig(pattern: str) -> FontSpec | None:
     return FontSpec(path, int(index_text or "0"))
 
 
-def discover_font(kind: str = "regular") -> FontSpec | None:
-    """Resolve a usable font without assuming a particular operating system."""
+def discover_font(kind: str = "regular", *, canonical: bool = True) -> FontSpec | None:
+    """Resolve a canonical bundled font or an explicitly noncanonical font."""
+    if canonical:
+        spec = _CANONICAL_FONTS.get(kind)
+        if spec is None:
+            return None
+        if not spec.path.is_file():
+            raise FileNotFoundError(f"canonical preview font is missing: {spec.path}")
+        return spec
     if kind == "bold":
         env_name = "MXTOP_PREVIEW_BOLD_FONT"
         candidates = _BOLD_FONT_CANDIDATES
@@ -196,6 +222,13 @@ def discover_font(kind: str = "regular") -> FontSpec | None:
         if candidate.path.is_file():
             return candidate
     return _fontconfig(pattern)
+
+
+def _resolved_fonts(*, canonical: bool) -> tuple[FontSpec | None, FontSpec | None, FontSpec | None]:
+    regular = discover_font("regular", canonical=canonical)
+    bold = discover_font("bold", canonical=canonical) or regular
+    symbol = None if canonical else (discover_font("symbols", canonical=False) or regular)
+    return regular, bold, symbol
 
 
 def _load_font(spec: FontSpec | None, font_size: int):
@@ -230,6 +263,28 @@ def source_digest(output: str) -> str:
     return hashlib.sha256(output.encode("utf-8")).hexdigest()
 
 
+def pixel_digest(image: Image.Image) -> str:
+    rgb = image.convert("RGB")
+    digest = hashlib.sha256(f"RGB:{rgb.width}x{rgb.height}\0".encode("ascii"))
+    digest.update(rgb.tobytes())
+    return digest.hexdigest()
+
+
+def rasterizer_versions() -> dict[str, str]:
+    return {
+        "pillow": PIL.__version__,
+        "freetype": features.version("freetype2") or "unknown",
+    }
+
+
+def _require_canonical_pillow() -> None:
+    if PIL.__version__ != CANONICAL_PILLOW_VERSION:
+        raise RuntimeError(
+            "canonical preview rendering requires "
+            f"Pillow=={CANONICAL_PILLOW_VERSION}; found Pillow=={PIL.__version__}",
+        )
+
+
 @lru_cache(maxsize=None)
 def _font_fingerprint(spec: FontSpec | None) -> str:
     if spec is None:
@@ -250,12 +305,14 @@ def render_config_digest(
 ) -> str:
     renderer_source = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     payload = {
+        "braille_renderer": BRAILLE_RENDERER_VERSION,
         "font_size": font_size,
         "fonts": [
             _font_fingerprint(regular_spec),
             _font_fingerprint(bold_spec),
             _font_fingerprint(symbol_spec),
         ],
+        "rasterizer": rasterizer_versions(),
         "renderer": renderer_source,
         "theme": THEMES[theme_name],
     }
@@ -296,14 +353,15 @@ def render_to_png(
     *,
     source_name: str = "",
     font_size: int = 18,
+    canonical_fonts: bool = True,
 ) -> None:
     theme = THEMES[theme_name]
-    regular_spec = discover_font("regular")
-    bold_spec = discover_font("bold") or regular_spec
-    symbol_spec = discover_font("symbols") or regular_spec
+    if canonical_fonts:
+        _require_canonical_pillow()
+    regular_spec, bold_spec, symbol_spec = _resolved_fonts(canonical=canonical_fonts)
     font = _load_font(regular_spec, font_size)
     bold_font = _load_font(bold_spec, font_size)
-    symbol_font = _load_font(symbol_spec, font_size)
+    symbol_font = _load_font(symbol_spec or regular_spec, font_size)
     char_width = max(1, round(float(font.getlength("M"))))
     line_height = font_size + 6
 
@@ -341,7 +399,9 @@ def render_to_png(
                     for column, char in enumerate(part):
                         cell_x = run_x + char_width * column
                         fraction = _BLOCK_FRACTIONS.get(char)
-                        if fraction is None:
+                        if 0x2800 <= ord(char) <= 0x28FF and canonical_fonts:
+                            _draw_braille(draw, cell_x, y, char, char_width, font_size, fg)
+                        elif fraction is None:
                             draw.text((cell_x, y), char, fill=fg, font=symbol_font)
                         else:
                             block_width = max(1, round(char_width * fraction))
@@ -359,6 +419,9 @@ def render_to_png(
     metadata.add_text(SOURCE_NAME_KEY, source_name)
     metadata.add_text(THEME_KEY, theme_name)
     metadata.add_text(FONT_KEY, regular_spec.label if regular_spec is not None else "Pillow default")
+    metadata.add_text(PILLOW_VERSION_KEY, PIL.__version__)
+    metadata.add_text(FREETYPE_VERSION_KEY, rasterizer_versions()["freetype"])
+    metadata.add_text(PIXEL_HASH_KEY, pixel_digest(image))
     metadata.add_text(
         RENDER_CONFIG_KEY,
         render_config_digest(theme_name, font_size, regular_spec, bold_spec, symbol_spec),
@@ -371,17 +434,18 @@ def asset_is_fresh(target: Path, output: str, theme: str) -> bool:
     if not target.is_file():
         return False
     try:
-        regular_spec = discover_font("regular")
-        bold_spec = discover_font("bold") or regular_spec
-        symbol_spec = discover_font("symbols") or regular_spec
+        regular_spec, bold_spec, symbol_spec = _resolved_fonts(canonical=True)
         with Image.open(target) as image:
             return (
                 image.info.get(SOURCE_HASH_KEY) == source_digest(output)
                 and image.info.get(THEME_KEY) == theme
+                and image.info.get(PILLOW_VERSION_KEY) == PIL.__version__
+                and image.info.get(FREETYPE_VERSION_KEY) == rasterizer_versions()["freetype"]
                 and image.info.get(FONT_KEY)
                 == (regular_spec.label if regular_spec is not None else "Pillow default")
                 and image.info.get(RENDER_CONFIG_KEY)
                 == render_config_digest(theme, 18, regular_spec, bold_spec, symbol_spec)
+                and image.info.get(PIXEL_HASH_KEY) == pixel_digest(image)
                 and image.width > 0
                 and image.height > 0
             )
@@ -421,7 +485,15 @@ def main() -> int:
     parser.add_argument("--scenario", choices=sorted(FRAME_BUILDERS), default="small")
     parser.add_argument("--all", action="store_true", help="render every README preview asset")
     parser.add_argument("--check", action="store_true", help="check embedded source digests without writing")
+    parser.add_argument(
+        "--custom-fonts",
+        action="store_true",
+        help="use MXTOP_PREVIEW_*_FONT or host fonts for a noncanonical output",
+    )
     args = parser.parse_args()
+
+    if args.custom_fonts and (args.all or args.check or _matching_spec(args.output) is not None):
+        parser.error("--custom-fonts requires a noncanonical --output and cannot be checked")
 
     if args.all:
         stale = [spec.target for spec in PREVIEW_SPECS if not render_preview_spec(spec, check=args.check)]
@@ -447,13 +519,46 @@ def main() -> int:
             return 0
         print(f"stale preview asset: {target}", file=sys.stderr)
         return 1
-    render_to_png(output, theme, target, source_name=str(args.output))
+    render_to_png(
+        output,
+        theme,
+        target,
+        source_name=str(args.output),
+        canonical_fonts=not args.custom_fonts,
+    )
     print(f"wrote {target}")
     return 0
 
 
 def _dim(color: tuple[int, int, int], bg: tuple[int, int, int]) -> tuple[int, int, int]:
     return tuple(int(component * 0.6 + background * 0.4) for component, background in zip(color, bg))
+
+
+def _draw_braille(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    character: str,
+    cell_width: int,
+    font_size: int,
+    color: tuple[int, int, int],
+) -> None:
+    bits = ord(character) - 0x2800
+    if bits == 0:
+        return
+    dot_size = max(1, cell_width // 6)
+    x_positions = (x + max(1, cell_width // 4), x + max(1, 3 * cell_width // 4))
+    y_positions = tuple(y + max(1, round((row + 0.55) * (font_size + 2) / 4)) for row in range(4))
+    dot_bits = ((0x01, 0x08), (0x02, 0x10), (0x04, 0x20), (0x40, 0x80))
+    for row, row_bits in enumerate(dot_bits):
+        for column, bit in enumerate(row_bits):
+            if bits & bit:
+                dot_x = x_positions[column]
+                dot_y = y_positions[row]
+                draw.rectangle(
+                    (dot_x, dot_y, dot_x + dot_size - 1, dot_y + dot_size - 1),
+                    fill=color,
+                )
 
 
 if __name__ == "__main__":

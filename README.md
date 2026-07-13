@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
+  <img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview.png" alt="mxtop terminal preview"/>
 </p>
 
 <p align="center"><em>Colors follow nvitop's intensity model: each device summary uses its dominant GPU or memory load, while the detailed <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bars retain metric-specific colors (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>
@@ -30,17 +30,19 @@
     <td align="center"><strong>Heavy</strong> — saturation across the cluster</td>
   </tr>
   <tr>
-    <td><img src="assets/mxtop-preview-idle.png" alt="mxtop idle status preview"/></td>
-    <td><img src="assets/mxtop-preview-mixed.png" alt="mxtop mixed status preview"/></td>
-    <td><img src="assets/mxtop-preview-heavy.png" alt="mxtop heavy status preview"/></td>
+    <td><img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-idle.png" alt="mxtop idle status preview"/></td>
+    <td><img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-mixed.png" alt="mxtop mixed status preview"/></td>
+    <td><img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-heavy.png" alt="mxtop heavy status preview"/></td>
   </tr>
 </table>
 
 <p align="center"><em>Hosts with up to 16 GPUs retain the detailed nvitop-style list. Larger 32/64-GPU fleets use an adaptive overview grid in auto, compact, and one-shot views, while full mode keeps every detailed field.</em></p>
 
 <p align="center">
-  <img src="assets/mxtop-preview-many.png" alt="mxtop adaptive 64-GPU fleet overview"/>
+  <img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-many.png" alt="mxtop adaptive 64-GPU fleet overview"/>
 </p>
+
+Preview and gallery images use fixed-time deterministic synthetic MetaX-shaped telemetry so every state is reproducible. Live monitoring data still comes exclusively from the selected MetaX backend; optional fields in the fixtures illustrate presentation states rather than proving that every backend reports them.
 
 ## Features
 
@@ -148,7 +150,7 @@ mxtop --graphics
 mxtop --only-graphics
 ```
 
-`--compute` and `--graphics` include processes with those contexts, including mixed `X` / `C+G` processes. Their uppercase `--only-*` forms require an exact compute-only or graphics-only type. Multiple supplied filters are combined.
+`--compute` and `--graphics` include processes with those contexts, including mixed `X` / `C+G` processes. Their uppercase `--only-*` forms require an exact compute-only or graphics-only type. Multiple supplied filters are combined. If a backend reports processes without context-type telemetry, as some `mx-smi` versions do, requesting one of these filters exits with a stable error instead of silently excluding every process.
 
 Backend and layout options:
 
@@ -284,7 +286,7 @@ pip install metax-mxtop
 mxtop --version
 ```
 
-Release automation is tag-driven:
+Branch and pull-request workflows run tests and build the offline wheelhouse. A push to `main` also creates a commit-addressed prerelease; versioned GitHub and PyPI publication is tag-driven:
 
 1. Bump `pyproject.toml`, `src/mxtop/__init__.py`, and the local package entry in `uv.lock`.
 2. Regenerate the preview, gallery, and showcase assets and run their `--check` commands.
@@ -293,20 +295,35 @@ Release automation is tag-driven:
 5. Create a new semver tag, for example `v0.1.22`.
 6. Push the commit and that tag.
 
-GitHub Actions then builds the wheelhouse, creates or updates the GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
+GitHub Actions then builds the wheelhouse, creates or updates the versioned GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
 
 ## More previews
 
-See [GALLERY.md](GALLERY.md) for a tile of rendered stdout across common CLI parameter combinations — colour palettes, layout modes, filters, custom intensity thresholds, multi-GPU layouts, and JSON output.
+See the [output gallery](https://github.com/linkedlist771/metax-mxtop/blob/main/GALLERY.md) and [screen showcase](https://github.com/linkedlist771/metax-mxtop/blob/main/SHOWCASE.md) for rendered stdout and deterministic secondary-screen fixtures across palettes, layouts, filters, edge telemetry, and 32/64-GPU fleets.
 
 ## Development
 
 Run tests and lint locally:
 
 ```bash
-uv run --locked --with pytest --with psutil --with pillow pytest -q
+uv run --locked --with pytest --with psutil --with pillow==11.3.0 pytest -q
 uv run --locked --with ruff ruff check .
 uv run --locked --with build python -m build
 ```
 
-More background is available in [INTRO.md](INTRO.md).
+Canonical assets use Pillow 11.3.0, the vendored Liberation Mono fonts, and an algorithmic Braille renderer. Their metadata fingerprints the Pillow and FreeType versions as well as the font bytes and renderer source. Regenerate the three canonical asset sets with:
+
+```bash
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/generate_preview.py --all
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_gallery.py
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_showcase.py
+```
+
+To create an explicitly noncanonical preview with local fonts, set `MXTOP_PREVIEW_FONT`, `MXTOP_PREVIEW_BOLD_FONT`, and optionally `MXTOP_PREVIEW_SYMBOL_FONT`, then pass `--custom-fonts` with a noncanonical output path:
+
+```bash
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/generate_preview.py \
+  --custom-fonts --output /tmp/mxtop-custom.png
+```
+
+More background is available in the [usage guide](https://github.com/linkedlist771/metax-mxtop/blob/main/INTRO.md).

@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from mxtop.filters import apply_filters  # noqa: E402
+from mxtop.jsonutil import sanitize_json_value  # noqa: E402
 from mxtop._compat import DATACLASS_SLOTS  # noqa: E402
 from mxtop.models import FrameSnapshot  # noqa: E402
 from mxtop.rendering import (  # noqa: E402
@@ -59,6 +60,7 @@ VARIANTS: tuple[Variant, ...] = (
     Variant("once-default", "mxtop --once", "Default colored snapshot with mixed MetaX load.", "three"),
     Variant("once-no-color", "mxtop --once --no-color", "Uncolored Unicode snapshot for logs and pipes.", "three", color=False),
     Variant("json-default", "mxtop --json", "Complete valid JSON snapshot from a one-GPU fixture.", "single-idle", width=110, color=False, kind="json"),
+    Variant("json-nonfinite", "mxtop --json", "Nonfinite backend values normalized to strict JSON nulls.", "nan", width=110, color=False, kind="json"),
     Variant("once-colorful", "mxtop --once --colorful", "Spectrum-like utilization bars.", "mixed4", colorful=True),
     Variant("once-light", "mxtop --once --light", "Snapshot rendered for a light terminal theme.", "three", light=True),
     Variant("monitor-full", "mxtop --monitor full", "Representative interactive full-mode frame.", "mixed4", kind="tui", layout=LayoutMode.FULL, height=40),
@@ -73,9 +75,12 @@ VARIANTS: tuple[Variant, ...] = (
     Variant("once-gpu-thresh", "mxtop --once --gpu-util-thresh 30 60", "Custom GPU intensity thresholds at 30% and 60%.", "mixed4", gpu_threshold=(30, 60)),
     Variant("once-mem-thresh", "mxtop --once --mem-util-thresh 20 50", "Custom memory intensity thresholds at 20% and 50%.", "mixed4", mem_threshold=(20, 50)),
     Variant("once-heavy", "mxtop --once", "Four-GPU saturation fixture.", "heavy"),
+    Variant("once-single-heavy", "mxtop --once", "Single-GPU saturation and maximum-value fixture.", "single-heavy"),
     Variant("once-idle", "mxtop --once", "Three-GPU idle fixture.", "idle"),
     Variant("once-many-8", "mxtop --once", "Eight-GPU mixed-load fixture at 170 columns.", "eight", width=170),
     Variant("once-many-16", "mxtop --once", "Sixteen-GPU mixed-load fixture at 180 columns.", "sixteen", width=180),
+    Variant("once-many-32", "mxtop --once", "Adaptive 32-GPU fleet fixture at 180 columns.", "thirty-two", width=180),
+    Variant("once-many-64", "mxtop --once", "Adaptive 64-GPU fleet fixture at 180 columns.", "sixty-four", width=180),
     Variant("once-missing", "mxtop --once", "Unavailable backend fields rendered as N/A.", "missing"),
 )
 
@@ -120,7 +125,12 @@ def render_variant_text(variant: Variant) -> str:
     frame = _filtered(FRAME_BUILDERS[variant.frame_name](), variant)
     with utc_timezone():
         if variant.kind == "json":
-            return json.dumps(frame.to_dict(), indent=2, sort_keys=True, allow_nan=False)
+            return json.dumps(
+                sanitize_json_value(frame.to_dict()),
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
         if variant.kind == "tui":
             screen = render_main_screen(
                 frame,
@@ -165,21 +175,21 @@ def render_all(*, check: bool = False, output_dir: Path = GALLERY_DIR) -> list[s
 
 def gallery_markdown() -> str:
     groups = (
-        ("Snapshot modes", ("once-default", "once-no-color", "json-default")),
+        ("Snapshot modes", ("once-default", "once-no-color", "json-default", "json-nonfinite")),
         ("Color and palette", ("once-colorful", "once-light")),
         ("Interactive layouts", ("monitor-full", "monitor-compact")),
         ("Device and owner filters", ("once-only", "once-user", "once-pid")),
         ("Process-type filters", ("once-compute", "once-only-compute", "once-graphics", "once-only-graphics")),
         ("Custom intensity thresholds", ("once-gpu-thresh", "once-mem-thresh")),
-        ("Load profiles", ("once-idle", "once-heavy")),
-        ("Multi-GPU fixtures", ("once-many-8", "once-many-16")),
+        ("Load profiles", ("once-idle", "once-single-heavy", "once-heavy")),
+        ("Multi-GPU fixtures", ("once-many-8", "once-many-16", "once-many-32", "once-many-64")),
         ("Missing telemetry", ("once-missing",)),
     )
     by_slug = {variant.slug: variant for variant in VARIANTS}
     sections = [
         "# mxtop Output Gallery\n",
-        "Every image is generated from fixed-time canonical MetaX telemetry. PNG metadata records a digest of the exact rendered text.\n",
-        "Re-render with ``uv run --locked --with pillow --with psutil python scripts/render_gallery.py``; verify freshness with the same command plus ``--check``.\n",
+        "Every image is generated from fixed-time deterministic synthetic MetaX-shaped telemetry. PNG metadata records a digest of the exact rendered text.\n",
+        "Re-render with ``uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_gallery.py``; verify freshness with the same command plus ``--check``.\n",
     ]
     for title, slugs in groups:
         sections.extend((f"## {title}\n", "| Command | Preview |", "| --- | --- |"))

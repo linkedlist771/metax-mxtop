@@ -535,19 +535,23 @@ def _colorize_host_line(line: str, host_context: tuple[str, float | None, bool] 
     section, right_value, right_is_memory = host_context or (None, None, False)
     section_color = _HOST_SECTION_COLORS.get(section or "")
     out = [_style("│", DIM, _dim_fg())]
-    if len(pieces) > 1:
-        label_color = _host_left_color(pieces[1])
-        out.append(_style_host_section(pieces[1], label_color, section_color or label_color))
-        out.append(_style("│", DIM, _dim_fg()))
-    if len(pieces) > 2:
-        right_text = pieces[2]
-        right_color = _gpu_metric_color(right_text) if "GPU " in right_text else FG_WHITE
-        graph_color = _intensity_color(right_value, memory=right_is_memory) if right_value is not None else right_color
-        out.append(_style_host_section(right_text, right_color, graph_color))
-        out.append(_style("│", DIM, _dim_fg()))
-    for extra in pieces[3:]:
-        if not extra:
-            continue
-        out.append(_style(extra, FG_WHITE))
+    # Drop the empty sentinels around a normal ``│...│`` row.  Treating the
+    # trailing sentinel as a second cell used to append a duplicate final bar
+    # on the one-column, 79-character host graph.
+    cells = pieces[1:-1] if pieces[-1] == "" else pieces[1:]
+    for index, text in enumerate(cells):
+        if index == 0:
+            label_color = _host_left_color(text)
+            out.append(_style_host_section(text, label_color, section_color or label_color))
+        elif index == 1:
+            right_color = _gpu_metric_color(text) if "GPU " in text else FG_WHITE
+            graph_color = (
+                _intensity_color(right_value, memory=right_is_memory)
+                if right_value is not None
+                else right_color
+            )
+            out.append(_style_host_section(text, right_color, graph_color))
+        else:
+            out.append(_style(text, FG_WHITE))
         out.append(_style("│", DIM, _dim_fg()))
     return "".join(out)

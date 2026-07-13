@@ -62,6 +62,29 @@ def test_visible_devices_resolve_indices_uuid_prefixes_and_bus_ids():
         DeviceSnapshot(index=2, uuid="GPU-bbbb", bdf="0000:02:00.0"),
     ]
 
-    assert resolve_visible_device_indices(devices, ["2", "GPU-aaa"]) == {0, 2}
+    assert resolve_visible_device_indices(devices, ["0", "2"]) == {0, 2}
+    assert resolve_visible_device_indices(devices, ["GPU-aaa", "GPU-bbb"]) == {0, 2}
     assert resolve_visible_device_indices(devices, ["0000:01"]) == {0}
     assert resolve_visible_device_indices(devices, []) == set()
+
+
+def test_visible_devices_stop_at_invalid_or_mixed_identifier():
+    devices = [
+        DeviceSnapshot(index=0, uuid="GPU-aaaa"),
+        DeviceSnapshot(index=1, uuid="GPU-bbbb"),
+    ]
+
+    assert resolve_visible_device_indices(devices, ["0", "9", "1"]) == {0}
+    assert resolve_visible_device_indices(devices, ["invalid", "1"]) == set()
+    assert resolve_visible_device_indices(devices, ["0", "GPU-bbbb"]) == {0}
+
+
+def test_visible_devices_reject_duplicate_or_ambiguous_identifiers():
+    devices = [
+        DeviceSnapshot(index=0, uuid="GPU-aaaa"),
+        DeviceSnapshot(index=1, uuid="GPU-aaab"),
+    ]
+
+    assert resolve_visible_device_indices(devices, ["0", "0"]) == set()
+    assert resolve_visible_device_indices(devices, ["GPU-aaa"]) == set()
+    assert resolve_visible_device_indices(devices, ["GPU-aaaa", "gpu-AAAA"]) == set()

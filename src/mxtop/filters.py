@@ -6,6 +6,55 @@ from dataclasses import replace
 from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 
 
+def requested_process_contexts(
+    *,
+    compute: bool = False,
+    only_compute: bool = False,
+    graphics: bool = False,
+    only_graphics: bool = False,
+) -> frozenset[str]:
+    contexts: set[str] = set()
+    if compute or only_compute:
+        contexts.add("C")
+    if graphics or only_graphics:
+        contexts.add("G")
+    return frozenset(contexts)
+
+
+def validate_process_contexts(
+    frame: FrameSnapshot,
+    *,
+    requested: frozenset[str],
+    supported: frozenset[str] | None = None,
+) -> None:
+    if not requested:
+        return
+    if supported is not None:
+        normalized_supported = {value.upper() for value in supported}
+        if "X" in normalized_supported:
+            normalized_supported.update({"C", "G"})
+        missing = requested.difference(normalized_supported)
+        if missing:
+            labels = {"C": "compute", "G": "graphics"}
+            unavailable = ", ".join(
+                labels.get(value, value) for value in sorted(missing)
+            )
+            backend = frame.backend or "selected"
+            raise RuntimeError(
+                f"process context filtering is unavailable for backend {backend!r}: "
+                f"{unavailable} context telemetry is not supported"
+            )
+    if frame.processes and any(
+        not process.process_type or not process.process_type.strip()
+        for process in frame.processes
+    ):
+        backend = frame.backend or "selected"
+        raise RuntimeError(
+            f"process context filtering is unavailable for backend {backend!r}: "
+            "process type telemetry was not reported"
+        )
+
+
 def normalize_indices(indices: Iterable[int] | None) -> set[int] | None:
     if indices is None:
         return None
@@ -28,29 +77,64 @@ def resolve_visible_device_indices(
     devices: list[DeviceSnapshot],
     identifiers: Iterable[str] | None,
 ) -> set[int] | None:
-    """Resolve visible-device ordinals or UUID prefixes against a sampled frame."""
+    """Resolve a CUDA-style visibility list against a sampled frame.
+
+    Integer indices and textual identifiers (UUID or BDF prefixes) are each
+    supported, but a visibility list cannot mix the two forms.  Resolution
+    stops at the first invalid identifier, matching CUDA enumeration, while a
+    duplicate or ambiguous mapping invalidates the entire list.
+    """
     if identifiers is None:
         return None
-    resolved: set[int] = set()
+
+    devices_by_index = {device.index: device for device in devices}
+    resolved: list[int] = []
+    presented: set[str] = set()
+    identifier_kind: str | None = None
     for raw_identifier in identifiers:
         identifier = raw_identifier.strip()
         if not identifier:
-            continue
-        try:
-            resolved.add(int(identifier))
-            continue
-        except ValueError:
-            pass
-        normalized = identifier.lower()
-        for device in devices:
-            candidates = (device.uuid, device.bdf)
-            if any(value and value.lower().startswith(normalized) for value in candidates):
-                resolved.add(device.index)
+            break
+
+        is_index = identifier.isdigit()
+        kind = "index" if is_index else "text"
+        if identifier_kind is None:
+            identifier_kind = kind
+        elif kind != identifier_kind:
+            break
+
+        presented_key = identifier if is_index else identifier.lower()
+        if presented_key in presented:
+            return set()
+        presented.add(presented_key)
+
+        if is_index:
+            index = int(identifier)
+            if index not in devices_by_index:
                 break
-    return resolved
+        else:
+            normalized = identifier.lower()
+            matches = [
+                device.index
+                for device in devices
+                if any(
+                    value and value.lower().startswith(normalized)
+                    for value in (device.uuid, device.bdf)
+                )
+            ]
+            if len(matches) != 1:
+                break
+            index = matches[0]
+
+        if index in resolved:
+            return set()
+        resolved.append(index)
+    return set(resolved)
 
 
-def filter_devices(devices: list[DeviceSnapshot], only: set[int] | None = None) -> list[DeviceSnapshot]:
+def filter_devices(
+    devices: list[DeviceSnapshot], only: set[int] | None = None
+) -> list[DeviceSnapshot]:
     if only is None:
         return list(devices)
     return [device for device in devices if device.index in only]
@@ -70,7 +154,9 @@ def filter_processes(
     only_graphics: bool = False,
 ) -> list[ProcessSnapshot]:
     result: list[ProcessSnapshot] = []
-    normalized_types = {value.upper() for value in process_types} if process_types else None
+    normalized_types = (
+        {value.upper() for value in process_types} if process_types else None
+    )
     for process in processes:
         if device_indices is not None and process.gpu_index not in device_indices:
             continue

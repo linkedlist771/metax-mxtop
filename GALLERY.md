@@ -1,8 +1,8 @@
 # mxtop Output Gallery
 
-Every image is generated from fixed-time canonical MetaX telemetry. PNG metadata records a digest of the exact rendered text.
+Every image is generated from fixed-time deterministic synthetic MetaX-shaped telemetry. PNG metadata records a digest of the exact rendered text.
 
-Re-render with ``uv run --locked --with pillow --with psutil python scripts/render_gallery.py``; verify freshness with the same command plus ``--check``.
+Re-render with ``uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_gallery.py``; verify freshness with the same command plus ``--check``.
 
 ## Snapshot modes
 
@@ -11,6 +11,7 @@ Re-render with ``uv run --locked --with pillow --with psutil python scripts/rend
 | `mxtop --once`<br><sub>Default colored snapshot with mixed MetaX load.</sub> | ![once-default](assets/gallery/once-default.png) |
 | `mxtop --once --no-color`<br><sub>Uncolored Unicode snapshot for logs and pipes.</sub> | ![once-no-color](assets/gallery/once-no-color.png) |
 | `mxtop --json`<br><sub>Complete valid JSON snapshot from a one-GPU fixture.</sub> | ![json-default](assets/gallery/json-default.png) |
+| `mxtop --json`<br><sub>Nonfinite backend values normalized to strict JSON nulls.</sub> | ![json-nonfinite](assets/gallery/json-nonfinite.png) |
 
 ## Color and palette
 
@@ -55,6 +56,7 @@ Re-render with ``uv run --locked --with pillow --with psutil python scripts/rend
 | Command | Preview |
 | --- | --- |
 | `mxtop --once`<br><sub>Three-GPU idle fixture.</sub> | ![once-idle](assets/gallery/once-idle.png) |
+| `mxtop --once`<br><sub>Single-GPU saturation and maximum-value fixture.</sub> | ![once-single-heavy](assets/gallery/once-single-heavy.png) |
 | `mxtop --once`<br><sub>Four-GPU saturation fixture.</sub> | ![once-heavy](assets/gallery/once-heavy.png) |
 
 ## Multi-GPU fixtures
@@ -63,6 +65,8 @@ Re-render with ``uv run --locked --with pillow --with psutil python scripts/rend
 | --- | --- |
 | `mxtop --once`<br><sub>Eight-GPU mixed-load fixture at 170 columns.</sub> | ![once-many-8](assets/gallery/once-many-8.png) |
 | `mxtop --once`<br><sub>Sixteen-GPU mixed-load fixture at 180 columns.</sub> | ![once-many-16](assets/gallery/once-many-16.png) |
+| `mxtop --once`<br><sub>Adaptive 32-GPU fleet fixture at 180 columns.</sub> | ![once-many-32](assets/gallery/once-many-32.png) |
+| `mxtop --once`<br><sub>Adaptive 64-GPU fleet fixture at 180 columns.</sub> | ![once-many-64](assets/gallery/once-many-64.png) |
 
 ## Missing telemetry
 

@@ -23,6 +23,12 @@ classifiers = [
 ]
 dependencies = ["psutil>=5.6"]
 
+[project.urls]
+Homepage = "https://github.com/linkedlist771/metax-mxtop"
+Repository = "https://github.com/linkedlist771/metax-mxtop.git"
+Documentation = "https://github.com/linkedlist771/metax-mxtop#readme"
+Issues = "https://github.com/linkedlist771/metax-mxtop/issues"
+
 [project.optional-dependencies]
 remote = ["asyncssh>=2.14"]
 

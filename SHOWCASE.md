@@ -1,8 +1,8 @@
 # mxtop Preview Showcase
 
-These screenshots use the same fixed-time canonical MetaX telemetry as the CLI gallery. Each PNG embeds a digest of its rendered source text.
+These screenshots use the same fixed-time deterministic synthetic MetaX-shaped telemetry as the CLI gallery. Each PNG embeds a digest of its rendered source text.
 
-Re-render with ``uv run --locked --with pillow --with psutil python scripts/render_showcase.py``; add ``--check`` to verify freshness.
+Re-render with ``uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_showcase.py``; add ``--check`` to verify freshness.
 
 ## Interactive TUI
 
@@ -13,6 +13,18 @@ Re-render with ``uv run --locked --with pillow --with psutil python scripts/rend
 | 142x36 viewport, 4 heavily loaded GPUs | ![142x36 viewport, 4 heavily loaded GPUs](assets/showcase/tui-142x036-heavy-4gpu.png) |
 | 172x44 viewport, 16 mixed-load GPUs | ![172x44 viewport, 16 mixed-load GPUs](assets/showcase/tui-172x044-many-16gpu.png) |
 | 180x44 viewport, 64-GPU fleet overview | ![180x44 viewport, 64-GPU fleet overview](assets/showcase/tui-180x044-many-64gpu.png) |
+
+## Secondary Screens
+
+| Scenario | Preview |
+| --- | --- |
+| Help screen with nvitop-compatible key groups | ![Help screen with nvitop-compatible key groups](assets/showcase/screen-help-118x030.png) |
+| Process environment with empty, long, and multiline values | ![Process environment with empty, long, and multiline values](assets/showcase/screen-environment-120x018.png) |
+| Stable process-environment permission error | ![Stable process-environment permission error](assets/showcase/screen-environment-error-100x008.png) |
+| GPU process tree with host ancestors and direct children | ![GPU process tree with host ancestors and direct children](assets/showcase/screen-tree-140x018.png) |
+| Empty GPU process-tree state | ![Empty GPU process-tree state](assets/showcase/screen-tree-empty-100x008.png) |
+| Rolling per-process CPU, memory, and GPU metrics | ![Rolling per-process CPU, memory, and GPU metrics](assets/showcase/screen-metrics-120x030.png) |
+| Multi-process signal confirmation with all choices | ![Multi-process signal confirmation with all choices](assets/showcase/dialog-signal-120x034.png) |
 
 ## Command Output
 

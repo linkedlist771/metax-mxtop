@@ -102,6 +102,26 @@ def test_process_tree_matches_nvitop_direct_child_scope_and_sibling_order():
     assert all(entry.pid != 33 for entry in entries)
 
 
+def test_process_tree_orders_independent_roots_by_pid_not_username():
+    frame = FrameSnapshot(
+        devices=[DeviceSnapshot(index=0)],
+        processes=[
+            ProcessSnapshot(gpu_index=0, pid=30, user="amy", create_time=30.0),
+            ProcessSnapshot(gpu_index=0, pid=10, user="zoe", create_time=10.0),
+        ],
+    )
+
+    entries = build_process_tree(
+        frame,
+        [
+            HostProcessInfo(30, 0, "amy", "late pid", 30.0),
+            HostProcessInfo(10, 0, "zoe", "early pid", 10.0),
+        ],
+    )
+
+    assert [entry.pid for entry in entries] == [10, 30]
+
+
 def test_secondary_screens_fit_width_and_expose_selectable_rows():
     frame = _frame()
     process = frame.processes[0]
@@ -121,6 +141,17 @@ def test_secondary_screens_fit_width_and_expose_selectable_rows():
     assert environment.selectable_count == 2
     assert all(len(line) == 100 for line in tree_view.lines)
     assert tree_view.selection_ids[0].startswith("tree:30:")
+
+
+def test_help_screen_includes_project_license_without_visible_readonly_suffixes():
+    view = render_help_screen(100, readonly=True)
+    rendered = "\n".join(view.lines)
+
+    assert view.lines[0].startswith("mxtop ")
+    assert "mxtop contributors, 2026" in view.lines[0]
+    assert "Released under the MIT License." in view.lines[1]
+    assert "disabled by --readonly" not in rendered
+    assert all(cell_width(line) == 100 for line in view.lines)
 
 
 def test_environment_screen_matches_error_copy_and_scrolls_command_and_rows():
@@ -228,10 +259,64 @@ def test_process_metrics_samples_meta_x_values_and_renders_four_graphs():
 
     assert any("Process:" in line for line in view.lines)
     assert any("MAX CPU:" in line for line in view.lines)
+    assert any("MAX GPU-MEM:" in line and "/" in line for line in view.lines)
     assert any("GPU-MEM:" in line for line in view.lines)
     assert any("HOST-MEM:" in line for line in view.lines)
+    assert any("MAX HOST-MEM:" in line and "/" in line for line in view.lines)
     assert any("GPU-SM:" in line for line in view.lines)
+    assert any("MAX GPU-SM:" in line for line in view.lines)
+    assert any("30s" in line for line in view.lines)
+    assert sum("├╴" in line for line in view.lines) >= 2
+    assert history.host_memory_total == 128 * 1024**3
+    assert history.gpu_memory_total == 64 * 1024**3
     assert all(len(line) == 100 for line in view.lines)
+
+
+def test_process_metrics_is_terminal_cell_exact_with_cjk_fields():
+    frame = _frame()
+    process = frame.processes[0]
+    process.user = "开发者用户"
+    process.command = "python 训练.py --模型 大模型"
+    history = ProcessMetricsHistory()
+    for _ in range(8):
+        history.sample(frame, process.selection_key, host_memory_total=128 * 1024**3)
+
+    view = render_metrics_screen(frame, process, history, width=79, height=28)
+
+    assert len(view.lines) == 28
+    assert all(cell_width(line) == 79 for line in view.lines)
+
+
+def test_process_metrics_time_axis_expands_through_five_minutes():
+    frame = _frame()
+    process = frame.processes[0]
+    history = ProcessMetricsHistory()
+    history.sample(frame, process.selection_key, host_memory_total=128 * 1024**3)
+
+    view = render_metrics_screen(frame, process, history, width=340, height=30)
+    axis = next(line for line in view.lines if "30s" in line and "┼" in line)
+
+    for label in ("30s", "60s", "120s", "180s", "240s", "300s"):
+        assert label in axis
+
+
+def test_process_metrics_infers_known_totals_for_seeded_histories():
+    frame = _frame()
+    process = frame.processes[0]
+    history = ProcessMetricsHistory()
+    history.selection_key = process.selection_key
+    history.gpu_memory.extend((45.0, 50.0))
+    history.host_memory.extend((10.0, 12.0))
+    history.cpu.extend((100.0, 250.0))
+    history.gpu_utilization.extend((25.0, 75.0))
+
+    view = render_metrics_screen(frame, process, history, width=120, height=30)
+    rendered = "\n".join(view.lines)
+
+    assert "MAX GPU-MEM: 32.00GiB (50%) / 64.00GiB" in rendered
+    assert "MAX HOST-MEM:" in rendered
+    assert "MAX GPU-MEM: N/A" not in rendered
+    assert all(cell_width(line) == 120 for line in view.lines)
 
 
 def test_signal_dialog_shows_all_confirmed_signal_choices():
@@ -247,6 +332,10 @@ def test_signal_dialog_shows_all_confirmed_signal_choices():
     assert "31(bob)" in rendered
     assert "SIGTERM" in rendered
     assert "[SIGKILL]" in rendered
+    assert "Send signal to the following processes?" in rendered
+    assert "Send SIGTERM" not in rendered
+    assert any("┌" in line and "┐" in line for line in dialog)
+    assert any("└" in line and "┘" in line for line in dialog)
 
 
 def test_signal_dialog_wraps_without_omitting_narrow_multi_target_details():
@@ -255,7 +344,19 @@ def test_signal_dialog_wraps_without_omitting_narrow_multi_target_details():
     rendered = "\n".join(dialog)
 
     assert all(f"{pid}(user-{pid})" in rendered for pid, _ in targets)
-    assert all(len(line) <= 79 for line in dialog)
+    assert all(cell_width(line) <= 79 for line in dialog)
+
+
+def test_signal_dialog_is_cell_safe_with_cjk_usernames():
+    dialog = render_signal_dialog(
+        [(30, "开发者用户"), (31, "测试用户")],
+        width=79,
+        signal_name="SIGINT",
+        current_option=2,
+    )
+
+    assert "[SIGINT]" in "\n".join(dialog)
+    assert all(cell_width(line) <= 79 for line in dialog)
 
 
 def test_tree_signal_hint_only_appears_when_actionable():

@@ -82,6 +82,10 @@ class UiState:
     pending_sort_key: bool = False
     active_screen: ScreenMode = ScreenMode.MAIN
     previous_screen: ScreenMode = ScreenMode.MAIN
+    screen_history: list[ScreenMode] = field(default_factory=list)
+    screen_view_history: list[tuple[int, int, int, bool, tuple[str, ...]]] = field(
+        default_factory=list,
+    )
     screen_scroll_offset: int = 0
     screen_horizontal_offset: int = 0
     screen_selected_index: int = 0
@@ -104,26 +108,72 @@ class UiState:
     def switch_screen(self, screen: ScreenMode) -> None:
         if screen == self.active_screen:
             return
+        if not self.screen_history and self.active_screen != ScreenMode.MAIN:
+            if self.previous_screen not in {self.active_screen, screen}:
+                self.screen_history.append(self.previous_screen)
+                self.screen_view_history.append(self._empty_screen_view())
+        self.screen_history.append(self.active_screen)
+        self.screen_view_history.append(self._screen_view())
         self.previous_screen = self.active_screen
-        self.active_screen = screen
-        self.show_help = screen == ScreenMode.HELP
-        self.screen_scroll_offset = 0
-        self.screen_horizontal_offset = 0
-        self.screen_selected_index = 0
-        self.screen_selection_active = False
-        self.screen_selection_ids = ()
-        self.pending_sort_key = False
+        self._activate_screen(screen)
 
     def return_to_previous_screen(self) -> None:
-        target = self.previous_screen
-        self.previous_screen = self.active_screen
-        self.active_screen = target
-        self.show_help = target == ScreenMode.HELP
+        departed = self.active_screen
+        target = self.screen_history.pop() if self.screen_history else self.previous_screen
+        target_view = (
+            self.screen_view_history.pop()
+            if self.screen_view_history
+            else self._empty_screen_view()
+        )
+        self.previous_screen = self.screen_history[-1] if self.screen_history else departed
+        self._activate_screen(target, reset_view=False)
+        self._restore_screen_view(target_view)
+
+    def return_to_main_screen(self) -> None:
+        departed = self.active_screen
+        self.screen_history.clear()
+        self.screen_view_history.clear()
+        self.previous_screen = departed
+        self._activate_screen(ScreenMode.MAIN)
+
+    def _activate_screen(self, screen: ScreenMode, *, reset_view: bool = True) -> None:
+        self.active_screen = screen
+        self.show_help = screen == ScreenMode.HELP
+        if reset_view:
+            self._reset_screen_view()
+        self.pending_sort_key = False
+
+    def _reset_screen_view(self) -> None:
         self.screen_scroll_offset = 0
         self.screen_horizontal_offset = 0
         self.screen_selected_index = 0
         self.screen_selection_active = False
         self.screen_selection_ids = ()
+
+    def _screen_view(self) -> tuple[int, int, int, bool, tuple[str, ...]]:
+        return (
+            self.screen_scroll_offset,
+            self.screen_horizontal_offset,
+            self.screen_selected_index,
+            self.screen_selection_active,
+            self.screen_selection_ids,
+        )
+
+    @staticmethod
+    def _empty_screen_view() -> tuple[int, int, int, bool, tuple[str, ...]]:
+        return (0, 0, 0, False, ())
+
+    def _restore_screen_view(
+        self,
+        view: tuple[int, int, int, bool, tuple[str, ...]],
+    ) -> None:
+        (
+            self.screen_scroll_offset,
+            self.screen_horizontal_offset,
+            self.screen_selected_index,
+            self.screen_selection_active,
+            self.screen_selection_ids,
+        ) = view
 
     def clear_selection(self) -> None:
         self.selected_key = None

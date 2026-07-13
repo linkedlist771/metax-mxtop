@@ -608,6 +608,8 @@ SCENARIO_BUILDERS: dict[str, FrameBuilder] = {
     "mixed-4gpu": frame_mixed_four,
     "eight-mixed": frame_eight_mixed,
     "sixteen-loaded": frame_sixteen_mixed,
+    "thirty-two-loaded": frame_thirty_two_mixed,
+    "sixty-four-loaded": frame_sixty_four_mixed,
     "missing-telemetry": frame_missing_telemetry,
     "nan-values": frame_nan_values,
 }

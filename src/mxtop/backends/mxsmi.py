@@ -24,7 +24,17 @@ LIST_ROW = re.compile(
     r"\s*$",
     re.IGNORECASE,
 )
-PROCESS_ROW = re.compile(r"^\s*(?P<gpu>\d+)\s+(?P<pid>\d+)\s+(?P<name>.+?)\s+(?P<memory>[\d.]+\s*[A-Za-z]*|N/A|-)\s*$")
+PROCESS_ROW = re.compile(
+    r"^\s*(?P<gpu>\d+)\s+(?P<pid>\d+)\s+"
+    r"(?P<name>.+?)\s+(?P<memory>[\d.]+\s*[A-Za-z]*|N/A|-)\s*$",
+    re.IGNORECASE,
+)
+TYPED_PROCESS_ROW = re.compile(
+    r"^\s*(?P<gpu>\d+)\s+(?P<pid>\d+)\s+"
+    r"(?P<type>C\+G|C|G|X|N/A|-)\s+"
+    r"(?P<name>.+?)\s+(?P<memory>[\d.]+\s*[A-Za-z]*|N/A|-)\s*$",
+    re.IGNORECASE,
+)
 NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
 MEMORY_UNITS = {
     "b": 1,
@@ -107,23 +117,40 @@ def parse_list_output(output: str) -> dict[int, DeviceSnapshot]:
     return devices
 
 
-def parse_dmon_csv(output: str, known_devices: dict[int, DeviceSnapshot] | None = None) -> list[DeviceSnapshot]:
-    rows = [row for row in csv.reader(io.StringIO(output.strip())) if any(column.strip() for column in row)]
+def parse_dmon_csv(
+    output: str, known_devices: dict[int, DeviceSnapshot] | None = None
+) -> list[DeviceSnapshot]:
+    rows = [
+        row
+        for row in csv.reader(io.StringIO(output.strip()))
+        if any(column.strip() for column in row)
+    ]
     if len(rows) < 2:
         return []
 
     header = [_normalize_key(column) for column in rows[0]]
     devices: list[DeviceSnapshot] = []
     for row in rows[1:]:
-        values = {header[index]: row[index].strip() for index in range(min(len(header), len(row)))}
+        values = {
+            header[index]: row[index].strip()
+            for index in range(min(len(header), len(row)))
+        }
         index_value = _first(values, "dev", "gpu", "gpu_id", "index", "id")
         if index_value is None or not index_value.strip().isdigit():
             continue
         index = int(index_value)
         known = known_devices.get(index) if known_devices else None
-        total = _memory_bytes(_first(values, "total", "totalmemory", "memorytotal", "vramtotal"), default_unit="gb")
-        used = _memory_bytes(_first(values, "used", "usedmemory", "memoryused", "vramused"), default_unit="mib")
-        memory_util = _float(_first(values, "vram", "memory", "mem", "memutil", "memoryutil"))
+        total = _memory_bytes(
+            _first(values, "total", "totalmemory", "memorytotal", "vramtotal"),
+            default_unit="gb",
+        )
+        used = _memory_bytes(
+            _first(values, "used", "usedmemory", "memoryused", "vramused"),
+            default_unit="mib",
+        )
+        memory_util = _float(
+            _first(values, "vram", "memory", "mem", "memutil", "memoryutil")
+        )
         if used is None and total is not None and memory_util is not None:
             used = int(total * memory_util / 100)
         if memory_util is None:
@@ -134,11 +161,18 @@ def parse_dmon_csv(output: str, known_devices: dict[int, DeviceSnapshot] | None 
             DeviceSnapshot(
                 index=index,
                 name=known.name if known else "MetaX GPU",
-                bdf=_first(values, "bdfid", "bdf", "busid", "pci", "pci_bus_id") or (known.bdf if known else None),
+                bdf=_first(values, "bdfid", "bdf", "busid", "pci", "pci_bus_id")
+                or (known.bdf if known else None),
                 uuid=known.uuid if known else None,
-                temperature_c=_float(_first(values, "hottemp", "temperature", "temp", "coretemp", "soctemp")),
+                temperature_c=_float(
+                    _first(
+                        values, "hottemp", "temperature", "temp", "coretemp", "soctemp"
+                    )
+                ),
                 power_w=_float(_first(values, "power", "powerdraw", "boardpower")),
-                gpu_util_percent=_float(_first(values, "gpu", "gpuutil", "util", "usage")),
+                gpu_util_percent=_float(
+                    _first(values, "gpu", "gpuutil", "util", "usage")
+                ),
                 memory_util_percent=memory_util,
                 memory_used_bytes=used,
                 memory_total_bytes=total,
@@ -147,10 +181,25 @@ def parse_dmon_csv(output: str, known_devices: dict[int, DeviceSnapshot] | None 
                 performance_state=_first(values, "pstate", "perf", "performancestate"),
                 ecc_status=_first(values, "ecc", "eccstatus"),
                 gpu_clock_mhz=_float(
-                    _first(values, "gpuclock", "gpu_clock", "coreclock", "core_clock", "smclock", "sm_clock")
+                    _first(
+                        values,
+                        "gpuclock",
+                        "gpu_clock",
+                        "coreclock",
+                        "core_clock",
+                        "smclock",
+                        "sm_clock",
+                    )
                 ),
                 memory_clock_mhz=_float(
-                    _first(values, "memoryclock", "memory_clock", "memclock", "mem_clock", "vramclock")
+                    _first(
+                        values,
+                        "memoryclock",
+                        "memory_clock",
+                        "memclock",
+                        "mem_clock",
+                        "vramclock",
+                    )
                 ),
             )
         )
@@ -159,22 +208,33 @@ def parse_dmon_csv(output: str, known_devices: dict[int, DeviceSnapshot] | None 
 
 def parse_process_table(output: str) -> list[ProcessSnapshot]:
     processes: list[ProcessSnapshot] = []
+    has_context_column = any(
+        re.search(r"\b(?:type|context)\b", line, re.IGNORECASE)
+        for line in output.splitlines()
+        if re.search(r"\bPID\b", line, re.IGNORECASE)
+    )
     for raw_line in output.splitlines():
         line = raw_line.strip().strip("|").strip()
         if not line or "no process found" in line.lower():
             continue
-        match = PROCESS_ROW.match(line)
+        match = (TYPED_PROCESS_ROW if has_context_column else PROCESS_ROW).match(line)
         if match is None:
             continue
         gpu_index = int(match.group("gpu"))
         pid = int(match.group("pid"))
         memory = _memory_bytes(match.group("memory"), default_unit="mib")
+        process_type = None
+        if has_context_column:
+            raw_process_type = (match.group("type") or "").upper()
+            if raw_process_type not in {"N/A", "-"}:
+                process_type = raw_process_type or None
         processes.append(
             ProcessSnapshot(
                 gpu_index=gpu_index,
                 pid=pid,
                 name=match.group("name").strip(),
                 gpu_memory_bytes=memory,
+                process_type=process_type,
                 identity=_identity(gpu_index, pid),
             )
         )
@@ -201,7 +261,9 @@ PROCESS_ARGS: list[str] = ["--show-process"]
 # Bare `mx-smi` (and `--show-version`) print the static version block; we parse
 # both the kernel-mode driver version and the MACA (CUDA-equivalent) version.
 VERSION_ARGS_VARIANTS: tuple[list[str], ...] = (["--show-version"], [])
-_DRIVER_VERSION_RE = re.compile(r"(?:Kernel\s*Mode\s*)?Driver\s*Version\s*[:：]\s*([^\s|]+)", re.IGNORECASE)
+_DRIVER_VERSION_RE = re.compile(
+    r"(?:Kernel\s*Mode\s*)?Driver\s*Version\s*[:：]\s*([^\s|]+)", re.IGNORECASE
+)
 _MACA_VERSION_RE = re.compile(r"MACA\s*Version\s*[:：]\s*([^\s|]+)", re.IGNORECASE)
 
 
@@ -256,7 +318,9 @@ class MxSmiBackend:
         self.executable = resolve_mxsmi_path(executable)
         self._versions: tuple[str | None, str | None] | None = None
 
-    def _run(self, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, args: list[str], *, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [self.executable, *args],
             check=check,

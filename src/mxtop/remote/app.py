@@ -53,11 +53,7 @@ def run_remote(
 ) -> int:
     from mxtop.remote import ssh
 
-    try:
-        ssh.import_asyncssh()
-    except RuntimeError as exc:
-        print(exc)
-        return 1
+    ssh.import_asyncssh()
 
     holder = SnapshotHolder()
     monitor = ClusterMonitor(hosts, interval=interval, mxsmi_path=mxsmi_path)

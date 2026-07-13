@@ -20,7 +20,6 @@ import time
 from mxtop import __version__
 from mxtop._compat import DATACLASS_SLOTS
 from mxtop.formatting import (
-    ellipsize,
     format_compact_bytes,
     format_duration,
     format_mib,
@@ -83,6 +82,8 @@ class ProcessMetricsHistory:
     host_memory: deque[float | None] = field(init=False)
     gpu_memory: deque[float | None] = field(init=False)
     gpu_utilization: deque[float | None] = field(init=False)
+    host_memory_total: int | None = None
+    gpu_memory_total: int | None = None
 
     def __post_init__(self) -> None:
         self.cpu = deque(maxlen=self.maxlen)
@@ -96,6 +97,8 @@ class ProcessMetricsHistory:
         self.host_memory.clear()
         self.gpu_memory.clear()
         self.gpu_utilization.clear()
+        self.host_memory_total = None
+        self.gpu_memory_total = None
 
     def sample(
         self,
@@ -128,6 +131,8 @@ class ProcessMetricsHistory:
         self.host_memory.append(_finite_or_none(host_memory_percent))
         self.gpu_memory.append(_finite_or_none(gpu_memory_percent))
         self.gpu_utilization.append(_finite_or_none(process.gpu_util_percent))
+        self.host_memory_total = host_memory_total
+        self.gpu_memory_total = None if device is None else device.memory_total_bytes
         return process
 
 
@@ -272,10 +277,7 @@ def build_process_tree(
     for parent in gpu_indices:
         included.update(children.get(parent, ()))
 
-    roots = sorted(
-        (pid for pid in included if by_pid[pid].ppid not in included),
-        key=lambda pid: (by_pid[pid].user, pid),
-    )
+    roots = sorted(pid for pid in included if by_pid[pid].ppid not in included)
     entries: list[ProcessTreeEntry] = []
 
     def visit(pid: int, ancestry_last: tuple[bool, ...], is_last: bool, visited: set[int]) -> None:
@@ -325,9 +327,10 @@ def render_help_screen(
     gpu_thresholds: tuple[int, int] = (10, 75),
     memory_thresholds: tuple[int, int] = (10, 80),
 ) -> RenderedView:
-    signal_suffix = " (disabled by --readonly)" if readonly else ""
+    del readonly
     lines = [
-        f"mxtop {__version__} - MetaX GPU process monitor",
+        f"mxtop {__version__} - (C) mxtop contributors, 2026.",
+        "Released under the MIT License.",
         "",
         "GPU Process Type: C: Compute, G: Graphics, X/C+G: Mixed.",
         "",
@@ -340,9 +343,9 @@ def render_help_screen(
         "",
         "     Arrows: scroll process list              Space: tag/untag current process",
         "       Home: select the first process           Esc: clear process selection",
-        f"        End: select the last process       Ctrl-C I: interrupt selected process{signal_suffix}",
-        f"                                                  K: kill selected process{signal_suffix}",
-        "   Ctrl-A ^: scroll to left most                  T: terminate selected process" + signal_suffix,
+        "        End: select the last process       Ctrl-C I: interrupt selected process",
+        "                                                  K: kill selected process",
+        "   Ctrl-A ^: scroll to left most                  T: terminate selected process",
         "   Ctrl-E $: scroll to right most                 e: show process environment",
         "   PageUp [: scroll entire screen up              t: toggle tree-view screen",
         " PageDown ]: scroll entire screen down        Enter: show process metrics",
@@ -362,7 +365,7 @@ def render_help_screen(
     viewport = len(lines) if height is None else max(1, height)
     offset = max(0, min(offset, max(0, len(lines) - viewport)))
     shown = lines[offset : offset + viewport]
-    return RenderedView([ellipsize(line, width).ljust(width) for line in shown])
+    return RenderedView([cell_ljust(cell_ellipsize(line, width), width) for line in shown])
 
 
 def render_environment_screen(
@@ -535,31 +538,96 @@ def render_metrics_screen(
     inner = width - 2
     left_width = max(20, (inner - 1) // 2)
     right_width = inner - left_width - 1
-    graph_rows = max(6, height - 9)
+    graph_rows = max(8, height - 8)
     upper_height = max(3, graph_rows // 2)
     lower_height = max(3, graph_rows - upper_height)
     user_host = f"{getpass.getuser()}@{socket.gethostname().split('.', 1)[0]}"
+    device = next((item for item in frame.devices if item.index == process.gpu_index), None)
+    gpu_memory_total = history.gpu_memory_total or (
+        None if device is None else device.memory_total_bytes
+    )
+    host_memory_total = history.host_memory_total
+    if (
+        host_memory_total is None
+        and process.host_memory_bytes is not None
+        and (_last(history.host_memory) or 0.0) > 0.0
+    ):
+        host_memory_total = round(
+            process.host_memory_bytes * 100.0 / float(_last(history.host_memory) or 1.0)
+        )
 
     title = _split_title("Process:", user_host, inner)
     header = _metrics_header(process, inner)
     values = _metrics_values(process, inner)
-    cpu_bound = max(100.0, _known_max(history.cpu, default=100.0))
+    cpu_bound = _dynamic_metric_bound(history.cpu, minimum=10.0, initial=100.0, maximum=1000.0)
+    gpu_memory_bound = _dynamic_metric_bound(history.gpu_memory, minimum=10.0, initial=100.0)
+    host_memory_bound = _dynamic_metric_bound(history.host_memory, minimum=10.0, initial=100.0)
+    gpu_bound = _dynamic_metric_bound(history.gpu_utilization, minimum=10.0, initial=100.0)
     cpu_lines = _render_metric_graph(history.cpu, left_width, upper_height, cpu_bound)
-    gpu_mem_lines = _render_metric_graph(history.gpu_memory, right_width, upper_height, 100.0)
-    host_mem_lines = _render_metric_graph(history.host_memory, left_width, lower_height, 100.0, upsidedown=True)
-    gpu_lines = _render_metric_graph(history.gpu_utilization, right_width, lower_height, 100.0, upsidedown=True)
+    gpu_mem_lines = _render_metric_graph(history.gpu_memory, right_width, upper_height, gpu_memory_bound)
+    host_mem_lines = _render_metric_graph(
+        history.host_memory,
+        left_width,
+        lower_height,
+        host_memory_bound,
+        upsidedown=True,
+    )
+    gpu_lines = _render_metric_graph(
+        history.gpu_utilization,
+        right_width,
+        lower_height,
+        gpu_bound,
+        upsidedown=True,
+    )
 
     cpu_lines[0] = _overlay(cpu_lines[0], f" MAX CPU: {_format_max(history.cpu, '%')} ")
     if upper_height > 1:
         cpu_lines[1] = _overlay(cpu_lines[1], f" CPU: {format_percent_precise(_last(history.cpu))} ")
-    gpu_mem_lines[0] = _overlay(gpu_mem_lines[0], f" MAX GPU-MEM: {_format_max(history.gpu_memory, '%')} ")
+    gpu_mem_lines[0] = _overlay(
+        gpu_mem_lines[0],
+        " " + _memory_metric_label(
+            "MAX GPU-MEM",
+            _known_value_max(history.gpu_memory),
+            gpu_memory_total,
+            include_total=True,
+        ) + " ",
+    )
     if upper_height > 1:
-        gpu_mem_lines[1] = _overlay(gpu_mem_lines[1], f" GPU-MEM: {format_mib(process.gpu_memory_bytes)} ")
+        gpu_mem_lines[1] = _overlay(
+            gpu_mem_lines[1],
+            " " + _memory_metric_label(
+                "GPU-MEM",
+                _last(history.gpu_memory),
+                gpu_memory_total,
+                used_bytes=process.gpu_memory_bytes,
+            ) + " ",
+        )
+    host_mem_lines[-2] = _overlay(
+        host_mem_lines[-2],
+        " " + _memory_metric_label(
+            "HOST-MEM",
+            _last(history.host_memory),
+            host_memory_total,
+            used_bytes=process.host_memory_bytes,
+        ) + " ",
+    )
     host_mem_lines[-1] = _overlay(
         host_mem_lines[-1],
-        f" HOST-MEM: {format_compact_bytes(process.host_memory_bytes)} ({format_percent_precise(_last(history.host_memory))}) ",
+        " " + _memory_metric_label(
+            "MAX HOST-MEM",
+            _known_value_max(history.host_memory),
+            host_memory_total,
+            include_total=True,
+        ) + " ",
     )
-    gpu_lines[-1] = _overlay(gpu_lines[-1], f" GPU-SM: {format_percent_precise(_last(history.gpu_utilization))} ")
+    gpu_lines[-2] = _overlay(
+        gpu_lines[-2],
+        f" GPU-SM: {format_percent_precise(_last(history.gpu_utilization))} ",
+    )
+    gpu_lines[-1] = _overlay(
+        gpu_lines[-1],
+        f" MAX GPU-SM: {_format_max(history.gpu_utilization, '%')} ",
+    )
 
     lines = [
         "╒" + "═" * inner + "╕",
@@ -570,9 +638,31 @@ def render_metrics_screen(
         "╞" + "═" * left_width + "╤" + "═" * right_width + "╡",
     ]
     lines.extend("│" + left + "│" + right + "│" for left, right in zip(cpu_lines, gpu_mem_lines))
-    lines.append("├" + "─" * left_width + "┼" + "─" * right_width + "┤")
+    lines.append(
+        "├" + _metric_time_axis(left_width) + "┼" + _metric_time_axis(right_width) + "┤"
+    )
     lines.extend("│" + left + "│" + right + "│" for left, right in zip(host_mem_lines, gpu_lines))
     lines.append("╘" + "═" * left_width + "╧" + "═" * right_width + "╛")
+    _apply_metric_ticks(
+        lines,
+        start=6,
+        graph_height=upper_height,
+        left_width=left_width,
+        left_bound=cpu_bound,
+        right_bound=gpu_memory_bound,
+        upsidedown=False,
+        protected_rows={0, 1},
+    )
+    _apply_metric_ticks(
+        lines,
+        start=7 + upper_height,
+        graph_height=lower_height,
+        left_width=left_width,
+        left_bound=host_memory_bound,
+        right_bound=gpu_bound,
+        upsidedown=True,
+        protected_rows={lower_height - 2, lower_height - 1},
+    )
     return RenderedView(lines[:height])
 
 
@@ -583,34 +673,49 @@ def render_signal_dialog(
     signal_name: str,
     current_option: int = 0,
 ) -> list[str]:
-    labels = [f"{pid}({ellipsize(user or 'N/A', 24, marker='+')})" for pid, user in targets]
+    del signal_name
+    labels = [
+        f"{pid}({cell_ellipsize(user or 'N/A', 24, marker='+')})"
+        for pid, user in targets
+    ]
     options = ("SIGTERM", "SIGKILL", "SIGINT", "Cancel")
     current_option %= len(options)
-    buttons = "  ".join(
-        f"[{name}]" if index == current_option else f" {name} "
+    button_width = 11
+    button_inners = [
+        _cell_center(f"[{name}]" if index == current_option else name, button_width - 2)
         for index, name in enumerate(options)
-    )
-    max_inner = max(10, width - 2)
+    ]
+    button_rows = [
+        " ".join("┌" + "─" * (button_width - 2) + "┐" for _ in options),
+        " ".join("│" + content + "│" for content in button_inners),
+        " ".join("└" + "─" * (button_width - 2) + "┘" for _ in options),
+    ]
+    max_inner = max(1, width - 2)
     content_width = max(1, max_inner - 4)
     if len(labels) == 1:
-        message_lines = [f"Send {signal_name} to process {labels[0]}?"]
+        message_lines = [f"Send signal to process {labels[0]}?"]
     else:
-        message_lines = [f"Send {signal_name} to the following processes?", ""]
+        message_lines = ["Send signal to the following processes?", ""]
         current = ""
         for label in labels:
             candidate = label if not current else f"{current} {label}"
-            if current and len(candidate) > content_width:
+            if current and cell_width(candidate) > content_width:
                 message_lines.append(current)
                 current = label
             else:
                 current = candidate
         if current:
             message_lines.append(current)
-    inner = min(max(max(map(len, message_lines), default=0), len(buttons)) + 4, max_inner)
+    widest = max(
+        max((cell_width(line) for line in message_lines), default=0),
+        max(cell_width(line) for line in button_rows),
+    )
+    inner = min(widest + 4, max_inner)
     return [
         "╒" + "═" * inner + "╕",
-        *("│" + ellipsize(line.center(inner), inner).ljust(inner) + "│" for line in message_lines),
-        "│" + ellipsize(buttons.center(inner), inner).ljust(inner) + "│",
+        *("│" + _cell_center(cell_ellipsize(line, inner), inner) + "│" for line in message_lines),
+        "│" + " " * inner + "│",
+        *("│" + _cell_center(cell_ellipsize(line, inner), inner) + "│" for line in button_rows),
         "╘" + "═" * inner + "╛",
     ]
 
@@ -627,26 +732,29 @@ def _process_type_name(value: str | None) -> str:
 
 
 def _message_view(message: str, width: int, height: int | None) -> RenderedView:
-    lines = [message.center(width)]
+    lines = [_cell_center(message, width)]
     if height and height > 1:
         lines = [""] * ((height - 1) // 2) + lines
-    return RenderedView([ellipsize(line, width).ljust(width) for line in lines])
+    return RenderedView([cell_ljust(cell_ellipsize(line, width), width) for line in lines])
 
 
 def _split_title(left: str, right: str, width: int) -> str:
-    if len(left) + len(right) + 1 > width:
-        return ellipsize(f" {left} {right}", width).ljust(width)
-    return f" {left}{' ' * (width - len(left) - len(right) - 2)}{right} "
+    left_width = cell_width(left)
+    right_width = cell_width(right)
+    if left_width + right_width + 1 > width:
+        return cell_ljust(cell_ellipsize(f" {left} {right}", width), width)
+    return f" {left}{' ' * (width - left_width - right_width - 2)}{right} "
 
 
 def _metrics_header(process: ProcessSnapshot, width: int) -> str:
+    del process
     text = " GPU     PID      USER  GPU-MEM %SM %GMBW  %CPU  %MEM    TIME  COMMAND"
-    return ellipsize(text, width).ljust(width)
+    return cell_ljust(cell_ellipsize(text, width), width)
 
 
 def _metrics_values(process: ProcessSnapshot, width: int) -> str:
-    user = ellipsize(process.user, 7, marker="+").rjust(7)
-    process_type = (process.process_type or "-")[:1]
+    user = cell_rjust(cell_ellipsize(process.user or "N/A", 7, marker="+"), 7)
+    process_type = cell_slice((process.process_type or "-").replace("C+G", "X"), 0, 1)
     fixed = (
         f" {process.gpu_index:>3} {process.pid:>7} {process_type} {user} "
         f"{format_mib(process.gpu_memory_bytes):>8} "
@@ -656,12 +764,119 @@ def _metrics_values(process: ProcessSnapshot, width: int) -> str:
         f"{format_percent_value(process.memory_util_percent):>4}  "
         f"{format_duration(process.runtime_seconds):>7}  "
     )
-    return ellipsize(fixed + (process.command or process.name), width).ljust(width)
+    return cell_ljust(cell_ellipsize(fixed + (process.command or process.name), width), width)
 
 
 def _known_max(values: Iterable[float | None], *, default: float) -> float:
     known = [value for value in values if value is not None and math.isfinite(value)]
     return max(known, default=default)
+
+
+def _known_value_max(values: Iterable[float | None]) -> float | None:
+    known = [value for value in values if value is not None and math.isfinite(value)]
+    return max(known) if known else None
+
+
+def _dynamic_metric_bound(
+    values: Iterable[float | None],
+    *,
+    minimum: float,
+    initial: float,
+    maximum: float = 100.0,
+) -> float:
+    value = _known_value_max(values)
+    if value is None:
+        return initial
+    target = max(minimum, min(maximum, value * 1.1))
+    candidates = (10, 20, 40, 50, 80, 100, 200, 400, 500, 800, 1000)
+    return float(next((candidate for candidate in candidates if candidate >= target), maximum))
+
+
+def _memory_metric_label(
+    name: str,
+    percent: float | None,
+    total: int | None,
+    *,
+    used_bytes: int | None = None,
+    include_total: bool = False,
+) -> str:
+    if used_bytes is None and percent is not None and total:
+        used_bytes = round(total * percent / 100.0)
+    if percent is None:
+        text = f"{name}: N/A"
+    else:
+        text = f"{name}: {format_compact_bytes(used_bytes)} ({format_percent_precise(percent)})"
+    if include_total and total:
+        text += f" / {format_compact_bytes(total)}"
+    return text
+
+
+def _metric_time_axis(width: int) -> str:
+    if width <= 0:
+        return ""
+    line = list("─" * width)
+    for offset, label in (
+        (19, "╴30s├"),
+        (34, "╴60s├"),
+        (65, "╴120s├"),
+        (95, "╴180s├"),
+        (125, "╴240s├"),
+        (155, "╴300s├"),
+    ):
+        if offset > width:
+            break
+        start = width - offset
+        line[start : min(width, start + len(label))] = list(label[: width - start])
+    return "".join(line)
+
+
+def _apply_metric_ticks(
+    lines: list[str],
+    *,
+    start: int,
+    graph_height: int,
+    left_width: int,
+    left_bound: float,
+    right_bound: float,
+    upsidedown: bool,
+    protected_rows: set[int],
+) -> None:
+    for separator, end, bound in (
+        (0, left_width + 1, left_bound),
+        (left_width + 1, len(lines[0]) - 1, right_bound),
+    ):
+        for value in _metric_tick_values(bound):
+            fraction = value / max(bound, 1.0)
+            row = round(fraction * (graph_height - 1))
+            if not upsidedown:
+                row = graph_height - 1 - row
+            if row in protected_rows or not (0 <= row < graph_height):
+                continue
+            line_index = start + row
+            if not (0 <= line_index < len(lines)):
+                continue
+            chars = list(lines[line_index])
+            chars[separator] = "├"
+            label = f"╴{value:g}% "
+            label_end = min(end, separator + 1 + len(label))
+            chars[separator + 1 : label_end] = list(label[: label_end - separator - 1])
+            lines[line_index] = "".join(chars)
+
+
+def _metric_tick_values(bound: float) -> tuple[float, ...]:
+    values = []
+    for fraction in (0.25, 0.5, 0.75):
+        value = round(bound * fraction)
+        if value > 0 and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
+def _cell_center(text: str, width: int) -> str:
+    text = cell_ellipsize(text, width)
+    padding = max(0, width - cell_width(text))
+    left = padding // 2
+    return " " * left + text + " " * (padding - left)
 
 
 def _last(values: Sequence[float | None] | deque[float | None]) -> float | None:
@@ -688,5 +903,5 @@ def _render_metric_graph(
 
 
 def _overlay(base: str, text: str) -> str:
-    text = text[: len(base)]
-    return text + base[len(text) :]
+    text = cell_ellipsize(text, cell_width(base), marker="..")
+    return text + cell_slice(base, cell_width(text))

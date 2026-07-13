@@ -19,7 +19,9 @@ def _load_pymxsml() -> None:
         pass
 
     candidates = sorted(glob("/opt/maca/share/mxsml/pymxsml-*.whl"), reverse=True)
-    candidates.extend(sorted(glob("/opt/mxn100/share/mxsml/pymxsml-*.whl"), reverse=True))
+    candidates.extend(
+        sorted(glob("/opt/mxn100/share/mxsml/pymxsml-*.whl"), reverse=True)
+    )
     for wheel in candidates:
         if wheel not in sys.path:
             sys.path.insert(0, wheel)
@@ -116,6 +118,7 @@ def normalize_power_w(value: float | int | None) -> float | None:
 
 class PymxsmlBackend:
     name: str = "pymxsml"
+    process_context_types = frozenset({"C"})
 
     def __init__(self) -> None:
         _load_pymxsml()
@@ -126,23 +129,49 @@ class PymxsmlBackend:
         _ = _callable(mxsml_extension, "mxSmlExInit")()
 
         # Resolve attributes once: module/function lookups are static.
-        self._temperature_hotspot = _integer(getattr(mxsml, "MXSML_TEMPERATURE_HOTSPOT", 0)) or 0
-        self._version_driver_unit = _integer(getattr(mxsml, "MXSML_VERSION_DRIVER", 1)) or 1
+        self._temperature_hotspot = (
+            _integer(getattr(mxsml, "MXSML_TEMPERATURE_HOTSPOT", 0)) or 0
+        )
+        self._version_driver_unit = (
+            _integer(getattr(mxsml, "MXSML_VERSION_DRIVER", 1)) or 1
+        )
         self._get_board_power_info = _callable(mxsml, "mxSmlGetBoardPowerInfo")
         self._get_device_count = _callable(mxsml, "mxSmlGetDeviceCount")
         self._get_device_info = _callable(mxsml, "mxSmlGetDeviceInfo")
         self._get_memory_info = _callable(mxsml, "mxSmlGetMemoryInfo")
         self._get_temperature_info = _callable(mxsml, "mxSmlGetTemperatureInfo")
-        self._get_compute_processes = _callable(mxsml_extension, "mxSmlExDeviceGetComputeRunningProcesses")
-        self._get_handle_by_index = _callable(mxsml_extension, "mxSmlExDeviceGetHandleByIndex")
-        self._get_utilization_rates = _callable(mxsml_extension, "mxSmlExDeviceGetUtilizationRates")
+        self._get_compute_processes = _callable(
+            mxsml_extension, "mxSmlExDeviceGetComputeRunningProcesses"
+        )
+        self._get_graphics_processes = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetGraphicsRunningProcesses"
+        ) or _optional_callable(mxsml, "nvmlDeviceGetGraphicsRunningProcesses")
+        self.process_context_types = frozenset(
+            {"C", "G"} if self._get_graphics_processes is not None else {"C"}
+        )
+        self._get_handle_by_index = _callable(
+            mxsml_extension, "mxSmlExDeviceGetHandleByIndex"
+        )
+        self._get_utilization_rates = _callable(
+            mxsml_extension, "mxSmlExDeviceGetUtilizationRates"
+        )
         self._get_maca_version = _optional_callable(mxsml, "mxSmlGetMacaVersion")
         self._get_device_version = _optional_callable(mxsml, "mxSmlGetDeviceVersion")
-        self._get_driver_version = _optional_callable(mxsml_extension, "mxSmlExSystemGetDriverVersion")
-        self._get_power_usage = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerUsage")
-        self._get_board_power_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetBoardPowerLimit")
-        self._get_power_mgmt_limit = _optional_callable(mxsml_extension, "mxSmlExDeviceGetPowerManagementLimit")
-        self._get_board_power_limit_core = _optional_callable(mxsml, "mxSmlGetBoardPowerLimit")
+        self._get_driver_version = _optional_callable(
+            mxsml_extension, "mxSmlExSystemGetDriverVersion"
+        )
+        self._get_power_usage = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetPowerUsage"
+        )
+        self._get_board_power_limit = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetBoardPowerLimit"
+        )
+        self._get_power_mgmt_limit = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetPowerManagementLimit"
+        )
+        self._get_board_power_limit_core = _optional_callable(
+            mxsml, "mxSmlGetBoardPowerLimit"
+        )
 
         # Static values (versions, power limits) are cached after first fetch
         # so each refresh does not repeat C-library calls for data that never
@@ -153,8 +182,14 @@ class PymxsmlBackend:
 
     def _versions(self) -> tuple[str | None, str | None]:
         if self._system_versions is None:
-            driver = _text(_safe(self._get_driver_version)) if self._get_driver_version else None
-            maca = _text(_safe(self._get_maca_version)) if self._get_maca_version else None
+            driver = (
+                _text(_safe(self._get_driver_version))
+                if self._get_driver_version
+                else None
+            )
+            maca = (
+                _text(_safe(self._get_maca_version)) if self._get_maca_version else None
+            )
             self._system_versions = (driver, maca)
         return self._system_versions
 
@@ -163,7 +198,11 @@ class PymxsmlBackend:
             version = None
             if self._get_device_version is not None:
                 version = _text(
-                    _safe(lambda: self._get_device_version(index, self._version_driver_unit))
+                    _safe(
+                        lambda: self._get_device_version(
+                            index, self._version_driver_unit
+                        )
+                    )
                 )
             self._device_driver_versions[index] = version
         return self._device_driver_versions[index]
@@ -173,11 +212,17 @@ class PymxsmlBackend:
             raw: object | None = None
             if handle is not None and self._get_board_power_limit is not None:
                 raw = _safe(lambda: self._get_board_power_limit(handle))
-            if not raw and handle is not None and self._get_power_mgmt_limit is not None:
+            if (
+                not raw
+                and handle is not None
+                and self._get_power_mgmt_limit is not None
+            ):
                 raw = _safe(lambda: self._get_power_mgmt_limit(handle))
             if not raw and self._get_board_power_limit_core is not None:
                 raw = _safe(lambda: self._get_board_power_limit_core(index))
-            self._device_power_limits[index] = normalize_power_w(_number(raw)) if raw else None
+            self._device_power_limits[index] = (
+                normalize_power_w(_number(raw)) if raw else None
+            )
         return self._device_power_limits[index]
 
     def snapshot(self) -> FrameSnapshot:
@@ -188,6 +233,7 @@ class PymxsmlBackend:
         get_memory_info = self._get_memory_info
         get_temperature_info = self._get_temperature_info
         get_compute_processes = self._get_compute_processes
+        get_graphics_processes = getattr(self, "_get_graphics_processes", None)
         get_handle_by_index = self._get_handle_by_index
         get_utilization_rates = self._get_utilization_rates
         get_power_usage = self._get_power_usage
@@ -195,23 +241,33 @@ class PymxsmlBackend:
         driver_version, maca_version = self._versions()
 
         devices: list[DeviceSnapshot] = []
-        processes: list[ProcessSnapshot] = []
+        process_map: dict[tuple[int, int], ProcessSnapshot] = {}
         count = _integer(get_device_count()) or 0
         for index in range(count):
             info = _safe(lambda index=index: get_device_info(index))
             memory = _safe(lambda index=index: get_memory_info(index))
             handle = _safe(lambda index=index: get_handle_by_index(index))
-            util = _safe(lambda handle=handle: get_utilization_rates(handle)) if handle else None
-            temperature = _safe(lambda index=index: get_temperature_info(index, temperature_hotspot))
+            util = (
+                _safe(lambda handle=handle: get_utilization_rates(handle))
+                if handle
+                else None
+            )
+            temperature = _safe(
+                lambda index=index: get_temperature_info(index, temperature_hotspot)
+            )
 
             # Power draw: prefer the extension API, fall back to summing the
             # per-way board power readings from the core API.
             power_w = None
             if handle is not None and get_power_usage is not None:
-                power_w = normalize_power_w(_number(_safe(lambda handle=handle: get_power_usage(handle))))
+                power_w = normalize_power_w(
+                    _number(_safe(lambda handle=handle: get_power_usage(handle)))
+                )
             if power_w is None:
                 board_power = _safe(lambda index=index: get_board_power_info(index), [])
-                power_values = [_number_attr(item, "power") for item in _items(board_power)]
+                power_values = [
+                    _number_attr(item, "power") for item in _items(board_power)
+                ]
                 power_sum = sum(value for value in power_values if value is not None)
                 if power_sum:
                     power_w = normalize_power_w(power_sum)
@@ -225,9 +281,21 @@ class PymxsmlBackend:
             if device_driver_version is None:
                 device_driver_version = self._device_driver_version(index)
 
-            memory_used = used * 1024 if (used := _int_attr(memory, "vramUse")) is not None else None
-            memory_total = total * 1024 if (total := _int_attr(memory, "vramTotal")) is not None else None
-            memory_free = memory_total - memory_used if memory_total is not None and memory_used is not None else None
+            memory_used = (
+                used * 1024
+                if (used := _int_attr(memory, "vramUse")) is not None
+                else None
+            )
+            memory_total = (
+                total * 1024
+                if (total := _int_attr(memory, "vramTotal")) is not None
+                else None
+            )
+            memory_free = (
+                memory_total - memory_used
+                if memory_total is not None and memory_used is not None
+                else None
+            )
             devices.append(
                 DeviceSnapshot(
                     index=index,
@@ -248,20 +316,41 @@ class PymxsmlBackend:
             )
 
             if handle is not None:
-                for process in _items(_safe(lambda handle=handle: get_compute_processes(handle), [])):
-                    pid = _int_attr(process, "pid") or 0
-                    used = _int_attr(process, "usedGpuMemory") or 0
-                    if pid <= 0 or used <= 0:
-                        continue
-                    processes.append(
-                        ProcessSnapshot(
+                process_sources = [("C", get_compute_processes)]
+                if get_graphics_processes is not None:
+                    process_sources.append(("G", get_graphics_processes))
+                for context, process_getter in process_sources:
+                    raw_processes = _safe(
+                        lambda process_getter=process_getter, handle=handle: (
+                            process_getter(handle)
+                        ),
+                        [],
+                    )
+                    for process in _items(raw_processes):
+                        pid = _int_attr(process, "pid") or 0
+                        used = _int_attr(process, "usedGpuMemory")
+                        if pid <= 0:
+                            continue
+                        used_memory = used if used is not None and used > 0 else None
+                        key = (index, pid)
+                        existing = process_map.get(key)
+                        if existing is not None:
+                            if existing.process_type != context:
+                                existing.process_type = "C+G"
+                            if used_memory is not None:
+                                existing.gpu_memory_bytes = max(
+                                    existing.gpu_memory_bytes or 0,
+                                    used_memory,
+                                )
+                            continue
+                        process_map[key] = ProcessSnapshot(
                             gpu_index=index,
                             pid=pid,
-                            gpu_memory_bytes=used,
-                            process_type="C",
+                            gpu_memory_bytes=used_memory,
+                            process_type=context,
                             identity=f"{index}:{pid}",
                         )
-                    )
 
+        processes = list(process_map.values())
         enrich_processes(processes)
         return FrameSnapshot(devices=devices, processes=processes, backend=self.name)

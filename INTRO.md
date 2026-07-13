@@ -9,6 +9,8 @@ mxtop --monitor compact
 
 `--monitor` / `-m` accepts `auto`, `full`, or `compact`. Auto mode compacts the device, host, and process panels independently to fit the terminal. Hosts with more than 16 GPUs use an adaptive fleet grid in auto, compact, and one-shot views, including 32- and 64-GPU systems; full mode retains the detailed vertical device list.
 
+The committed previews use fixed-time deterministic synthetic MetaX-shaped telemetry, including missing, nonfinite, and optional values. They validate presentation behavior without replacing live data collected by `pymxsml` or `mx-smi`, and their optional fields do not imply that every live backend supports those fields.
+
 Print one text snapshot or one JSON snapshot:
 
 ```bash
@@ -38,7 +40,7 @@ mxtop --graphics             # alias: -g
 mxtop --only-graphics        # alias: -G; exact graphics-only contexts
 ```
 
-Filters are combined and apply consistently to interactive, text, and JSON output. `--only-visible` resolves indices, UUID prefixes, or BDF prefixes from `MACA_VISIBLE_DEVICES`, falling back to `CUDA_VISIBLE_DEVICES`.
+Filters are combined and apply consistently to interactive, text, and JSON output. `--only-visible` resolves indices, UUID prefixes, or BDF prefixes from `MACA_VISIBLE_DEVICES`, falling back to `CUDA_VISIBLE_DEVICES`. A compute/graphics filter exits with a stable error when the selected backend reports processes but lacks context-type telemetry, which is common with `mx-smi`.
 
 The interactive UI has five primary screens:
 
@@ -101,7 +103,7 @@ The backend uses read-only commands such as `mx-smi -L`, `mx-smi dmon --format c
 Run tests with:
 
 ```bash
-uv run --locked --with pytest --with psutil --with pillow pytest -q
+uv run --locked --with pytest --with psutil --with pillow==11.3.0 pytest -q
 ```
 
 Run lint with:
@@ -109,6 +111,8 @@ Run lint with:
 ```bash
 uv run --locked --with ruff ruff check .
 ```
+
+Preview, gallery, and showcase freshness checks use Pillow 11.3.0, the vendored Liberation Mono regular/bold fonts, and an algorithmic Braille renderer, so host fontconfig does not affect canonical output. PNG metadata fingerprints the Pillow and FreeType versions; a rasterizer change makes the assets stale. `scripts/generate_preview.py --custom-fonts --output PATH` remains available for explicitly noncanonical local-font renders.
 
 The package uses a `src/` layout and exposes the console script with
 `[project.scripts]` in `pyproject.toml`.

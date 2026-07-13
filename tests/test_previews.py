@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 
 import pytest
@@ -45,6 +47,7 @@ def test_canonical_frames_are_new_and_deterministic() -> None:
 def test_scenario_renderer_uses_the_canonical_builders() -> None:
     render_scenarios = importlib.import_module("render_scenarios")
     assert render_scenarios.SCENARIOS is SCENARIO_BUILDERS
+    assert {"thirty-two-loaded", "sixty-four-loaded"} <= set(render_scenarios.SCENARIOS)
 
 
 def test_known_devices_have_consistent_memory_and_metax_versions() -> None:
@@ -130,7 +133,63 @@ def test_png_renderer_discovers_portable_fonts_and_embeds_freshness(tmp_path: Pa
         assert image.height > 20
         assert image.getbbox() is not None
         assert image.info[previews.FONT_KEY]
+        assert image.info[previews.PILLOW_VERSION_KEY] == previews.CANONICAL_PILLOW_VERSION
+        assert image.info[previews.FREETYPE_VERSION_KEY] == previews.rasterizer_versions()["freetype"]
+        assert image.info[previews.PIXEL_HASH_KEY] == previews.pixel_digest(image)
         assert image.info[previews.RENDER_CONFIG_KEY]
+
+
+def test_canonical_fonts_are_vendored_hashed_and_ignore_host_configuration(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    previews = _with_pillow("generate_preview")
+    assert previews.PIL.__version__ == previews.CANONICAL_PILLOW_VERSION
+    assert previews.rasterizer_versions()["freetype"] != "unknown"
+    expected = {
+        "LiberationMono-Regular.ttf": "395fa5ab8d40c8eba390ced528744ea75a7f69aabf3e68b6f925ca0e39a27370",
+        "LiberationMono-Bold.ttf": "626655e94dd82f3f42549daf995c921b0915fa8ab1f4b839559e8892ea41d240",
+    }
+    for name, digest in expected.items():
+        path = previews.FONT_DIR / name
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    assert "SIL OPEN FONT LICENSE Version 1.1" in previews.FONT_LICENSE.read_text(encoding="utf-8")
+
+    monkeypatch.setenv("MXTOP_PREVIEW_FONT", str(previews.CANONICAL_BOLD_FONT))
+    monkeypatch.setenv("MXTOP_PREVIEW_BOLD_FONT", str(previews.CANONICAL_REGULAR_FONT))
+    monkeypatch.setenv("MXTOP_PREVIEW_SYMBOL_FONT", str(previews.CANONICAL_BOLD_FONT))
+    regular = previews.discover_font("regular")
+    bold = previews.discover_font("bold")
+    assert regular is not None and regular.label == "assets/fonts/LiberationMono-Regular.ttf:0"
+    assert bold is not None and bold.label == "assets/fonts/LiberationMono-Bold.ttf:0"
+
+    output = "canonical braille: ⣿⡇"
+    target = tmp_path / "canonical.png"
+    previews.render_to_png(output, "dark", target)
+    assert previews.asset_is_fresh(target, output, "dark")
+
+    pillow_freetype_version = previews.features.version
+    monkeypatch.setattr(previews.features, "version", lambda feature: "0.0-test")
+    assert not previews.asset_is_fresh(target, output, "dark")
+    monkeypatch.setattr(previews.features, "version", pillow_freetype_version)
+
+    monkeypatch.setattr(previews.PIL, "__version__", "0.0-test")
+    assert not previews.asset_is_fresh(target, output, "dark")
+    with pytest.raises(RuntimeError, match="canonical preview rendering requires Pillow"):
+        previews.render_to_png(output, "dark", tmp_path / "wrong-pillow.png")
+
+
+def test_explicit_noncanonical_font_output_remains_available(monkeypatch, tmp_path: Path) -> None:
+    previews = _with_pillow("generate_preview")
+    monkeypatch.setenv("MXTOP_PREVIEW_FONT", str(previews.CANONICAL_BOLD_FONT))
+    custom = previews.discover_font("regular", canonical=False)
+    assert custom is not None and custom.path == previews.CANONICAL_BOLD_FONT
+
+    target = tmp_path / "custom.png"
+    previews.render_to_png("custom", "dark", target, canonical_fonts=False)
+    with previews.Image.open(target) as image:
+        assert image.info[previews.FONT_KEY] == "assets/fonts/LiberationMono-Bold.ttf:0"
+    assert not previews.asset_is_fresh(target, "custom", "dark")
 
 
 def test_gallery_and_showcase_markdown_are_generated() -> None:
@@ -139,6 +198,69 @@ def test_gallery_and_showcase_markdown_are_generated() -> None:
     showcase = importlib.import_module("render_showcase")
     assert (PROJECT_ROOT / "GALLERY.md").read_text(encoding="utf-8") == gallery.gallery_markdown()
     assert (PROJECT_ROOT / "SHOWCASE.md").read_text(encoding="utf-8") == showcase.showcase_markdown()
+
+
+def test_every_unique_fixture_and_secondary_screen_has_a_canonical_asset() -> None:
+    previews = _with_pillow("generate_preview")
+    gallery = importlib.import_module("render_gallery")
+    showcase = importlib.import_module("render_showcase")
+    covered_names = {
+        *(spec.scenario for spec in previews.PREVIEW_SPECS),
+        *(variant.frame_name for variant in gallery.VARIANTS),
+        *(spec.scenario for spec in showcase.SHOWCASE_SPECS),
+    }
+    covered_builders = {id(FRAME_BUILDERS[name]) for name in covered_names}
+    assert covered_builders == {id(builder) for builder in FRAME_BUILDERS.values()}
+    assert showcase.SECONDARY_KINDS == {
+        "help",
+        "environment",
+        "environment-error",
+        "tree",
+        "tree-empty",
+        "metrics",
+        "signal",
+    }
+    assert showcase.SECONDARY_KINDS <= {spec.kind for spec in showcase.SHOWCASE_SPECS}
+
+
+def test_nonfinite_gallery_fixture_is_strict_json() -> None:
+    gallery = _with_pillow("render_gallery")
+    variant = next(item for item in gallery.VARIANTS if item.slug == "json-nonfinite")
+    output = gallery.render_variant_text(variant)
+    payload = json.loads(output)
+    assert "NaN" not in output and "Infinity" not in output
+    assert payload["devices"][0]["gpu_util_percent"] is None
+    assert payload["processes"][0]["gpu_util_percent"] is None
+
+
+def test_package_readme_uses_release_portable_origin_urls() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    image_urls = re.findall(r'<img[^>]+src="([^"]+)"', readme)
+    assert image_urls
+    assert all(url.startswith("https://") for url in image_urls)
+    assert 'src="assets/' not in readme
+    assert "](GALLERY.md)" not in readme
+    assert "](SHOWCASE.md)" not in readme
+    assert "](INTRO.md)" not in readme
+    assert "https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/" in readme
+
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '[project.urls]' in pyproject
+    assert 'Repository = "https://github.com/linkedlist771/metax-mxtop.git"' in pyproject
+
+
+def test_canonical_commands_pin_the_pillow_version() -> None:
+    previews = _with_pillow("generate_preview")
+    expected = f"--with pillow=={previews.CANONICAL_PILLOW_VERSION}"
+    for relative_path in ("README.md", "INTRO.md", "GALLERY.md", "SHOWCASE.md"):
+        text = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        pillow_arguments = re.findall(r"--with pillow(?:==[^\s`]+)?", text)
+        assert pillow_arguments, relative_path
+        assert set(pillow_arguments) == {expected}, relative_path
+
+    workflow = (PROJECT_ROOT / ".github/workflows/wheels.yml").read_text(encoding="utf-8")
+    assert f"pillow=={previews.CANONICAL_PILLOW_VERSION}" in workflow
+    assert not re.search(r"\bpillow\b(?!==)", workflow, flags=re.IGNORECASE)
 
 
 def test_committed_preview_assets_are_fresh() -> None:
@@ -172,3 +294,11 @@ def test_committed_showcase_assets_are_fresh_and_complete() -> None:
     actual = {path.name for path in showcase.SHOWCASE_DIR.glob("*.png")}
     assert actual == expected
     assert showcase.render_all(check=True) == []
+
+
+def test_all_committed_pngs_have_real_pixel_variation() -> None:
+    previews = _with_pillow("generate_preview")
+    for path in sorted((PROJECT_ROOT / "assets").rglob("*.png")):
+        with previews.Image.open(path) as image:
+            assert image.width > 0 and image.height > 0, path
+            assert any(low != high for low, high in image.convert("RGB").getextrema()), path

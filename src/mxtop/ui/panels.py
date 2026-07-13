@@ -21,10 +21,16 @@ from mxtop.formatting import (
     format_percent_precise,
     format_percent_value,
 )
-from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
+from mxtop.models import (
+    PROCESS_CREATE_TIME_TOLERANCE,
+    DeviceSnapshot,
+    FrameSnapshot,
+    ProcessSnapshot,
+)
 from mxtop.ui.help import HELP_LINES
 from mxtop.ui.history import HostHistory
 from mxtop.ui.state import LayoutMode, UiState, keep_selection, sort_processes
+from mxtop.ui.text import cell_ellipsize, cell_ljust, cell_rjust, cell_slice, cell_width
 
 CORE_INNER = 77
 CORE_WIDTH = 79
@@ -188,14 +194,14 @@ def _dense_device_line(
 ) -> str:
     devices = devices or []
     cells: list[str] = []
-    for column, cell_width in enumerate(cell_widths):
+    for column, column_width in enumerate(cell_widths):
         if header:
             text = "GPU TEMP UTIL MEM%  POWER"
         elif column < len(devices):
             text = _dense_device_text(devices[column])
         else:
             text = ""
-        cells.append(ellipsize(text, cell_width).ljust(cell_width))
+        cells.append(ellipsize(text, column_width).ljust(column_width))
     return "│" + "│".join(cells) + "│"
 
 
@@ -241,6 +247,30 @@ def render_host_panel(
     aggregate_gpu_mem = _weighted_memory_percent(frame.devices)
     aggregate_gpu_util = _average_percent(d.gpu_util_percent for d in frame.devices)
 
+    selected_devices = [
+        device for device in frame.devices if device.index == selected_gpu_index
+    ]
+    if len(frame.devices) > 1 and selected_devices:
+        gpu_mem = _weighted_memory_percent(selected_devices)
+        gpu_util = _average_percent(device.gpu_util_percent for device in selected_devices)
+        gpu_label = f"GPU {selected_gpu_index}"
+    else:
+        gpu_mem = aggregate_gpu_mem
+        gpu_util = aggregate_gpu_util
+        gpu_label = "AVG GPU" if len(frame.devices) > 1 else "GPU"
+
+    # Host graphs keep sampling even when the compact layout does not draw them.
+    # This mirrors nvitop's background host sampler and prevents gaps after a
+    # terminal resize back to the full layout.
+    history.set_gpu_scope(selected_gpu_index if selected_devices else None)
+    history.sample(
+        cpu=cpu,
+        memory=memory_pct,
+        swap=swap_pct,
+        gpu_memory=gpu_mem,
+        gpu_utilization=gpu_util,
+    )
+
     if compact:
         load_average = _load_average_text()
         width_right = len(load_average) + 4
@@ -256,27 +286,6 @@ def render_host_panel(
             f"{cpu_bar}  ( {load_average} )",
             f"{memory_bar}  {swap_bar}",
         ]
-
-    selected_devices = [
-        device for device in frame.devices if device.index == selected_gpu_index
-    ]
-    if len(frame.devices) > 1 and selected_devices:
-        gpu_mem = _weighted_memory_percent(selected_devices)
-        gpu_util = _average_percent(device.gpu_util_percent for device in selected_devices)
-        gpu_label = f"GPU {selected_gpu_index}"
-    else:
-        gpu_mem = aggregate_gpu_mem
-        gpu_util = aggregate_gpu_util
-        gpu_label = "AVG GPU" if len(frame.devices) > 1 else "GPU"
-
-    history.set_gpu_scope(selected_gpu_index if selected_devices else None)
-    history.sample(
-        cpu=cpu,
-        memory=memory_pct,
-        swap=swap_pct,
-        gpu_memory=gpu_mem,
-        gpu_utilization=gpu_util,
-    )
 
     # nvitop layout: 5 graph rows (CPU) above the time axis, 5 below
     # (4-row MEM hanging down + 1-row SWP), text overlaid on the graphs.
@@ -363,11 +372,11 @@ def render_process_panel(
         (
             max(
                 0,
-                len(_process_host_info(process, host_memory_total, time_width))
+                cell_width(_process_host_info(process, host_memory_total, time_width))
                 - max(
                     0,
                     inner
-                    - len(_process_gpu_info(process, state=state, mark_selection=mark_selection)),
+                    - cell_width(_process_gpu_info(process, state=state, mark_selection=mark_selection)),
                 ),
             )
             for process in processes
@@ -375,12 +384,7 @@ def render_process_panel(
         default=0,
     )
     state.command_offset = max(0, min(state.command_offset, max_command_offset))
-    top_border = _process_top_border(
-        inner,
-        state,
-        processes,
-        interactive=mark_selection,
-    )
+    top_border = _process_top_border(inner)
     lines = [top_border, _box_content(_process_title(inner, user_host), width)]
     lines.append(_box_content(_process_header(inner, state, time_width=time_width), width))
     lines.append(_middle_border(inner))
@@ -410,12 +414,7 @@ def render_process_panel(
 
     if mark_selection:
         state.selected_visible = any(process.selection_key == state.selected_key for process in shown)
-        lines[0] = _process_top_border(
-            inner,
-            state,
-            processes,
-            interactive=True,
-        )
+        lines[0] = _process_top_border(inner)
 
     process_start = len(lines)
     prev_gpu_index: int | None = None
@@ -511,6 +510,7 @@ def render_main_screen(
 
     if height is None:
         state.selected_visible = state.selected_key in row_keys.values()
+        lines[process_panel_top - 1] = _process_action_line(width, state, processes)
         return RenderedScreen(
             lines,
             process_start=absolute_process_start,
@@ -539,12 +539,8 @@ def render_main_screen(
     }
     visible_start = min(visible_rows, default=0)
     state.selected_visible = state.selected_key in visible_rows.values()
-    lines[process_panel_top] = _process_top_border(
-        max(MIN_SCREEN_WIDTH - 2, width - 2),
-        state,
-        processes,
-        interactive=True,
-    )
+    lines[process_panel_top] = _process_top_border(max(MIN_SCREEN_WIDTH - 2, width - 2))
+    lines[process_panel_top - 1] = _process_action_line(width, state, processes)
     visible_lines = lines[offset : offset + height]
     return RenderedScreen(
         visible_lines,
@@ -649,7 +645,7 @@ def _selected_gpu_index(frame: FrameSnapshot, state: UiState) -> int | None:
 
 
 def _core_line(content: str) -> str:
-    return "│" + ellipsize(content, CORE_INNER).ljust(CORE_INNER) + "│"
+    return "│" + cell_ljust(cell_ellipsize(content, CORE_INNER), CORE_INNER) + "│"
 
 
 def _top_border(right_width: int) -> str:
@@ -729,42 +725,42 @@ def _bottom_border(right_width: int) -> str:
 
 def _device_row_one(device: DeviceSnapshot) -> str:
     name_text = device.name or "N/A"
-    name = (name_text if len(name_text) <= 19 else ".." + name_text[-17:]).ljust(19)
+    name = cell_ljust(_cell_tail_ellipsize(name_text, 19), 19)
     persistence = _on_off(device.persistence_mode)
-    bdf = ellipsize(device.bdf or device.uuid or "N/A", 16, marker="..").ljust(16)
+    bdf = cell_ljust(cell_ellipsize(device.bdf or device.uuid or "N/A", 16, marker=".."), 16)
     disp = _on_off(device.display_active)
     ecc = _ecc_text(device.ecc_errors)
-    left = f" {device.index:>3}  {name} {persistence:>4} "
-    mid = f" {bdf} {disp:>3} "
-    right = f" {ecc:>20} "
+    left = f" {device.index:>3}  {name} {cell_rjust(persistence, 4)} "
+    mid = f" {bdf} {cell_rjust(disp, 3)} "
+    right = f" {cell_rjust(ecc, 20)} "
     return f"│{left}│{mid}│{right}│"
 
 
 def _device_row_compact(device: DeviceSnapshot) -> str:
     fan = _fan_text(device.fan_percent)
     temp = _temp_text(device.temperature_c)
-    perf = (device.performance_state or "N/A")[:3]
+    perf = cell_slice(device.performance_state or "N/A", 0, 3)
     power = _power_status(device.power_w, device.power_limit_w)
     memory = f"{format_compact_bytes(device.memory_used_bytes)} / {format_compact_bytes(device.memory_total_bytes)}"
     util = format_percent(device.gpu_util_percent)
-    compute = (device.compute_mode or "N/A")[:11]
-    left = f" {device.index:>3} {fan:>3} {temp:>4} {perf:<3}{power:>13} "
+    compute = cell_slice(device.compute_mode or "N/A", 0, 11)
+    left = f" {device.index:>3} {fan:>3} {temp:>4} {cell_ljust(perf, 3)}{power:>13} "
     mid = f" {memory:>20} "
-    right = f" {util:>7}  {compute:>11} "
+    right = f" {util:>7}  {cell_rjust(compute, 11)} "
     return f"│{left}│{mid}│{right}│"
 
 
 def _device_row_two(device: DeviceSnapshot) -> str:
     fan = _fan_text(device.fan_percent)
     temp = _temp_text(device.temperature_c)
-    perf = (device.performance_state or "N/A")[:4]
+    perf = cell_slice(device.performance_state or "N/A", 0, 4)
     power = _power_status(device.power_w, device.power_limit_w)
     memory = f"{format_compact_bytes(device.memory_used_bytes)} / {format_compact_bytes(device.memory_total_bytes)}"
     util = format_percent(device.gpu_util_percent)
-    compute = (device.compute_mode or "N/A")[:11]
-    left = f" {fan:>3}  {temp:>4}  {perf:^4} {power:>13} "
+    compute = cell_slice(device.compute_mode or "N/A", 0, 11)
+    left = f" {fan:>3}  {temp:>4}  {cell_ljust(perf, 4)} {power:>13} "
     mid = f" {memory:>20} "
-    right = f" {util:>7}  {compute:>11} "
+    right = f" {util:>7}  {cell_rjust(compute, 11)} "
     return f"│{left}│{mid}│{right}│"
 
 
@@ -941,25 +937,24 @@ def _top_border_simple(inner_width: int) -> str:
     return "╒" + "═" * inner_width + "╕"
 
 
-def _process_top_border(
-    inner_width: int,
-    state: UiState,
-    processes: list[ProcessSnapshot],
-    *,
-    interactive: bool,
-) -> str:
-    border = list(_top_border_simple(inner_width))
-    if not interactive:
-        return "".join(border)
-    if _is_superuser():
-        caution = "!CAUTION: SUPERUSER LOGGED-IN."
-        border[1 : 1 + len(caution)] = caution
+def _process_top_border(inner_width: int) -> str:
+    return _top_border_simple(inner_width)
+
+
+def _process_action_line(width: int, state: UiState, processes: list[ProcessSnapshot]) -> str:
+    caution = "!CAUTION: SUPERUSER LOGGED-IN." if _is_superuser() else ""
+    hint = ""
     if not state.readonly and _has_actionable_selection(state, processes):
         hint = "(Press ^C(INT)/T(TERM)/K(KILL) to send signals)"
-        start = len(border) - len(hint)
-        if start > 0:
-            border[start:] = hint
-    return "".join(border)
+    inner = max(0, width)
+    if not caution:
+        return cell_rjust(hint, inner)
+    if not hint:
+        return cell_ljust(caution, inner)
+    available = inner - cell_width(caution) - cell_width(hint)
+    if available < 1:
+        return cell_ljust(cell_ellipsize(f"{caution} {hint}", inner), inner)
+    return caution + " " * available + hint
 
 
 def _is_superuser() -> bool:
@@ -994,7 +989,7 @@ def _bottom_border_simple(inner_width: int) -> str:
 
 def _box_content(text: str, width: int) -> str:
     inner = max(0, width - 2)
-    return "│" + ellipsize(text, inner).ljust(inner) + "│"
+    return "│" + cell_ljust(cell_ellipsize(text, inner), inner) + "│"
 
 
 def _driver_version(frame: FrameSnapshot) -> str:
@@ -1099,9 +1094,11 @@ def _user_host() -> str:
 
 def _process_title(width: int, user_host: str) -> str:
     left = " Processes:"
-    if width <= len(left) + len(user_host):
-        return ellipsize(f"{left} {user_host}", width)
-    return f"{left}{' ' * (width - len(left) - len(user_host) - 1)}{user_host} "
+    left_width = cell_width(left)
+    user_host_width = cell_width(user_host)
+    if width <= left_width + user_host_width:
+        return cell_ellipsize(f"{left} {user_host}", width)
+    return f"{left}{' ' * (width - left_width - user_host_width - 1)}{user_host} "
 
 
 def _process_header(width: int, state: UiState | None = None, *, time_width: int = 4) -> str:
@@ -1152,9 +1149,9 @@ def _process_row(
 ) -> str:
     gpu_info = _process_gpu_info(process, state=state, mark_selection=mark_selection)
     host_info = _process_host_info(process, host_memory_total, time_width)
-    visible_host_info = host_info[max(0, state.command_offset) :]
-    host_width = max(0, width - len(gpu_info))
-    return gpu_info + ellipsize(visible_host_info, host_width)
+    visible_host_info = cell_slice(host_info, max(0, state.command_offset))
+    host_width = max(0, width - cell_width(gpu_info))
+    return gpu_info + cell_ellipsize(visible_host_info, host_width)
 
 
 def _process_gpu_info(
@@ -1165,15 +1162,46 @@ def _process_gpu_info(
 ) -> str:
     selected = state is not None and process.selection_key == state.selected_key
     tagged = state is not None and process.pid in state.tagged_pids
-    marker = ">" if selected and mark_selection else "=" if tagged and mark_selection else " "
-    process_type = (process.process_type or "N/A").replace("C+G", "X")
-    user_text = ellipsize(process.user, 7, marker="+").rjust(7)
+    linked = state is not None and _same_host_process_as_selection(process, state)
+    marker = ">" if selected and mark_selection else "=" if (tagged or linked) and mark_selection else " "
+    process_type = (process.process_type or "-").replace("C+G", "X")
+    process_type = cell_slice(process_type, 0, 1)
+    user_text = cell_rjust(cell_ellipsize(process.user or "N/A", 7, marker="+"), 7)
     return (
         f"{marker}{process.gpu_index:>3} {process.pid:>7} {process_type:>1} {user_text} "
         f"{format_mib(process.gpu_memory_bytes):>8} "
         f"{format_percent_value(process.gpu_util_percent):>3} "
         f"{format_percent_value(process.gpu_memory_bandwidth_util_percent):>5}  "
     )
+
+
+def _same_host_process_as_selection(process: ProcessSnapshot, state: UiState) -> bool:
+    if state.selected_key is None or process.selection_key == state.selected_key:
+        return False
+    # A selection key always contains the PID; require the same creation stamp
+    # when one is available so a reused PID is never linked accidentally.
+    parts = state.selected_key.rsplit(":", 2)
+    try:
+        selected_pid = int(parts[-2] if len(parts) >= 3 else parts[-1])
+    except ValueError:
+        return False
+    if process.pid != selected_pid:
+        return False
+    if process.create_time is None or len(parts) < 3:
+        return True
+    try:
+        return abs(process.create_time - float(parts[-1])) <= PROCESS_CREATE_TIME_TOLERANCE
+    except ValueError:
+        return True
+
+
+def _cell_tail_ellipsize(text: str, width: int, marker: str = "..") -> str:
+    if cell_width(text) <= width:
+        return text
+    marker_width = cell_width(marker)
+    if width <= marker_width:
+        return cell_slice(text, max(0, cell_width(text) - width), width)
+    return marker + cell_slice(text, cell_width(text) - (width - marker_width), width - marker_width)
 
 
 def _process_host_info(

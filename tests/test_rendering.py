@@ -7,6 +7,7 @@ from mxtop.rendering import _colorize_line, colorize_screen, render_once
 from mxtop.ui.classify import dense_device_cell_spans, host_graph_context
 from mxtop.ui.panels import render_device_panel, render_main_screen, render_snapshot_screen
 from mxtop.ui.state import LayoutMode, UiState
+from mxtop.ui.text import cell_width
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -199,6 +200,20 @@ def test_render_once_host_panel_does_not_duplicate_right_vbar():
         plain = ANSI_RE.sub("", line)
         if "GPU MEM:" in plain or "GPU UTL:" in plain:
             assert not plain.endswith("││"), f"trailing duplicate vbar in {plain!r}"
+
+
+def test_colorized_large_fleet_rows_keep_exact_terminal_width_at_all_layouts():
+    for device_count in (32, 64):
+        frame = FrameSnapshot(devices=_many_devices(device_count), processes=[])
+        for width in (79, 120, 180):
+            rendered = render_main_screen(frame, UiState(), width=width)
+            colored = colorize_screen(frame, rendered.lines)
+            plain = [_strip_ansi(line) for line in colored]
+
+            assert all(cell_width(line) in {0, 79, width} for line in plain)
+            assert all(cell_width(line) <= width for line in plain)
+            host_rows = [line for line in plain if " CPU:" in line or " MEM:" in line]
+            assert all(not line.endswith("││") for line in host_rows)
 
 
 def test_render_once_shows_bars_on_wide_layout():
