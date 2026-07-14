@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 from typing import Iterable
+import unicodedata
 
 import PIL
 from PIL import Image, ImageDraw, ImageFont, PngImagePlugin, features
@@ -281,6 +282,11 @@ def rasterizer_versions() -> dict[str, str]:
     }
 
 
+def portable_source_digest(path: Path) -> str:
+    source = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(source).hexdigest()
+
+
 def _require_canonical_pillow() -> None:
     if PIL.__version__ != CANONICAL_PILLOW_VERSION:
         raise RuntimeError(
@@ -307,7 +313,7 @@ def render_config_digest(
     bold_spec: FontSpec | None,
     symbol_spec: FontSpec | None,
 ) -> str:
-    renderer_source = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    renderer_source = portable_source_digest(Path(__file__))
     payload = {
         "braille_renderer": BRAILLE_RENDERER_VERSION,
         "terminal_grid_renderer": TERMINAL_GRID_RENDERER_VERSION,
@@ -467,6 +473,7 @@ def _draw_cell_glyph(
     canonical_fonts: bool,
 ) -> None:
     glyph, cell_x, color, chosen_font = glyph_state
+    glyph = unicodedata.normalize("NFC", glyph)
     if len(glyph) == 1:
         fraction = _BLOCK_FRACTIONS.get(glyph)
         if 0x2800 <= ord(glyph) <= 0x28FF and canonical_fonts:

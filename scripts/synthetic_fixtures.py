@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import math
 import os
 import time
@@ -69,6 +70,7 @@ def install_host_stubs() -> None:
     ui_panels._host_memory_total = _host_memory_total  # type: ignore[assignment]
     ui_panels._load_average_text = _load_average_text  # type: ignore[assignment]
     ui_panels._user_host = _user_host  # type: ignore[assignment]
+    ui_panels._is_superuser = lambda: False  # type: ignore[assignment]
     if hasattr(ui_panels, "_uptime_text"):
         ui_panels._uptime_text = _uptime_text  # type: ignore[assignment]
 
@@ -99,9 +101,17 @@ def prepare_render() -> None:
 
 @contextmanager
 def utc_timezone() -> Iterator[None]:
-    """Make ``datetime.fromtimestamp`` stable across Linux and macOS hosts."""
+    """Make preview timestamps stable on every supported development host."""
     previous = os.environ.get("TZ")
+    previous_datetime = ui_panels.datetime
+
+    class UtcDateTime:
+        @staticmethod
+        def fromtimestamp(timestamp: float) -> datetime:
+            return datetime.fromtimestamp(timestamp, timezone.utc)
+
     os.environ["TZ"] = "UTC"
+    ui_panels.datetime = UtcDateTime  # type: ignore[assignment]
     tzset = getattr(time, "tzset", None)
     if tzset is not None:
         tzset()
@@ -112,6 +122,7 @@ def utc_timezone() -> Iterator[None]:
             os.environ.pop("TZ", None)
         else:
             os.environ["TZ"] = previous
+        ui_panels.datetime = previous_datetime
         if tzset is not None:
             tzset()
 

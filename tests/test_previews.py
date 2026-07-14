@@ -123,6 +123,7 @@ def test_preview_text_is_repeatable_and_uses_fixed_metadata() -> None:
     assert first == second
     plain = previews.ANSI_PATTERN.sub("", first)
     assert "Sat Jan 17 12:34:56 2026" in plain
+    assert "SUPERUSER LOGGED-IN" not in plain
     assert f"Driver Version: {DRIVER_VERSION}" in plain
     assert f"MACA Version: {MACA_VERSION}" in plain
     assert f"UPTIME: {HOST_UPTIME_TEXT}" in plain
@@ -248,6 +249,20 @@ def test_png_renderer_shapes_combining_marks_with_their_base_cell(
             image_chops.difference(rendered_lines[0], rendered).getbbox() is None
             for rendered in rendered_lines[1:]
         )
+
+
+def test_renderer_source_digest_ignores_platform_line_endings(tmp_path: Path) -> None:
+    previews = _with_pillow("generate_preview")
+    unix = tmp_path / "unix.py"
+    windows = tmp_path / "windows.py"
+    legacy = tmp_path / "legacy.py"
+    unix.write_bytes(b"first\nsecond\n")
+    windows.write_bytes(b"first\r\nsecond\r\n")
+    legacy.write_bytes(b"first\rsecond\r")
+
+    expected = previews.portable_source_digest(unix)
+    assert previews.portable_source_digest(windows) == expected
+    assert previews.portable_source_digest(legacy) == expected
 
 
 def test_png_renderer_sizes_wide_text_by_terminal_cells(tmp_path: Path) -> None:
