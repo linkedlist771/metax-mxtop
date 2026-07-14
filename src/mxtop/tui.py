@@ -901,30 +901,16 @@ def _draw_process_data_line(
 ) -> None:
     del attr
     semantic_line = line if semantic_line is None else semantic_line
-    if semantic_line.startswith("│>"):
-        _safe_addnstr(
-            screen,
-            row,
-            0,
-            line,
-            width,
-            _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE),
-        )
-        return
     level, owned = context or (0, True)
     if tagged is None:
-        tagged = semantic_line.startswith("│=")
-    base_attr = (
-        _attr(PAIR_WARN, curses.A_BOLD | (0 if owned else curses.A_DIM))
-        if tagged
-        else _attr(PAIR_VALUE if owned else PAIR_DIM)
-    )
+        tagged = False
+    host_attr = _attr(PAIR_VALUE if owned else PAIR_DIM)
     match = _PROCESS_ROW_FIELDS_RE.search(semantic_line)
     if match is None:
-        _safe_addnstr(screen, row, 0, line, width, base_attr)
+        _safe_addnstr(screen, row, 0, line, width, host_attr)
         return
     position = _safe_addnstr(
-        screen, row, 0, line[: match.end("prefix")], width, base_attr
+        screen, row, 0, line[: match.end("prefix")], width, _attr(PAIR_VALUE)
     )
     position = _safe_addnstr(
         screen,
@@ -934,7 +920,16 @@ def _draw_process_data_line(
         width,
         _attr(_pair_for_level(level), curses.A_BOLD),
     )
-    _safe_addnstr(screen, row, position, line[match.end("gpu") :], width, base_attr)
+    _safe_addnstr(screen, row, position, line[match.end("gpu") :], width, host_attr)
+    if tagged and width > 6:
+        _safe_addnstr(
+            screen,
+            row,
+            5,
+            cell_slice(line, 5, width - 6),
+            width - 1,
+            _attr(PAIR_WARN, curses.A_BOLD | (0 if owned else curses.A_DIM)),
+        )
     if linked and len(line) > 1:
         _safe_addnstr(
             screen,
@@ -1336,10 +1331,6 @@ def _line_attr(row: int, line: str) -> int:
         return _attr(PAIR_VALUE, curses.A_BOLD)
     if "backend error" in line or "error=" in line or "ERROR:" in line:
         return _attr(PAIR_ERROR, curses.A_BOLD)
-    if line.startswith("│>"):
-        return _attr(PAIR_SELECTED, curses.A_BOLD | curses.A_REVERSE)
-    if line.startswith("│="):
-        return _attr(PAIR_WARN, curses.A_BOLD)
     if not line:
         return _attr(PAIR_VALUE)
     if _is_border_line(line):
@@ -1347,6 +1338,28 @@ def _line_attr(row: int, line: str) -> int:
     if _is_header_line(line):
         return _attr(PAIR_HEADER, curses.A_BOLD)
     return _attr(PAIR_VALUE)
+
+
+def _draw_selected_row(
+    screen,
+    row: int,
+    line: str,
+    width: int,
+    attr: int,
+    *,
+    preserve_box_border: bool,
+) -> None:
+    if preserve_box_border and width >= 2:
+        _safe_addnstr(
+            screen,
+            row,
+            1,
+            cell_slice(line, 1, width - 2),
+            width - 1,
+            attr,
+        )
+        return
+    _safe_addnstr(screen, row, 0, line, width, attr)
 
 
 def _filtered_frame(
@@ -2825,13 +2838,13 @@ def run_tui(
                             else PAIR_SELECTED
                         )
                     )
-                    _safe_addnstr(
+                    _draw_selected_row(
                         draw_screen,
                         row,
-                        0,
                         line,
                         draw_width,
                         _attr(pair, curses.A_BOLD | curses.A_REVERSE),
+                        preserve_box_border=state.active_screen == ScreenMode.MAIN,
                     )
             screen.refresh()
 

@@ -29,6 +29,20 @@ def _strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
 
 
+def test_linked_process_ansi_marker_blinks_without_tag_color():
+    line = (
+        "│=  1      10 C   alice  1.00GiB  10    20     1%    2%  0:01 cmd │"
+    )
+
+    colored = rendering._colorize_process_row(
+        line, (rendering.FG_GREEN, True)
+    )
+
+    assert _strip_ansi(colored) == line
+    assert rendering.BOLD + rendering.BLINK + "=" in colored
+    assert rendering.FG_YELLOW not in colored
+
+
 def test_render_once_includes_gpu_and_process_rows():
     frame = FrameSnapshot(
         devices=[

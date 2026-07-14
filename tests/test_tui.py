@@ -902,6 +902,27 @@ def test_linked_multi_gpu_marker_blinks_without_impersonating_a_tag(monkeypatch)
         semantic_line=linked_line,
     )
     assert any(attr[0] == tui.PAIR_WARN for _, _, _, _, attr in tagged_screen.calls)
+    warning_calls = [call for call in tagged_screen.calls if call[-1][0] == tui.PAIR_WARN]
+    assert [(column, count) for _, column, _, count, _ in warning_calls] == [(5, 94)]
+    assert all(column not in {0, 1, 2} for _, column, _, _, _ in warning_calls)
+
+
+def test_main_selection_preserves_box_borders_but_tree_selection_does_not(monkeypatch):
+    monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: (pair, extra))
+    line = "│" + "x" * 98 + "│"
+    selected_attr = (tui.PAIR_SELECTED, tui.curses.A_BOLD | tui.curses.A_REVERSE)
+
+    main = FakeScreen(column_limit=100)
+    tui._draw_selected_row(
+        main, 0, line, 100, selected_attr, preserve_box_border=True
+    )
+    assert main.calls == [(0, 1, "x" * 98, 98, selected_attr)]
+
+    tree = FakeScreen(column_limit=100)
+    tui._draw_selected_row(
+        tree, 0, line, 100, selected_attr, preserve_box_border=False
+    )
+    assert tree.calls == [(0, 0, line, 100, selected_attr)]
 
 
 def test_unowned_tags_still_open_a_confirmation_and_report_at_execution(monkeypatch):

@@ -353,12 +353,12 @@ def render_help_screen(
         "      Wheel: scroll process list        Shift-Wheel: scroll horizontally",
         "        Tab: scroll process list          Ctrl-Wheel: fast scroll (5x)",
         "",
-        "      on oN: sort by GPU-INDEX               op oP: sort by PID",
-        "      ou oU: sort by USER                    og oG: sort by GPU-MEM",
-        "      os oS: sort by %SM                     ob oB: sort by %GMBW",
-        "      oc oC: sort by %CPU                    om oM: sort by %MEM",
-        "      ot oT: sort by TIME                      , .: select sort column",
-        "                                                /: invert sort order",
+        "      on oN: sort by GPU-INDEX",
+        "      op oP: sort by PID                      ob oB: sort by %GMBW",
+        "      ou oU: sort by USER                     oc oC: sort by %CPU",
+        "      og oG: sort by GPU-MEM                  om oM: sort by %MEM",
+        "      os oS: sort by %SM                      ot oT: sort by TIME",
+        "        , .: select sort column                   /: invert sort order",
         "",
         "Press any key to return.",
     ]
@@ -582,7 +582,10 @@ def render_metrics_screen(
 
     cpu_lines[0] = _overlay(cpu_lines[0], f" MAX CPU: {_format_max(history.cpu, '%')} ")
     if upper_height > 1:
-        cpu_lines[1] = _overlay(cpu_lines[1], f" CPU: {format_percent_precise(_last(history.cpu))} ")
+        cpu_lines[1] = _overlay(
+            cpu_lines[1],
+            f"     CPU: {format_percent_precise(_last(history.cpu))} ",
+        )
     gpu_mem_lines[0] = _overlay(
         gpu_mem_lines[0],
         " " + _memory_metric_label(
@@ -596,7 +599,7 @@ def render_metrics_screen(
         gpu_mem_lines[1] = _overlay(
             gpu_mem_lines[1],
             " " + _memory_metric_label(
-                "GPU-MEM",
+                "    GPU-MEM",
                 _last(history.gpu_memory),
                 gpu_memory_total,
                 used_bytes=process.gpu_memory_bytes,
@@ -605,7 +608,7 @@ def render_metrics_screen(
     host_mem_lines[-2] = _overlay(
         host_mem_lines[-2],
         " " + _memory_metric_label(
-            "HOST-MEM",
+            "    HOST-MEM",
             _last(history.host_memory),
             host_memory_total,
             used_bytes=process.host_memory_bytes,
@@ -622,7 +625,7 @@ def render_metrics_screen(
     )
     gpu_lines[-2] = _overlay(
         gpu_lines[-2],
-        f" GPU-SM: {format_percent_precise(_last(history.gpu_utilization))} ",
+        f"     GPU-SM: {format_percent_precise(_last(history.gpu_utilization))} ",
     )
     gpu_lines[-1] = _overlay(
         gpu_lines[-1],

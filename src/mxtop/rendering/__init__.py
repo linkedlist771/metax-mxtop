@@ -29,6 +29,7 @@ RESET = "\x1b[0m"
 BOLD = "\x1b[1m"
 DIM = "\x1b[2m"
 REVERSE = "\x1b[7m"
+BLINK = "\x1b[5m"
 FG_CYAN = "\x1b[36m"
 FG_GREEN = "\x1b[32m"
 FG_YELLOW = "\x1b[33m"
@@ -447,8 +448,6 @@ def _colorize_process_row(
     line: str,
     context: tuple[str, bool] | None = None,
 ) -> str:
-    if line.startswith("│>"):
-        return _style(line, BOLD, REVERSE, FG_CYAN)
     if len(line) < 5:
         return line
     match = _PROCESS_ROW_FIELDS_RE.search(line)
@@ -458,11 +457,12 @@ def _colorize_process_row(
     before_gpu = match.group("prefix")
     after_gpu = line[match.end("gpu") :]
     if line.startswith("│="):
-        codes = (BOLD, FG_YELLOW) if owned else (BOLD, DIM, FG_YELLOW)
-        before_gpu = _style(before_gpu, *codes)
-        after_gpu = _style(after_gpu, *codes)
-    elif not owned:
-        before_gpu = _style(before_gpu, DIM, _dim_fg())
+        before_gpu = (
+            line[0]
+            + _style(line[1], BOLD, BLINK)
+            + line[2 : match.end("prefix")]
+        )
+    if not owned:
         after_gpu = _style(after_gpu, DIM, _dim_fg())
     return "".join(
         [

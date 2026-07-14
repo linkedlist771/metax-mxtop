@@ -171,6 +171,17 @@ def test_canonical_dashboard_images_use_consistent_box_widths() -> None:
             )
 
 
+def test_clipped_help_preview_does_not_color_sort_row_as_footer() -> None:
+    showcase = _with_pillow("render_showcase")
+    lines = showcase.render_help_screen(118, 30).lines
+
+    colored = showcase._colorize_help(lines).splitlines()
+
+    assert lines[-1].lstrip().startswith(", .:")
+    assert not colored[-1].startswith(showcase.ansi.BOLD + showcase.ansi.FG_CYAN)
+    assert showcase.ansi.FG_MAGENTA in colored[-1]
+
+
 def test_png_renderer_discovers_portable_fonts_and_embeds_freshness(
     tmp_path: Path,
 ) -> None:

@@ -184,9 +184,12 @@ def _render_dense_device_panel(frame: FrameSnapshot, width: int) -> list[str]:
     columns = _dense_device_columns(width, len(frame.devices))
     cell_widths = _dense_device_cell_widths(width, columns)
     verticals = _dense_device_verticals(cell_widths)
+    version_line = _version_line(_driver_version(frame), 0, _maca_version(frame))
+    if width > CORE_WIDTH:
+        version_line = version_line[:-1] + " " * (width - CORE_WIDTH) + "│"
     lines = [
         "╒" + "═" * (width - 2) + "╕",
-        _version_line(_driver_version(frame), width - CORE_WIDTH, _maca_version(frame)),
+        version_line,
         _dense_fleet_divider(width, len(frame.devices), cell_widths),
         _dense_device_line(cell_widths, header=True),
         _double_horizontal_rule(width, verticals, verticals),
@@ -386,7 +389,7 @@ def _host_percent_text(value: float | None) -> str:
 def _load_average_text() -> str:
     try:
         values = os.getloadavg()
-    except OSError:
+    except (AttributeError, OSError):
         return "Load Average: N/A N/A N/A"
     return "Load Average: {} {} {}".format(
         *(f"{value:5.2f}"[:5] if value < 10000.0 else "9999+" for value in values)
@@ -663,7 +666,7 @@ def render_snapshot_screen(frame: FrameSnapshot, *, width: int = 120) -> Rendere
     )
 
 
-_PROCESS_DATA_PREFIX_RE = re.compile(r"^│[ >=]\s*-?\d+\s+\d+")
+_PROCESS_DATA_PREFIX_RE = re.compile(r"^│[ =]\s*-?\d+\s+\d+")
 
 
 def _process_row_keys(
@@ -1365,16 +1368,8 @@ def _process_gpu_info(
     state: UiState | None,
     mark_selection: bool,
 ) -> str:
-    selected = state is not None and process.selection_key == state.selected_key
-    tagged = state is not None and process.pid in state.tagged_pids
     linked = state is not None and _same_host_process_as_selection(process, state)
-    marker = (
-        ">"
-        if selected and mark_selection
-        else "="
-        if (tagged or linked) and mark_selection
-        else " "
-    )
+    marker = "=" if linked and mark_selection else " "
     process_type = (process.process_type or "-").replace("C+G", "X")
     process_type = cell_slice(process_type, 0, 1)
     user_text = cell_rjust(cell_ellipsize(process.user or "N/A", 7, marker="+"), 7)

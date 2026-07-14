@@ -22,7 +22,7 @@ DENSE_DEVICE_CELL_RE = re.compile(
     r"\s+(?:N/A|MAX|MIN|[+-]?\d+%)\s+(?:N/A|MAX|MIN|[+-]?\d+%)"
     r"\s+(?:N/A|MAX|MIN|[+-]?\d+W)\s*$"
 )
-PROCESS_ROW_RE = re.compile(r"^│[ =>]\s*\d+\s+\d+\s")
+PROCESS_ROW_RE = re.compile(r"^│[ =]\s*\d+\s+\d+\s")
 BAR_RE = re.compile(r"(MEM|MBW|UTL|PWR): ([█░▏▎▍▌▋▊▉ ]+) (\S+)")
 GPU_METRIC_RE = re.compile(r"GPU (MEM|UTL):\s*(\S+)")
 WATT_RATIO_RE = re.compile(r"(\d+(?:\.\d+)?)W\s*/\s*(\d+(?:\.\d+)?)W")
@@ -31,7 +31,7 @@ MEMORY_RATIO_RE = re.compile(
 )
 CELL_GPU_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
 PROCESS_ROW_FIELDS_RE = re.compile(
-    r"^(?P<prefix>│[ =>]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
+    r"^(?P<prefix>│[ =]\s*)(?P<gpu>\d+)(?P<before_mem>.*?\s)"
     r"(?P<gpu_mem>N/A|\d+(?:\.\d+)?(?:B|KiB|MiB|GiB|TiB))"
     r"(?P<before_sm>\s+)(?P<sm>\S+)"
     r"(?P<before_gmbw>\s+)(?P<gmbw>\S+)"

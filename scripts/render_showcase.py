@@ -178,8 +178,9 @@ def _colorize_help(lines: list[str]) -> str:
         if right is not None:
             spans.append((39, 52, (ansi.BOLD, right)))
         output[row] = _styled_spans(output[row], spans)
-    if output:
-        output[-1] = _style(output[-1], ansi.BOLD, ansi.FG_CYAN)
+    for row, line in enumerate(output):
+        if line.rstrip() == "Press any key to return.":
+            output[row] = _style(line, ansi.BOLD, ansi.FG_CYAN)
     return "\n".join(output)
 
 

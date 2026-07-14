@@ -154,6 +154,20 @@ def test_help_screen_includes_project_license_without_visible_readonly_suffixes(
     assert all(cell_width(line) == 100 for line in view.lines)
 
 
+def test_help_sort_block_matches_nvitop_geometry():
+    lines = [line.rstrip() for line in render_help_screen(100).lines]
+
+    start = lines.index("      on oN: sort by GPU-INDEX")
+    assert lines[start : start + 6] == [
+        "      on oN: sort by GPU-INDEX",
+        "      op oP: sort by PID                      ob oB: sort by %GMBW",
+        "      ou oU: sort by USER                     oc oC: sort by %CPU",
+        "      og oG: sort by GPU-MEM                  om oM: sort by %MEM",
+        "      os oS: sort by %SM                      ot oT: sort by TIME",
+        "        , .: select sort column                   /: invert sort order",
+    ]
+
+
 def test_environment_screen_matches_error_copy_and_scrolls_command_and_rows():
     process = _frame().processes[0]
     failed = render_environment_screen(
@@ -265,6 +279,10 @@ def test_process_metrics_samples_meta_x_values_and_renders_four_graphs():
     assert any("MAX HOST-MEM:" in line and "/" in line for line in view.lines)
     assert any("GPU-SM:" in line for line in view.lines)
     assert any("MAX GPU-SM:" in line for line in view.lines)
+    assert any(line.startswith("│     CPU:") for line in view.lines)
+    assert any("│     GPU-MEM:" in line for line in view.lines)
+    assert any(line.startswith("│     HOST-MEM:") for line in view.lines)
+    assert any("│     GPU-SM:" in line for line in view.lines)
     assert any("30s" in line for line in view.lines)
     assert sum("├╴" in line for line in view.lines) >= 2
     assert history.host_memory_total == 128 * 1024**3

@@ -103,6 +103,43 @@ def test_wide_device_panel_uses_one_consistent_width():
     assert all(cell_width(line) == 140 for line in lines)
 
 
+def test_wide_live_title_spans_the_full_viewport():
+    frame = _frame()
+    frame.timestamp = 0
+
+    line = panels.render_title(frame, 120)
+
+    assert cell_width(line) == 120
+    assert line.endswith("(Press h for help or q to quit)")
+
+
+def test_standard_wide_device_header_keeps_a_closed_full_width_frame():
+    lines = render_device_panel(_frame(), 120, LayoutMode.FULL, compact=False)
+
+    assert [line[-1] for line in lines[:5]] == ["╕", "│", "┤", "│", "│"]
+    assert lines[5][78] == "╤"
+    assert lines[5][-1] == "╡"
+    assert lines[6][78] == "│"
+    assert lines[6][-1] == "│"
+    assert lines[-1][78] == "╧"
+    assert lines[-1][-1] == "╛"
+
+
+def test_standard_device_panel_keeps_a_closed_frame_before_100_columns():
+    for width in (80, 92, 99):
+        lines = render_device_panel(_frame(), width, LayoutMode.FULL, compact=False)
+
+        assert all(cell_width(line) == width for line in lines)
+        assert all(line[-1] in "╕│┤╡╛" for line in lines)
+
+
+def test_empty_wide_device_panel_keeps_a_closed_full_width_frame():
+    lines = render_device_panel(FrameSnapshot(devices=[], processes=[]), 120)
+
+    assert all(cell_width(line) == 120 for line in lines)
+    assert [line[-1] for line in lines] == ["╕", "│", "╡", "│", "╛"]
+
+
 def test_device_panels_fill_every_supported_viewport_width():
     for width in (79, 92, 100, 140, 180):
         for compact in (False, True):
@@ -198,13 +235,15 @@ def test_process_markers_and_manual_scroll_are_independent():
     lines, _, _ = render_process_panel(frame, state, 120, height=6, compact=True)
 
     assert state.scroll_offset == 3
-    assert any(line.startswith("│=") and "job-101.py" in line for line in lines)
+    assert any(line.startswith("│ ") and "job-101.py" in line for line in lines)
+    assert not any(line.startswith("│=") and "job-101.py" in line for line in lines)
 
     state.selected_key = frame.processes[1].selection_key
     state.follow_selection = True
     state.command_offset = 0
     lines, _, _ = render_process_panel(frame, state, 120, height=6, compact=True)
-    assert any(line.startswith("│>") and "job-101.py" in line for line in lines)
+    assert any(line.startswith("│ ") and "job-101.py" in line for line in lines)
+    assert not any(line.startswith("│>") for line in lines)
 
 
 def test_process_panel_signal_hint_tracks_actionable_selection(monkeypatch):
@@ -237,7 +276,7 @@ def test_same_host_process_on_another_gpu_uses_link_marker_independently_of_tags
 
     lines, _, _ = render_process_panel(frame, state, 120, compact=True)
 
-    assert any(line.startswith("│>") and "  0 " in line for line in lines)
+    assert any(line.startswith("│ ") and "  0 " in line for line in lines)
     assert any(line.startswith("│=") and "  1 " in line for line in lines)
     assert state.tagged_pids == set()
 
@@ -450,7 +489,7 @@ def test_main_screen_offset_moves_the_whole_dashboard_and_preserves_process_ids(
     state.main_screen_offset = 1
     shifted = render_main_screen(frame, state, width=120, height=18)
 
-    assert top.lines[0].endswith("(Press h for help or q to quit)")
+    assert top.lines[0].rstrip().endswith("(Press h for help or q to quit)")
     assert shifted.lines[0] == top.lines[1]
     assert shifted.process_count == len(shifted.process_keys)
     assert shifted.process_count == sum(
