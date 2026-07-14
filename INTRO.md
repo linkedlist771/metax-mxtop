@@ -75,6 +75,7 @@ Useful environment defaults:
 - `MXTOP_MONITOR_MODE`: comma-separated layout and style tokens, for example `compact,colorful,dark,readonly`.
 - `MXTOP_GPU_UTILIZATION_THRESHOLDS=LOW,HIGH` and `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH`: intensity thresholds.
 - `MXTOP_MXSMI_PATH`: local `mx-smi` executable override.
+- `MXTOP_PYMXSML_ECC_ERRORS`: opt into slow, cached ECC-error polling; disabled by default to preserve refresh responsiveness.
 - `ANSI_COLORS_DISABLED`, `NO_COLOR`, and `FORCE_COLOR`: ANSI output control; explicit CLI flags take precedence, then disable variables, then `FORCE_COLOR`.
 
 ## Backends

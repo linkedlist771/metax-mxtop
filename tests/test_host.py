@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import sys
 from types import SimpleNamespace
 
@@ -31,6 +32,9 @@ def test_enrich_processes_calculates_cpu_percent_from_elapsed_cpu_time(monkeypat
         def memory_info(self) -> SimpleNamespace:
             return SimpleNamespace(rss=1024)
 
+        def memory_percent(self) -> float:
+            return 1.25
+
         def create_time(self) -> float:
             return 100.0
 
@@ -50,6 +54,7 @@ def test_enrich_processes_calculates_cpu_percent_from_elapsed_cpu_time(monkeypat
     enrich_processes([process])
 
     assert process.cpu_percent == 50.0
+    assert process.memory_util_percent == 1.25
 
 
 def test_enrich_processes_samples_a_pid_shared_by_multiple_gpus_once(monkeypatch):
@@ -60,12 +65,19 @@ def test_enrich_processes_samples_a_pid_shared_by_multiple_gpus_once(monkeypatch
         ]
     )
     process_calls = 0
+    oneshot_calls = 0
 
     class FakeProcess:
         def __init__(self, pid: int) -> None:
             nonlocal process_calls
             process_calls += 1
             assert pid == 456
+
+        @contextmanager
+        def oneshot(self):
+            nonlocal oneshot_calls
+            oneshot_calls += 1
+            yield
 
         def name(self) -> str:
             return "python"
@@ -104,6 +116,7 @@ def test_enrich_processes_samples_a_pid_shared_by_multiple_gpus_once(monkeypatch
     enrich_processes(processes)
 
     assert process_calls == 2
+    assert oneshot_calls == 2
     assert [process.cpu_percent for process in processes] == [50.0, 50.0]
     assert {process.command for process in processes} == {"python distributed.py"}
     assert {process.host_memory_bytes for process in processes} == {4096}
@@ -143,6 +156,7 @@ def test_enrich_processes_fallback_reads_proc_metrics(monkeypatch, tmp_path):
     monkeypatch.setattr("mxtop.host.os.stat", fake_stat)
     monkeypatch.setattr("mxtop.host._read_boot_time", lambda: 100.0)
     monkeypatch.setattr("mxtop.host._safe_clock_ticks", lambda: 100)
+    monkeypatch.setattr("mxtop.host._safe_total_memory", lambda: 8 * 1024**2)
     monkeypatch.setattr("mxtop.host.time.time", lambda: 250.0)
 
     process = ProcessSnapshot(gpu_index=0, pid=123)
@@ -154,6 +168,7 @@ def test_enrich_processes_fallback_reads_proc_metrics(monkeypatch, tmp_path):
     assert process.user == "31965"
     assert process.runtime_seconds == 50.0
     assert process.host_memory_bytes == 2048 * 1024
+    assert process.memory_util_percent == 25.0
     assert peer.cpu_percent == process.cpu_percent
     assert peer.create_time == process.create_time
     assert len(opened) == 4

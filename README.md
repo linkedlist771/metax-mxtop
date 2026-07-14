@@ -195,6 +195,7 @@ Useful CLI flags:
 | Variable | Meaning |
 | --- | --- |
 | `MXTOP_MXSMI_PATH` | Override the local `mx-smi` executable discovered by the backend. |
+| `MXTOP_PYMXSML_ECC_ERRORS` | Set to `1`, `true`, `yes`, or `on` to opt into cached ECC-error polling. It is disabled by default because current MetaX APIs can add more than one second to a refresh. |
 | `MXTOP_MONITOR_MODE` | Comma-separated defaults: one of `auto`, `full`, `compact`, plus `colorful`/`plain`, `light`/`dark`, and/or `readonly`. Explicit CLI options take precedence. |
 | `MXTOP_GPU_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU utilization thresholds when the CLI option is omitted. |
 | `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU-memory thresholds when the CLI option is omitted. |

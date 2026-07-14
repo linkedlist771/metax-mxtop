@@ -1,4 +1,7 @@
+import subprocess
 from subprocess import CompletedProcess
+
+import pytest
 
 from mxtop.backends.mxsmi import (
     MxSmiBackend,
@@ -53,7 +56,7 @@ def test_parse_dmon_csv_uses_known_device_names():
 
 
 def test_parse_dmon_csv_reads_optional_clock_columns():
-    sample = """dev, gpu clock, memory-clock, gpu, total
+    sample = """dev, xcoreclk, mcclk, gpu, total
 0, 1800 MHz, 1600 MHz, 71, 64
 """
 
@@ -194,8 +197,8 @@ def test_resolve_mxsmi_path_uses_environment(monkeypatch):
 def test_backend_uses_resolved_executable(monkeypatch):
     calls = []
 
-    def fake_run(args, check, text, capture_output):
-        calls.append(args)
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
         sub = args[1] if len(args) > 1 else ""
         if sub == "-L":
             return CompletedProcess(args, 0, "GPU 0: MXC500 (UUID: MX-abc)\n", "")
@@ -211,13 +214,35 @@ def test_backend_uses_resolved_executable(monkeypatch):
 
     monkeypatch.setattr("mxtop.backends.mxsmi.subprocess.run", fake_run)
 
-    frame = MxSmiBackend("/opt/mxdriver/bin/mx-smi").snapshot()
+    backend = MxSmiBackend("/opt/mxdriver/bin/mx-smi", timeout=3.5)
+    frame = backend.snapshot()
+    _ = backend.snapshot()
 
-    assert calls[0][0] == "/opt/mxdriver/bin/mx-smi"
+    commands = [args for args, _kwargs in calls]
+    assert commands[0][0] == "/opt/mxdriver/bin/mx-smi"
+    assert sum(command[1:2] == ["-L"] for command in commands) == 1
+    assert sum(command[1:2] == ["--show-version"] for command in commands) == 1
+    assert sum(command[1:2] == ["dmon"] for command in commands) == 2
+    assert sum(command[1:2] == ["--show-process"] for command in commands) == 2
+    assert all(kwargs["timeout"] == 3.5 for _args, kwargs in calls)
+    assert all(kwargs["errors"] == "replace" for _args, kwargs in calls)
+    assert "--show-clock" in next(
+        command for command in commands if command[1:2] == ["dmon"]
+    )
     assert frame.devices[0].name == "MXC500"
     assert frame.devices[0].driver_version == "1.2.3"
     assert frame.devices[0].maca_version == "4.5.6"
     assert frame.processes[0].pid == 967305
+
+
+def test_backend_propagates_mxsmi_timeout(monkeypatch):
+    def timed_out(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr("mxtop.backends.mxsmi.subprocess.run", timed_out)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        MxSmiBackend("/opt/mxdriver/bin/mx-smi", timeout=0.5).snapshot()
 
 
 def test_recorded_style_mxsmi_outputs_preserve_a_64_gpu_fleet():

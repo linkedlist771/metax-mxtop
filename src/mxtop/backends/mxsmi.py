@@ -13,6 +13,7 @@ from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
 
 MXSMI_ENV = "MXTOP_MXSMI_PATH"
 DEFAULT_MXSMI_PATH = "/opt/mxdriver/bin/mx-smi"
+DEFAULT_MXSMI_TIMEOUT = 10.0
 # Matches both the colon form ("GPU 0: MXC500 (UUID: MX-abc)") and the real
 # `mx-smi -L` form ("GPU#0    MXC600-AL    0000:06:00.0    Available (UUID: GPU-...)").
 LIST_ROW = re.compile(
@@ -183,6 +184,7 @@ def parse_dmon_csv(
                 gpu_clock_mhz=_float(
                     _first(
                         values,
+                        "xcoreclk",
                         "gpuclock",
                         "gpu_clock",
                         "coreclock",
@@ -194,6 +196,7 @@ def parse_dmon_csv(
                 memory_clock_mhz=_float(
                     _first(
                         values,
+                        "mcclk",
                         "memoryclock",
                         "memory_clock",
                         "memclock",
@@ -252,6 +255,7 @@ DMON_SNAPSHOT_ARGS: list[str] = [
     "--show-memory",
     "--total-memory",
     "--show-bdf",
+    "--show-clock",
     "--format",
     "csv",
     "-c",
@@ -314,9 +318,16 @@ def build_frame_from_outputs(
 class MxSmiBackend:
     name: str = "mx-smi"
 
-    def __init__(self, executable: str | None = None) -> None:
+    def __init__(
+        self,
+        executable: str | None = None,
+        *,
+        timeout: float = DEFAULT_MXSMI_TIMEOUT,
+    ) -> None:
         self.executable = resolve_mxsmi_path(executable)
+        self.timeout = max(0.1, float(timeout))
         self._versions: tuple[str | None, str | None] | None = None
+        self._known_devices: dict[int, DeviceSnapshot] | None = None
 
     def _run(
         self, args: list[str], *, check: bool = True
@@ -326,15 +337,20 @@ class MxSmiBackend:
             check=check,
             text=True,
             capture_output=True,
+            errors="replace",
+            timeout=self.timeout,
         )
 
     def _list_devices(self) -> dict[int, DeviceSnapshot]:
+        if self._known_devices is not None:
+            return self._known_devices
         for list_args in LIST_ARGS_VARIANTS:
             result = self._run(list_args, check=False)
             if result.returncode == 0:
                 devices = parse_list_output(result.stdout)
                 if devices:
-                    return devices
+                    self._known_devices = devices
+                    return self._known_devices
         return {}
 
     def _driver_versions(self) -> tuple[str | None, str | None]:

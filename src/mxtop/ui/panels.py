@@ -29,7 +29,13 @@ from mxtop.models import (
 )
 from mxtop.ui.help import HELP_LINES
 from mxtop.ui.history import HostHistory
-from mxtop.ui.state import LayoutMode, UiState, keep_selection, sort_processes
+from mxtop.ui.state import (
+    LayoutMode,
+    UiState,
+    keep_selection,
+    sort_is_descending,
+    sort_processes,
+)
 from mxtop.ui.text import cell_ellipsize, cell_ljust, cell_rjust, cell_slice, cell_width
 
 CORE_INNER = 77
@@ -1313,8 +1319,12 @@ def _process_header(
         }
         sort_column = columns.get(state.process_sort.value)
         if sort_column is not None:
-            column, descending = sort_column
-            indicator = "▼" if descending != state.reverse_sort else "▲"
+            column, _descending = sort_column
+            indicator = (
+                "▼"
+                if sort_is_descending(state.process_sort, state.reverse_sort)
+                else "▲"
+            )
             start = base.find(column)
             end = start + len(column)
             if start >= 0 and end < len(base):

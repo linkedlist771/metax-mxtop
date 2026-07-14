@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 
 from mxtop._compat import DATACLASS_SLOTS
 from mxtop.models import ProcessSnapshot
@@ -52,6 +53,17 @@ SORT_ORDER = [
     ProcessSort.HOST_MEMORY,
     ProcessSort.TIME,
 ]
+
+DESCENDING_SORTS = frozenset(
+    {
+        ProcessSort.GPU_MEMORY,
+        ProcessSort.GPU_UTIL,
+        ProcessSort.GPU_MEMORY_BANDWIDTH,
+        ProcessSort.CPU,
+        ProcessSort.HOST_MEMORY,
+        ProcessSort.TIME,
+    }
+)
 
 # nvitop's direct order bindings. Uppercase uses the same field in reverse.
 DIRECT_SORT_KEYS = {
@@ -184,37 +196,51 @@ class UiState:
         self.follow_selection = False
 
 
+def _numeric_sort_value(value: float | int | None) -> tuple[bool, float]:
+    # nvitop's NA sentinel compares greater than every numeric value. Keeping
+    # that property preserves its ordering in both ascending and descending
+    # modes without mixing incomparable Python types.
+    if value is None:
+        return (True, 0.0)
+    number = float(value)
+    if not math.isfinite(number):
+        return (True, 0.0)
+    return (False, number)
+
+
 def process_sort_key(sort: ProcessSort, process: ProcessSnapshot) -> tuple[object, ...]:
-    memory = process.gpu_memory_bytes or 0
-    gpu_util = process.gpu_util_percent if process.gpu_util_percent is not None else -1.0
-    gpu_memory_bandwidth = (
+    memory = _numeric_sort_value(process.gpu_memory_bytes)
+    gpu_util = _numeric_sort_value(process.gpu_util_percent)
+    gpu_memory_bandwidth = _numeric_sort_value(
         process.gpu_memory_bandwidth_util_percent
-        if process.gpu_memory_bandwidth_util_percent is not None
-        else -1.0
     )
-    cpu = process.cpu_percent if process.cpu_percent is not None else -1.0
-    host_memory = process.host_memory_bytes or 0
-    runtime = process.runtime_seconds if process.runtime_seconds is not None else -1.0
+    cpu = _numeric_sort_value(process.cpu_percent)
+    host_memory = _numeric_sort_value(process.memory_util_percent)
+    runtime = _numeric_sort_value(process.runtime_seconds)
     command = process.command or process.name
     if sort == ProcessSort.PID:
         return (process.pid, process.gpu_index)
     if sort == ProcessSort.USER:
-        return (process.user or "", process.pid, process.gpu_index)
+        return (process.user or "N/A", process.pid, process.gpu_index)
     if sort == ProcessSort.GPU_MEMORY:
-        return (-memory, -gpu_util, -cpu, process.pid, process.gpu_index)
+        return (memory, gpu_util, cpu, process.pid, process.gpu_index)
     if sort == ProcessSort.GPU_UTIL:
-        return (-gpu_util, -memory, -cpu, process.pid, process.gpu_index)
+        return (gpu_util, memory, cpu, process.pid, process.gpu_index)
     if sort == ProcessSort.GPU_MEMORY_BANDWIDTH:
-        return (-gpu_memory_bandwidth, -memory, -cpu, process.pid, process.gpu_index)
+        return (gpu_memory_bandwidth, memory, cpu, process.pid, process.gpu_index)
     if sort == ProcessSort.CPU:
-        return (-cpu, -host_memory, process.pid, process.gpu_index)
+        return (cpu, host_memory, process.pid, process.gpu_index)
     if sort == ProcessSort.HOST_MEMORY:
-        return (-host_memory, -cpu, process.pid, process.gpu_index)
+        return (host_memory, cpu, process.pid, process.gpu_index)
     if sort == ProcessSort.TIME:
-        return (-runtime, process.pid, process.gpu_index)
+        return (runtime, process.pid, process.gpu_index)
     if sort == ProcessSort.COMMAND:
         return (command, process.pid, process.gpu_index)
-    return (process.gpu_index, process.user or "", process.pid)
+    return (process.gpu_index, process.user or "N/A", process.pid)
+
+
+def sort_is_descending(sort: ProcessSort, reverse: bool = False) -> bool:
+    return (sort in DESCENDING_SORTS) != reverse
 
 
 def sort_processes(
@@ -222,7 +248,11 @@ def sort_processes(
     sort: ProcessSort,
     reverse: bool = False,
 ) -> list[ProcessSnapshot]:
-    return sorted(processes, key=lambda process: process_sort_key(sort, process), reverse=reverse)
+    return sorted(
+        processes,
+        key=lambda process: process_sort_key(sort, process),
+        reverse=sort_is_descending(sort, reverse),
+    )
 
 
 def next_sort(sort: ProcessSort, step: int) -> ProcessSort:

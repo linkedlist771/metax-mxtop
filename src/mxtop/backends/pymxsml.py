@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from glob import glob
 import importlib
+import math
+import os
 import sys
 from types import ModuleType
 from typing import Any, TypeVar, cast
@@ -34,6 +36,7 @@ def _load_pymxsml() -> None:
 
 
 T = TypeVar("T")
+PYMXSML_ECC_ERRORS_ENV = "MXTOP_PYMXSML_ECC_ERRORS"
 
 
 def _safe(call: Callable[[], T], default: T | None = None) -> T | None:
@@ -41,6 +44,10 @@ def _safe(call: Callable[[], T], default: T | None = None) -> T | None:
         return call()
     except Exception:
         return default
+
+
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _module(name: str) -> ModuleType:
@@ -69,11 +76,12 @@ def _text(value: object | None) -> str | None:
 
 
 def _items(value: object | None) -> Iterable[object]:
-    if value is None:
+    if value is None or isinstance(value, (str, bytes, bytearray)):
         return ()
-    if isinstance(value, Iterable):
-        return value
-    return ()
+    try:
+        return iter(cast(Any, value))
+    except TypeError:
+        return ()
 
 
 def _number_attr(value: object | None, attr: str) -> float | None:
@@ -114,6 +122,76 @@ def normalize_power_w(value: float | int | None) -> float | None:
         return None
     result = float(value)
     return result / 1000 if result > 1000 else result
+
+
+def _numeric_values(value: object | None) -> list[float]:
+    candidates = (value,) if isinstance(value, (int, float)) else _items(value)
+    result: list[float] = []
+    for candidate in candidates:
+        try:
+            number = float(cast(Any, candidate))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            result.append(number)
+    return result
+
+
+def _constant_values(module: ModuleType, *names: str) -> tuple[int, ...]:
+    values: list[int] = []
+    for name in names:
+        value = _integer(getattr(module, name, None))
+        if value is not None and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
+def format_performance_state(value: object | None) -> str | None:
+    try:
+        state = _integer(value)
+    except (TypeError, ValueError):
+        return None
+    return f"P{state}" if state is not None and 0 <= state <= 15 else None
+
+
+def format_ecc_status(value: object | None) -> str | None:
+    try:
+        state = _integer(value)
+    except (TypeError, ValueError):
+        return None
+    if state == 0:
+        return "Disabled"
+    if state == 1:
+        return "Enabled"
+    return None
+
+
+def total_ecc_errors(value: object | None) -> int | None:
+    if value is None:
+        return None
+    fields = ("dramCE", "dramUE", "sramCE", "sramUE")
+    counts = [_int_attr(value, field) for field in fields]
+    known = [max(0, count) for count in counts if count is not None]
+    if known:
+        return sum(known)
+    try:
+        scalar = _integer(value)
+    except (TypeError, ValueError):
+        return None
+    return None if scalar is None else max(0, scalar)
+
+
+def format_metaxlink_status(value: object | None) -> str | None:
+    states = [int(state) for state in _numeric_values(value)]
+    if not states:
+        return None
+    if any(state == 1 for state in states):
+        return "Active"
+    if any(state in {2, 3, 4} for state in states):
+        return "Down"
+    if all(state in {0, 5} for state in states):
+        return "Inactive"
+    return None
 
 
 class PymxsmlBackend:
@@ -172,6 +250,33 @@ class PymxsmlBackend:
         self._get_board_power_limit_core = _optional_callable(
             mxsml, "mxSmlGetBoardPowerLimit"
         )
+        self._get_fan_speed = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetFanSpeed"
+        )
+        self._get_performance_state = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetPerformanceState"
+        )
+        self._get_clock_info = _optional_callable(
+            mxsml_extension, "mxSmlExDeviceGetClockInfo"
+        )
+        self._get_clocks = _optional_callable(mxsml, "mxSmlGetClocks")
+        self._gpu_clock_types = _constant_values(mxsml, "MXSML_CLOCK_XCORE")
+        if not self._gpu_clock_types:
+            self._gpu_clock_types = _constant_values(mxsml, "MXSML_CLOCK_CSC")
+        self._memory_clock_types = _constant_values(
+            mxsml, "MXSML_CLOCK_MC0", "MXSML_CLOCK_MC1"
+        )
+        if not self._memory_clock_types:
+            self._memory_clock_types = _constant_values(mxsml, "MXSML_CLOCK_MC")
+        self._get_ecc_state = _optional_callable(mxsml, "mxSmlGetEccState")
+        self._get_total_ecc_errors = (
+            _optional_callable(mxsml, "mxSmlGetTotalEccErrors")
+            if _env_enabled(PYMXSML_ECC_ERRORS_ENV)
+            else None
+        )
+        self._get_metaxlink_port_state = _optional_callable(
+            mxsml, "mxSmlGetMetaXLinkPortState"
+        )
 
         # Static values (versions, power limits) are cached after first fetch
         # so each refresh does not repeat C-library calls for data that never
@@ -179,6 +284,8 @@ class PymxsmlBackend:
         self._system_versions: tuple[str | None, str | None] | None = None
         self._device_driver_versions: dict[int, str | None] = {}
         self._device_power_limits: dict[int, float | None] = {}
+        self._device_ecc_errors: dict[int, int | None] = {}
+        self._ecc_error_cursor = 0
 
     def _versions(self) -> tuple[str | None, str | None]:
         if self._system_versions is None:
@@ -225,6 +332,55 @@ class PymxsmlBackend:
             )
         return self._device_power_limits[index]
 
+    def _clock_mhz(
+        self,
+        index: int,
+        handle: object | None,
+        clock_types: tuple[int, ...],
+    ) -> float | None:
+        get_clock_info = getattr(self, "_get_clock_info", None)
+        get_clocks = getattr(self, "_get_clocks", None)
+        values: list[float] = []
+        if get_clocks is not None:
+            for clock_type in clock_types:
+                values.extend(
+                    _numeric_values(
+                        _safe(
+                            lambda clock_type=clock_type: get_clocks(
+                                index, clock_type
+                            )
+                        )
+                    )
+                )
+            if values:
+                return max(values)
+        if handle is not None and get_clock_info is not None:
+            for clock_type in clock_types:
+                values.extend(
+                    _numeric_values(
+                        _safe(
+                            lambda clock_type=clock_type: get_clock_info(
+                                handle, clock_type
+                            )
+                        )
+                    )
+                )
+        return max(values) if values else None
+
+    def _ecc_errors_for_snapshot(
+        self,
+        count: int,
+        getter: Callable[..., object] | None,
+    ) -> tuple[int | None, dict[int, int | None]]:
+        cache = getattr(self, "_device_ecc_errors", None)
+        if cache is None:
+            cache = self._device_ecc_errors = {}
+        if count <= 0 or getter is None:
+            return None, cache
+        cursor = getattr(self, "_ecc_error_cursor", 0)
+        self._ecc_error_cursor = cursor + 1
+        return cursor % count, cache
+
     def snapshot(self) -> FrameSnapshot:
         temperature_hotspot = self._temperature_hotspot
         get_board_power_info = self._get_board_power_info
@@ -237,12 +393,22 @@ class PymxsmlBackend:
         get_handle_by_index = self._get_handle_by_index
         get_utilization_rates = self._get_utilization_rates
         get_power_usage = self._get_power_usage
+        get_fan_speed = getattr(self, "_get_fan_speed", None)
+        get_performance_state = getattr(self, "_get_performance_state", None)
+        get_ecc_state = getattr(self, "_get_ecc_state", None)
+        get_total_ecc_errors = getattr(self, "_get_total_ecc_errors", None)
+        get_metaxlink_port_state = getattr(
+            self, "_get_metaxlink_port_state", None
+        )
 
         driver_version, maca_version = self._versions()
 
         devices: list[DeviceSnapshot] = []
         process_map: dict[tuple[int, int], ProcessSnapshot] = {}
         count = _integer(get_device_count()) or 0
+        ecc_error_index, ecc_error_cache = self._ecc_errors_for_snapshot(
+            count, get_total_ecc_errors
+        )
         for index in range(count):
             info = _safe(lambda index=index: get_device_info(index))
             memory = _safe(lambda index=index: get_memory_info(index))
@@ -254,6 +420,50 @@ class PymxsmlBackend:
             )
             temperature = _safe(
                 lambda index=index: get_temperature_info(index, temperature_hotspot)
+            )
+            fan_values = (
+                _numeric_values(
+                    _safe(lambda handle=handle: get_fan_speed(handle))
+                )
+                if handle is not None and get_fan_speed is not None
+                else []
+            )
+            fan_percent = fan_values[0] if fan_values else None
+            performance_state = (
+                format_performance_state(
+                    _safe(lambda handle=handle: get_performance_state(handle))
+                )
+                if handle is not None and get_performance_state is not None
+                else None
+            )
+            gpu_clock_mhz = self._clock_mhz(
+                index,
+                handle,
+                getattr(self, "_gpu_clock_types", ()),
+            )
+            memory_clock_mhz = self._clock_mhz(
+                index,
+                handle,
+                getattr(self, "_memory_clock_types", ()),
+            )
+            ecc_status = (
+                format_ecc_status(_safe(lambda index=index: get_ecc_state(index)))
+                if get_ecc_state is not None
+                else None
+            )
+            if index == ecc_error_index and get_total_ecc_errors is not None:
+                refreshed_errors = total_ecc_errors(
+                    _safe(lambda index=index: get_total_ecc_errors(index))
+                )
+                if refreshed_errors is not None or index not in ecc_error_cache:
+                    ecc_error_cache[index] = refreshed_errors
+            ecc_errors = ecc_error_cache.get(index)
+            metaxlink = (
+                format_metaxlink_status(
+                    _safe(lambda index=index: get_metaxlink_port_state(index))
+                )
+                if get_metaxlink_port_state is not None
+                else None
             )
 
             # Power draw: prefer the extension API, fall back to summing the
@@ -299,9 +509,9 @@ class PymxsmlBackend:
             devices.append(
                 DeviceSnapshot(
                     index=index,
-                    name=str(getattr(info, "deviceName", "MetaX GPU")),
-                    bdf=str(getattr(info, "bdfId", "")) or None,
-                    uuid=str(getattr(info, "uuid", "")) or None,
+                    name=_text(getattr(info, "deviceName", None)) or "MetaX GPU",
+                    bdf=_text(getattr(info, "bdfId", None)),
+                    uuid=_text(getattr(info, "uuid", None)),
                     temperature_c=normalize_temperature_c(_number(temperature)),
                     power_w=power_w,
                     power_limit_w=power_limit_w,
@@ -312,6 +522,13 @@ class PymxsmlBackend:
                     memory_used_bytes=memory_used,
                     memory_total_bytes=memory_total,
                     memory_free_bytes=memory_free,
+                    fan_percent=fan_percent,
+                    performance_state=performance_state,
+                    ecc_status=ecc_status,
+                    ecc_errors=ecc_errors,
+                    metaxlink=metaxlink,
+                    gpu_clock_mhz=gpu_clock_mhz,
+                    memory_clock_mhz=memory_clock_mhz,
                 )
             )
 

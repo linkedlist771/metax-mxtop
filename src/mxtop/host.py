@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 import time
 
@@ -38,19 +39,32 @@ def enrich_processes(processes: list[ProcessSnapshot]) -> None:
         try:
             sample_time = time.time()
             proc = psutil.Process(pid)
-            host_name = proc.name() if any(not process.name for process in process_group) else ""
-            user = proc.username()
-            command = proc.cmdline()
-            cpu_times = proc.cpu_times()
-            create_time = proc.create_time()
-            cpu_percent = _calculate_cpu_percent(
-                pid,
-                create_time,
-                float(cpu_times.user + cpu_times.system),
-                sample_time,
-            )
-            host_memory_bytes = int(proc.memory_info().rss)
-            runtime_seconds = max(0.0, sample_time - create_time)
+            oneshot = getattr(proc, "oneshot", None)
+            with oneshot() if callable(oneshot) else nullcontext():
+                host_name = (
+                    proc.name()
+                    if any(not process.name for process in process_group)
+                    else ""
+                )
+                user = proc.username()
+                command = proc.cmdline()
+                cpu_times = proc.cpu_times()
+                create_time = proc.create_time()
+                cpu_percent = _calculate_cpu_percent(
+                    pid,
+                    create_time,
+                    float(cpu_times.user + cpu_times.system),
+                    sample_time,
+                )
+                host_memory_bytes = int(proc.memory_info().rss)
+                memory_percent = getattr(proc, "memory_percent", None)
+                try:
+                    memory_util_percent = (
+                        float(memory_percent()) if callable(memory_percent) else None
+                    )
+                except psutil.Error:
+                    memory_util_percent = None
+                runtime_seconds = max(0.0, sample_time - create_time)
         except psutil.Error:
             for process in process_group:
                 if not process.name:
@@ -65,6 +79,7 @@ def enrich_processes(processes: list[ProcessSnapshot]) -> None:
             process.create_time = create_time
             process.cpu_percent = cpu_percent
             process.host_memory_bytes = host_memory_bytes
+            process.memory_util_percent = memory_util_percent
             process.runtime_seconds = runtime_seconds
 
 
@@ -78,6 +93,7 @@ def _group_processes_by_pid(processes: list[ProcessSnapshot]) -> list[list[Proce
 def _enrich_from_proc(processes: list[ProcessSnapshot]) -> None:
     boot_time = _safe_boot_time()
     clock_ticks = _safe_clock_ticks()
+    total_memory_bytes = _safe_total_memory()
     for process_group in _group_processes_by_pid(processes):
         pid = process_group[0].pid
         comm_path = f"/proc/{pid}/comm"
@@ -132,6 +148,11 @@ def _enrich_from_proc(processes: list[ProcessSnapshot]) -> None:
                         host_memory_bytes = int(line.split()[1]) * 1024
                         for process in process_group:
                             process.host_memory_bytes = host_memory_bytes
+                            process.memory_util_percent = (
+                                host_memory_bytes / total_memory_bytes * 100.0
+                                if total_memory_bytes
+                                else None
+                            )
                         break
         except (OSError, IndexError, ValueError):
             pass
@@ -146,6 +167,21 @@ def _read_boot_time() -> float:
 def _safe_boot_time() -> float | None:
     try:
         return _read_boot_time()
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _read_total_memory() -> int:
+    with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) * 1024
+    raise ValueError("MemTotal is unavailable")
+
+
+def _safe_total_memory() -> int | None:
+    try:
+        return _read_total_memory()
     except (OSError, IndexError, ValueError):
         return None
 
