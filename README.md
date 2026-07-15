@@ -18,10 +18,10 @@
 </p>
 
 <p align="center">
-  <img src="assets/mxtop-preview.png" alt="mxtop terminal preview"/>
+  <img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview.png?v=readme-native-1" alt="mxtop terminal preview" width="994"/>
 </p>
 
-<p align="center"><em>Color bands match nvitop: usage fields and each <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bar are colored by their own values (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>
+<p align="center"><em>Colors follow nvitop's intensity model: each device summary uses its dominant GPU or memory load, while the detailed <code>MEM</code> / <code>MBW</code> / <code>UTL</code> / <code>PWR</code> bars retain metric-specific colors (memory thresholds <code>10/80</code>, GPU thresholds <code>10/75</code>).</em></p>
 
 <table align="center">
   <tr>
@@ -30,29 +30,34 @@
     <td align="center"><strong>Heavy</strong> — saturation across the cluster</td>
   </tr>
   <tr>
-    <td><img src="assets/mxtop-preview-idle.png" alt="mxtop idle status preview"/></td>
-    <td><img src="assets/mxtop-preview-mixed.png" alt="mxtop mixed status preview"/></td>
-    <td><img src="assets/mxtop-preview-heavy.png" alt="mxtop heavy status preview"/></td>
+    <td><img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-idle.png" alt="mxtop idle status preview"/></td>
+    <td><img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-mixed.png" alt="mxtop mixed status preview"/></td>
+    <td><img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-heavy.png" alt="mxtop heavy status preview"/></td>
   </tr>
 </table>
 
-<p align="center"><em>16-GPU host? mxtop uses an 8+8 compact layout when the terminal is wide enough, with a single-column fallback for narrower screens.</em></p>
+<p align="center"><em>Hosts with up to 16 GPUs retain the detailed nvitop-style list. Larger 32/64-GPU fleets use an adaptive overview grid in auto, compact, and one-shot views, while full mode keeps every detailed field.</em></p>
 
 <p align="center">
-  <img src="assets/mxtop-preview-many.png" alt="mxtop 16-GPU compact layout"/>
+  <img src="https://raw.githubusercontent.com/linkedlist771/metax-mxtop/main/assets/mxtop-preview-many.png" alt="mxtop adaptive 64-GPU fleet overview"/>
 </p>
+
+Preview and gallery images use fixed-time deterministic synthetic MetaX-shaped telemetry so every state is reproducible. Live monitoring data still comes exclusively from the selected MetaX backend; optional fields in the fixtures illustrate presentation states rather than proving that every backend reports them.
 
 ## Features
 
-- nvitop-like terminal dashboard for MetaX GPUs.
-- Read-only monitoring through MXSML/Pymxsml or `mx-smi`.
-- GPU device panel with temperature, power, utilization, memory, bus id, persistence, performance state, and driver fields when available.
-- Host panel with load average and scrolling braille history graphs for CPU, memory, swap, and aggregate GPU memory/utilization, matching nvitop's layout.
-- Process table with GPU, PID, user, GPU memory, GPU utilization, CPU, host memory, runtime, command, selection, scrolling, and sorting.
-- ANSI-colored one-shot output and curses TUI colors aligned with the nvitop-style visual hierarchy.
-- Shared filters for TUI, text, and JSON output.
+- nvitop-like terminal dashboard for MetaX GPUs, with full, compact, and automatic layouts.
+- Read-only GPU telemetry through MXSML/Pymxsml or `mx-smi`.
+- GPU device panel with temperature, power, utilization, memory, memory bandwidth, clocks, bus id, persistence, performance state, and driver fields when available.
+- Adaptive 32/64-GPU fleet grid that preserves per-device load colors and leaves substantially more room for host/process data.
+- Host panel with load average and scrolling history graphs for CPU, memory, swap, and the selected GPU's memory/utilization.
+- Process table with selection, multi-process tagging, vertical and horizontal scrolling, and nvitop-compatible sorting.
+- Process environment, host/GPU process-tree, per-process metrics, and built-in help screens.
+- Confirmed `SIGINT`, `SIGTERM`, and `SIGKILL` actions for selected host processes, with `--readonly` to disable every process-changing action.
+- ANSI-colored one-shot output, curses colors, ASCII fallback, and JSON output from the same filtered snapshot model.
+- Shared device, user, PID, visibility, compute, and graphics filters across TUI, text, and JSON output.
 
-The monitor is intentionally read-only. It does not run firmware update, GPU reset, persistence-mode mutation, process kill, or other destructive/admin commands.
+GPU management remains read-only: `mxtop` does not update firmware, reset GPUs, or change persistence/admin settings. Interactive process signals are always presented for confirmation, validate process identity to guard against PID reuse, and enforce process ownership unless `mxtop` is running as root. Use `--readonly` when even confirmed host-process actions must be unavailable.
 
 ## Install
 
@@ -98,25 +103,34 @@ MXTOP_MXSMI_PATH=/opt/mxdriver/bin/mx-smi mxtop --backend mxsmi
 
 ## Usage
 
-Interactive dashboard:
+On a terminal, the default command opens the interactive dashboard:
 
 ```bash
 mxtop
 ```
 
-One-shot colored text output:
+Use `--monitor` / `-m` to request it explicitly or choose a layout:
+
+```bash
+mxtop -m
+mxtop -m full
+mxtop -m compact
+```
+
+An explicit monitor requires both stdin and stdout to be TTYs. When the default command is redirected or piped, it prints one snapshot instead. `--once` / `-1` always selects one-shot text output:
 
 ```bash
 mxtop --once
 ```
 
-Plain text output:
+ANSI color is enabled for a terminal and can be disabled or forced:
 
 ```bash
 mxtop --once --no-color
+mxtop --once --force-color
 ```
 
-JSON output:
+`--json` prints one machine-readable snapshot without ANSI styling:
 
 ```bash
 mxtop --json
@@ -126,11 +140,17 @@ Common filters:
 
 ```bash
 mxtop --only 0 1
+mxtop --only-visible
 mxtop --user alice bob
+mxtop --user                 # current user
 mxtop --pid 1234 5678
+mxtop --compute
 mxtop --only-compute
+mxtop --graphics
 mxtop --only-graphics
 ```
+
+`--compute` and `--graphics` include processes with those contexts, including mixed `X` / `C+G` processes. Their uppercase `--only-*` forms require an exact compute-only or graphics-only type. Multiple supplied filters are combined. If a backend reports processes without context-type telemetry, as some `mx-smi` versions do, requesting one of these filters exits with a stable error instead of silently excluding every process.
 
 Backend and layout options:
 
@@ -139,28 +159,51 @@ mxtop --backend auto
 mxtop --backend pymxsml
 mxtop --backend mxsmi
 mxtop --interval 1.0
-mxtop --monitor auto
-mxtop --monitor full
-mxtop --monitor compact
+mxtop --no-unicode
+mxtop --readonly
 ```
 
 Useful CLI flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--version` | Print the runtime version. |
+| `--version`, `-V` | Print the runtime version. |
 | `--backend {auto,pymxsml,mxsmi}` | Select telemetry backend. |
-| `--interval SECONDS` | TUI refresh interval, minimum `0.25`. |
+| `--interval SECONDS` | Refresh interval (default `2.0`, minimum `0.25`). |
 | `--once`, `-1` | Print one text snapshot and exit. |
+| `--monitor`, `-m [auto\|full\|compact]` | Run interactively, optionally choosing the layout. |
 | `--json` | Print one JSON snapshot and exit. |
 | `--no-color` | Disable ANSI colors in text output. |
-| `--monitor {auto,full,compact}` | Select TUI layout mode. |
-| `--only INDEX...` | Show only selected GPU indices. |
-| `--user USER...` | Show only processes owned by selected users. |
-| `--pid PID...` | Show only selected process IDs. |
-| `--compute`, `--graphics` | Prefer matching process types when available. |
-| `--only-compute`, `--only-graphics` | Require matching process types when available. |
-| `--ascii`, `--no-unicode` | Reserve ASCII-only rendering mode. |
+| `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
+| `--colorful` | Use spectrum-like gradient colors for bar charts. |
+| `--light` | Use colors suitable for a light terminal theme. |
+| `--gpu-util-thresh LOW HIGH` | Override GPU utilization intensity thresholds. |
+| `--mem-util-thresh LOW HIGH` | Override GPU-memory intensity thresholds. |
+| `--only INDEX...`, `-o INDEX...` | Show only selected GPU indices and their processes. |
+| `--only-visible`, `-ov` | Follow `MACA_VISIBLE_DEVICES` or `CUDA_VISIBLE_DEVICES`. |
+| `--user [USER...]`, `-u [USER...]` | Show selected users; with no value, use the current user. |
+| `--pid PID...`, `-p PID...` | Show only selected process IDs. |
+| `--compute`, `-c` | Require a compute-capable process context. |
+| `--only-compute`, `-C` | Require an exact compute-only process context. |
+| `--graphics`, `-g` | Require a graphics-capable process context. |
+| `--only-graphics`, `-G` | Require an exact graphics-only process context. |
+| `--no-unicode`, `--ascii`, `-U` | Use ASCII characters only. This is automatic for non-UTF-8 locales. |
+| `--readonly` | Disable process signals in the interactive UI. |
+
+### Environment variables
+
+| Variable | Meaning |
+| --- | --- |
+| `MXTOP_MXSMI_PATH` | Override the local `mx-smi` executable discovered by the backend. |
+| `MXTOP_PYMXSML_ECC_ERRORS` | Set to `1`, `true`, `yes`, or `on` to opt into cached ECC-error polling. It is disabled by default because current MetaX APIs can add more than one second to a refresh. |
+| `MXTOP_MONITOR_MODE` | Comma-separated defaults: one of `auto`, `full`, `compact`, plus `colorful`/`plain`, `light`/`dark`, and/or `readonly`. Explicit CLI options take precedence. |
+| `MXTOP_GPU_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU utilization thresholds when the CLI option is omitted. |
+| `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU-memory thresholds when the CLI option is omitted. |
+| `MACA_VISIBLE_DEVICES` | Device indices, UUID prefixes, or BDF prefixes used by `--only-visible`. |
+| `CUDA_VISIBLE_DEVICES` | Fallback visibility list when `MACA_VISIBLE_DEVICES` is not set. |
+| `ANSI_COLORS_DISABLED` | Disable ANSI output unless `--force-color` is explicit. |
+| `NO_COLOR` | Disable ANSI output unless `--force-color` is explicit. |
+| `FORCE_COLOR` | Force ANSI output when neither disable variable is present. |
 
 ## Remote mode (cluster dashboard)
 
@@ -168,11 +211,22 @@ Aggregate several SSH-reachable nodes into one local web dashboard:
 
 ```bash
 pip install 'metax-mxtop[remote]'        # pulls in asyncssh
+# Auto-discover concrete Host aliases from ~/.ssh/config which have mx-smi:
+mxtop --remote-mode --open
+# Add explicitly named nodes to the discovered set:
+mxtop --remote-mode --discover --nodes nodeA nodeB --open
+# Or monitor only an explicit set:
 mxtop --remote-mode --nodes nodeA nodeB nodeC --open
 # or list hosts in a file (one per line, # comments allowed)
 mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 ```
 
+- With no `--nodes` or `--nodes-file`, mxtop enumerates concrete `Host`
+  aliases in `~/.ssh/config` (including `Include` files), probes them in
+  parallel using key/agent authentication, and selects nodes where
+  `mx-smi -L` reports at least one GPU. Wildcard `Host` patterns cannot be
+  enumerated and are skipped. Use `--discover` to merge discovered nodes with
+  an explicit list.
 - Host names are plain SSH aliases resolved from your `~/.ssh/config`
   (HostName/User/Port/IdentityFile/ProxyJump all honoured), so nodes with
   different MetaX card configurations work without extra setup.
@@ -183,25 +237,64 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   serves on `127.0.0.1` by default (`--bind` to change), and streams live
   updates over Server-Sent Events. Unreachable nodes are shown as down
   instead of breaking the page.
+- The web UI provides a fleet overview with a switchable GPU heatmap, a
+  searchable node inventory, cluster-wide host CPU/RAM/load telemetry, a
+  process table, and per-node GPU, host, and process detail. Remote process
+  rows are enriched with one batched `ps` query per node; missing Linux host
+  fields degrade to unavailable values without taking the node offline. View
+  state is encoded in the URL hash, so browser back/forward navigation works
+  without reconnecting to the nodes.
 - Each node runs the same `mx-smi` queries as the local backend; override the
   remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
 
 ## Interactive keys
 
+### General and navigation
+
 | Key | Action |
 | --- | --- |
-| `q`, `Esc`, `Ctrl-C` | Quit. |
-| `h`, `?` | Toggle help. |
-| `r` | Refresh immediately. |
-| `j`, `k`, arrow up/down | Move selected process. |
-| `PageUp`, `PageDown` | Scroll vertically. |
-| Arrow left/right | Scroll the command column horizontally. |
-| `,`, `.` | Cycle process sort field. |
-| `/` | Reverse current sort. |
-| `a` | Auto layout. |
-| `f` | Full layout. |
-| `c` | Compact layout. |
-| `o` then a sort key | Direct process sort when supported. |
+| `q`, `Q` | Quit from the main screen; return from a detail screen. |
+| `h`, `?` | Open help. Any key returns to the previous screen. |
+| `r`, `R`, `Ctrl-R`, `F5` | Refresh immediately. On the main screen this also resets selection and scrolling. |
+| `a`, `f`, `c` | Switch to auto, full, or compact layout. |
+| Up/Down, `Shift-Tab`/`Tab`, `Alt-k`/`Alt-j` | Select the previous/next process or detail row. |
+| `Home`, `End` | Select the first/last row. |
+| `Space` | Tag or untag the current process, then advance. Tagged processes form the action target set. |
+| `Esc` | Clear the main-screen selection and tags; return from environment or metrics. It does not quit mxtop. |
+| `PageUp`/`PageDown`, `[`/`]` | Scroll the viewport vertically; `Alt-K`/`Alt-J` are main-screen aliases. |
+| Left/Right, `Alt-h`/`Alt-l` | Scroll horizontally. |
+| `Ctrl-A`, `^` | Return to the leftmost column. |
+| `Ctrl-E`, `$` | Jump to the rightmost process-table column. |
+| Mouse wheel | Move vertically; hold Ctrl for 5x movement or Shift for horizontal movement. Click a row to select it. |
+
+### Screens and process actions
+
+| Key | Action |
+| --- | --- |
+| `e` | Show the selected process environment. Press `e`, `q`, or `Esc` to return. |
+| `t` | Show the GPU process tree, including related host ancestors and descendants. Press `t` or `q` to return. |
+| `Enter` | Show rolling metrics for the selected process. Press `Enter`, `q`, or `Esc` to return. |
+| `T` | Open confirmation for `SIGTERM`. |
+| `K`, `k` | Open confirmation for `SIGKILL`. |
+| `Ctrl-C`, `I` | Open confirmation for `SIGINT`. Ctrl-C does not quit the TUI. |
+
+Signals apply to all tagged processes when tags exist, otherwise to the selected process (or highlighted process-tree entry). The dialog supports Left/Right, Tab/Shift-Tab, `,`/`.`, mouse wheel, and button clicks; choose `SIGTERM`, `SIGKILL`, `SIGINT`, or Cancel, then confirm with `Enter` or `Space`. Process actions require `psutil` and are disabled by `--readonly`.
+
+### Process sorting
+
+| Key | Action |
+| --- | --- |
+| `,`, `<` / `.`, `>` | Cycle to the previous/next sort column. |
+| `/` | Invert the current sort order. |
+| `on` / `oN` | Sort by GPU index in normal/reverse order. |
+| `op` / `oP` | Sort by PID in normal/reverse order. |
+| `ou` / `oU` | Sort by user in normal/reverse order. |
+| `og` / `oG` | Sort by GPU memory in normal/reverse order. |
+| `os` / `oS` | Sort by GPU utilization in normal/reverse order. |
+| `ob` / `oB` | Sort by GPU memory-bandwidth utilization in normal/reverse order. |
+| `oc` / `oC` | Sort by CPU utilization in normal/reverse order. |
+| `om` / `oM` | Sort by host-memory utilization in normal/reverse order. |
+| `ot` / `oT` | Sort by runtime in normal/reverse order. |
 
 ## Packaging and releases
 
@@ -212,27 +305,44 @@ pip install metax-mxtop
 mxtop --version
 ```
 
-Release automation is tag-driven:
+Branch and pull-request workflows run tests and build the offline wheelhouse. A push to `main` also creates a commit-addressed prerelease; versioned GitHub and PyPI publication is tag-driven:
 
-1. Bump `pyproject.toml`, `src/mxtop/__init__.py`, and `tests/test_version.py` to the new version.
-2. Commit the change.
-3. Create a new semver tag, for example `v0.1.4`.
-4. Push the commit and that tag.
+1. Bump `pyproject.toml`, `src/mxtop/__init__.py`, and the local package entry in `uv.lock`.
+2. Regenerate the preview, gallery, and showcase assets and run their `--check` commands.
+3. Run the full test, lint, and package-build commands below.
+4. Commit the change.
+5. Create a new semver tag, for example `v0.1.22`.
+6. Push the commit and that tag.
 
-GitHub Actions then builds the wheelhouse, creates or updates the GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
+GitHub Actions then builds the wheelhouse, creates or updates the versioned GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
 
 ## More previews
 
-See [GALLERY.md](GALLERY.md) for a tile of rendered stdout across common CLI parameter combinations — colour palettes, layout modes, filters, custom intensity thresholds, multi-GPU layouts, and JSON output.
+See the [output gallery](https://github.com/linkedlist771/metax-mxtop/blob/main/GALLERY.md) and [screen showcase](https://github.com/linkedlist771/metax-mxtop/blob/main/SHOWCASE.md) for rendered stdout and deterministic secondary-screen fixtures across palettes, layouts, filters, edge telemetry, and 32/64-GPU fleets.
 
 ## Development
 
 Run tests and lint locally:
 
 ```bash
-uv run --with pytest --with psutil pytest -q
-uv run --with ruff ruff check .
-uv run --with build python -m build
+uv run --locked --with pytest --with psutil --with pillow==11.3.0 pytest -q
+uv run --locked --with ruff ruff check .
+uv run --locked --with build python -m build
 ```
 
-More background is available in [INTRO.md](INTRO.md).
+Canonical assets use Pillow 11.3.0, the vendored Liberation Mono fonts, and an algorithmic Braille renderer. Their metadata fingerprints the Pillow and FreeType versions as well as the font bytes and renderer source. Regenerate the three canonical asset sets with:
+
+```bash
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/generate_preview.py --all
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_gallery.py
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/render_showcase.py
+```
+
+To create an explicitly noncanonical preview with local fonts, set `MXTOP_PREVIEW_FONT`, `MXTOP_PREVIEW_BOLD_FONT`, and optionally `MXTOP_PREVIEW_SYMBOL_FONT`, then pass `--custom-fonts` with a noncanonical output path:
+
+```bash
+uv run --locked --with pillow==11.3.0 --with psutil python scripts/generate_preview.py \
+  --custom-fonts --output /tmp/mxtop-custom.png
+```
+
+More background is available in the [usage guide](https://github.com/linkedlist771/metax-mxtop/blob/main/INTRO.md).

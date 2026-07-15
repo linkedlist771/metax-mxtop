@@ -13,6 +13,23 @@ class TelemetryBackend(Protocol):
     def snapshot(self) -> FrameSnapshot: ...
 
 
+class _PrefetchedBackend:
+    """Return backend auto-detection's successful probe exactly once."""
+
+    def __init__(self, backend: TelemetryBackend, frame: FrameSnapshot) -> None:
+        self.name = backend.name
+        self.process_context_types = getattr(backend, "process_context_types", None)
+        self._backend = backend
+        self._frame: FrameSnapshot | None = frame
+
+    def snapshot(self) -> FrameSnapshot:
+        if self._frame is not None:
+            frame = self._frame
+            self._frame = None
+            return frame
+        return self._backend.snapshot()
+
+
 def create_backend(name: str = "auto") -> TelemetryBackend:
     if name == "pymxsml":
         return PymxsmlBackend()
@@ -25,8 +42,8 @@ def create_backend(name: str = "auto") -> TelemetryBackend:
     for backend_type in (PymxsmlBackend, MxSmiBackend):
         try:
             backend = backend_type()
-            _ = backend.snapshot()
-            return backend
+            frame = backend.snapshot()
+            return _PrefetchedBackend(backend, frame)
         except Exception as exc:
             errors.append(f"{backend_type.__name__}: {exc}")
     raise RuntimeError("no MetaX telemetry backend available: " + "; ".join(errors))

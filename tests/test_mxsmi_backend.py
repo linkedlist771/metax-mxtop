@@ -1,4 +1,7 @@
+import subprocess
 from subprocess import CompletedProcess
+
+import pytest
 
 from mxtop.backends.mxsmi import (
     MxSmiBackend,
@@ -50,6 +53,17 @@ def test_parse_dmon_csv_uses_known_device_names():
 
     assert devices[0].name == "MXC500"
     assert devices[0].uuid == "MX-abc"
+
+
+def test_parse_dmon_csv_reads_optional_clock_columns():
+    sample = """dev, xcoreclk, mcclk, gpu, total
+0, 1800 MHz, 1600 MHz, 71, 64
+"""
+
+    device = parse_dmon_csv(sample)[0]
+
+    assert device.gpu_clock_mhz == 1800.0
+    assert device.memory_clock_mhz == 1600.0
 
 
 def test_parse_list_output_builds_device_map():
@@ -105,8 +119,12 @@ def test_parse_versions_missing_returns_none():
 
 def test_build_frame_stamps_versions_on_devices():
     frame = build_frame_from_outputs(
-        DMON_SAMPLE, "", backend_name="mx-smi", enrich=False,
-        driver_version="1.2.3", maca_version="4.5.6",
+        DMON_SAMPLE,
+        "",
+        backend_name="mx-smi",
+        enrich=False,
+        driver_version="1.2.3",
+        maca_version="4.5.6",
     )
     assert frame.devices
     assert all(d.driver_version == "1.2.3" for d in frame.devices)
@@ -120,8 +138,48 @@ def test_parse_process_table_handles_memory_units():
     assert processes[0].name == "python train.py"
 
 
+def test_parse_process_table_reads_optional_compute_and_graphics_contexts():
+    processes = parse_process_table(
+        "\n".join(
+            (
+                "| GPU PID Type Process Name GPU Memory |",
+                "| 0 123 C python train.py 1GiB |",
+                "| 1 124 G compositor 512MiB |",
+                "| 1 125 C+G shared-context 256MiB |",
+                "| 2 126 X combined-context 128MiB |",
+            )
+        )
+    )
+
+    assert [process.process_type for process in processes] == ["C", "G", "C+G", "X"]
+    assert processes[0].name == "python train.py"
+
+
+def test_parse_process_table_does_not_infer_context_without_a_type_header():
+    processes = parse_process_table("| 0 123 G compositor worker 512MiB |")
+
+    assert processes[0].process_type is None
+    assert processes[0].name == "G compositor worker"
+
+
+def test_parse_process_table_preserves_unavailable_context_in_typed_table():
+    processes = parse_process_table(
+        "| GPU PID Type Process Name GPU Memory |\n"
+        "| 0 123 N/A python worker 512MiB |"
+    )
+
+    assert len(processes) == 1
+    assert processes[0].process_type is None
+    assert processes[0].name == "python worker"
+
+
 def test_parse_process_table_ignores_no_process_message():
-    assert parse_process_table("|  no process found                                                               |") == []
+    assert (
+        parse_process_table(
+            "|  no process found                                                               |"
+        )
+        == []
+    )
 
 
 def test_resolve_mxsmi_path_prefers_explicit_path(monkeypatch):
@@ -139,8 +197,8 @@ def test_resolve_mxsmi_path_uses_environment(monkeypatch):
 def test_backend_uses_resolved_executable(monkeypatch):
     calls = []
 
-    def fake_run(args, check, text, capture_output):
-        calls.append(args)
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
         sub = args[1] if len(args) > 1 else ""
         if sub == "-L":
             return CompletedProcess(args, 0, "GPU 0: MXC500 (UUID: MX-abc)\n", "")
@@ -156,10 +214,77 @@ def test_backend_uses_resolved_executable(monkeypatch):
 
     monkeypatch.setattr("mxtop.backends.mxsmi.subprocess.run", fake_run)
 
-    frame = MxSmiBackend("/opt/mxdriver/bin/mx-smi").snapshot()
+    backend = MxSmiBackend("/opt/mxdriver/bin/mx-smi", timeout=3.5)
+    frame = backend.snapshot()
+    _ = backend.snapshot()
 
-    assert calls[0][0] == "/opt/mxdriver/bin/mx-smi"
+    commands = [args for args, _kwargs in calls]
+    assert commands[0][0] == "/opt/mxdriver/bin/mx-smi"
+    assert sum(command[1:2] == ["-L"] for command in commands) == 1
+    assert sum(command[1:2] == ["--show-version"] for command in commands) == 1
+    assert sum(command[1:2] == ["dmon"] for command in commands) == 2
+    assert sum(command[1:2] == ["--show-process"] for command in commands) == 2
+    assert all(kwargs["timeout"] == 3.5 for _args, kwargs in calls)
+    assert all(kwargs["errors"] == "replace" for _args, kwargs in calls)
+    assert "--show-clock" in next(
+        command for command in commands if command[1:2] == ["dmon"]
+    )
     assert frame.devices[0].name == "MXC500"
     assert frame.devices[0].driver_version == "1.2.3"
     assert frame.devices[0].maca_version == "4.5.6"
     assert frame.processes[0].pid == 967305
+
+
+def test_backend_propagates_mxsmi_timeout(monkeypatch):
+    def timed_out(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr("mxtop.backends.mxsmi.subprocess.run", timed_out)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        MxSmiBackend("/opt/mxdriver/bin/mx-smi", timeout=0.5).snapshot()
+
+
+def test_recorded_style_mxsmi_outputs_preserve_a_64_gpu_fleet():
+    list_output = "\n".join(
+        f"GPU#{index}    MXTEST-64    0000:{index + 1:02x}:00.0    Available "
+        f"(UUID: GPU-{index:032x})"
+        for index in range(64)
+    )
+    dmon_output = "\n".join(
+        [
+            "dev,hottemp,power,gpu,vram,total,bdfid,fan,pstate,ecc,gpuclock,memoryclock",
+            *(
+                f"{index},{40 + index % 8},{120 + index},{index % 100},{(index * 3) % 100},"
+                f"64,0000:{index + 1:02x}:00.0,{20 + index % 70},P{index % 4},Enabled,"
+                f"{1500 + index},{1200 + index}"
+                for index in range(64)
+            ),
+        ]
+    )
+    process_output = "\n".join(
+        f"| {index} {10000 + index} python worker-{index}.py {1024 + index}MiB |"
+        for index in range(64)
+    )
+
+    frame = build_frame_from_outputs(
+        dmon_output,
+        process_output,
+        known_devices=parse_list_output(list_output),
+        enrich=False,
+        driver_version="1.2.3",
+        maca_version="4.5.6",
+    )
+
+    assert len(frame.devices) == 64
+    assert len(frame.processes) == 64
+    assert frame.devices[-1].index == 63
+    assert frame.devices[-1].name == "MXTEST-64"
+    assert frame.devices[-1].fan_percent == 83.0
+    assert frame.devices[-1].gpu_clock_mhz == 1563.0
+    assert frame.devices[-1].memory_clock_mhz == 1263.0
+    assert frame.devices[-1].driver_version == "1.2.3"
+    assert frame.devices[-1].maca_version == "4.5.6"
+    assert frame.processes[-1].gpu_index == 63
+    assert frame.processes[-1].pid == 10063
+    assert frame.processes[-1].gpu_memory_bytes == 1087 * 1024**2

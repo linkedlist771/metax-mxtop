@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import time
 
+from mxtop._compat import DATACLASS_SLOTS
 
-@dataclass(slots=True)
+PROCESS_CREATE_TIME_TOLERANCE = 0.01
+
+
+@dataclass(**DATACLASS_SLOTS)
 class DeviceSnapshot:
     index: int
     name: str = "MetaX GPU"
@@ -29,9 +33,11 @@ class DeviceSnapshot:
     display_active: str | None = None
     compute_mode: str | None = None
     metaxlink: str | None = None
+    gpu_clock_mhz: float | None = None
+    memory_clock_mhz: float | None = None
 
 
-@dataclass(slots=True)
+@dataclass(**DATACLASS_SLOTS)
 class ProcessSnapshot:
     gpu_index: int
     pid: int
@@ -47,13 +53,17 @@ class ProcessSnapshot:
     gpu_memory_bandwidth_util_percent: float | None = None
     memory_util_percent: float | None = None
     identity: str | None = None
+    create_time: float | None = None
 
     @property
     def selection_key(self) -> str:
-        return self.identity or f"{self.gpu_index}:{self.pid}"
+        base = self.identity or f"{self.gpu_index}:{self.pid}"
+        if self.create_time is None:
+            return base
+        return f"{base}:{self.create_time:.6f}"
 
 
-@dataclass(slots=True)
+@dataclass(**DATACLASS_SLOTS)
 class FrameSnapshot:
     devices: list[DeviceSnapshot]
     processes: list[ProcessSnapshot]
@@ -64,7 +74,21 @@ class FrameSnapshot:
         return asdict(self)
 
 
-@dataclass(slots=True)
+@dataclass(**DATACLASS_SLOTS)
+class HostSnapshot:
+    """Host-level telemetry collected alongside GPU metrics."""
+
+    cpu_percent: float | None = None
+    memory_used_bytes: int | None = None
+    memory_total_bytes: int | None = None
+    memory_percent: float | None = None
+    load_average_1m: float | None = None
+    load_average_5m: float | None = None
+    load_average_15m: float | None = None
+    uptime_seconds: float | None = None
+
+
+@dataclass(**DATACLASS_SLOTS)
 class NodeSnapshot:
     """One remote node's telemetry for the cluster dashboard."""
 
@@ -73,9 +97,10 @@ class NodeSnapshot:
     frame: FrameSnapshot | None = None
     error: str | None = None
     latency_ms: float | None = None
+    host: HostSnapshot | None = None
 
 
-@dataclass(slots=True)
+@dataclass(**DATACLASS_SLOTS)
 class ClusterSnapshot:
     nodes: list[NodeSnapshot] = field(default_factory=list)
     timestamp: float = field(default_factory=time.time)

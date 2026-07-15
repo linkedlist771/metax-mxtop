@@ -95,6 +95,7 @@ class HostHistory:
         }
         self._buffer: dict[str, list[float]] = {name: [] for name in _METRICS}
         self._last_flush: float | None = None
+        self._gpu_scope: int | None = None
 
     def reset(self) -> None:
         for graph in self._graphs.values():
@@ -102,6 +103,18 @@ class HostHistory:
         for bucket in self._buffer.values():
             bucket.clear()
         self._last_flush = None
+        self._gpu_scope = None
+
+    def set_gpu_scope(self, gpu_index: int | None) -> None:
+        """Switch the GPU graphs without discarding host CPU/memory history."""
+
+        if gpu_index == self._gpu_scope:
+            return
+        self._gpu_scope = gpu_index
+        self.gpu_memory.samples.clear()
+        self.gpu_utilization.samples.clear()
+        self._buffer["gpu_memory"].clear()
+        self._buffer["gpu_utilization"].clear()
 
     def sample(
         self,
