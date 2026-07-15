@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>mxtop cluster</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="#/overview" aria-label="mxtop overview">
+      <span class="brand-name">mxtop</span>
+      <span class="brand-scope">cluster</span>
+    </a>
+    <nav class="view-tabs" aria-label="Cluster views">
+      <button type="button" data-route="overview">Overview</button>
+      <button type="button" data-route="nodes">Nodes</button>
+      <button type="button" data-route="processes">Processes</button>
+    </nav>
+    <div class="header-status">
+      <span id="cluster-summary">waiting for data</span>
+      <span class="connection-state" id="connection-state">
+        <span class="status-dot"></span>
+        <span id="connection-label">Connecting</span>
+      </span>
+    </div>
+  </header>
+  <main id="app" tabindex="-1">
+    <div class="loading-state">
+      <span class="loading-line"></span>
+      <span>Waiting for first sample</span>
+    </div>
+  </main>
+  <footer class="app-footer">
+    <span id="sample-time">No sample yet</span>
+    <span id="refresh-state">SSE</span>
+  </footer>
+</body>
+</html>

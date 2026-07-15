@@ -348,6 +348,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="file with one ssh host per line (# comments allowed)",
     )
     _ = remote.add_argument(
+        "--discover",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=(
+            "discover passwordless SSH config hosts with working mx-smi\n"
+            "This is the default when --nodes and --nodes-file are omitted."
+        ),
+    )
+    _ = remote.add_argument(
         "--port",
         type=_port,
         default=argparse.SUPPRESS,
@@ -435,6 +444,7 @@ def _snapshot_width() -> int:
 REMOTE_ARGUMENTS = (
     "nodes",
     "nodes_file",
+    "discover",
     "port",
     "bind",
     "remote_mxsmi_path",
@@ -558,24 +568,36 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     args.no_unicode = args.no_unicode or not _unicode_supported()
 
     if args.remote_mode:
-        from mxtop.remote.app import load_hosts, run_remote
+        from mxtop.remote.app import report_discovery, run_remote
+        from mxtop.remote.discovery import discover_configured_hosts
+        from mxtop.remote.nodes import load_hosts, merge_hosts
 
         try:
             hosts = load_hosts(
                 getattr(args, "nodes", None), getattr(args, "nodes_file", None)
             )
+            mxsmi_path = getattr(args, "remote_mxsmi_path", "mx-smi")
+            if getattr(args, "discover", False) or not hosts:
+                discovered, results = discover_configured_hosts(mxsmi_path=mxsmi_path)
+                report_discovery(results)
+                hosts = merge_hosts(hosts, discovered)
         except Exception as exc:
             print(f"MXTOP ERROR: {exc}", file=sys.stderr)
             return 1
         if not hosts:
-            parser.error("--remote-mode requires --nodes or --nodes-file")
+            print(
+                "MXTOP ERROR: no passwordless SSH config hosts with a working "
+                "mx-smi installation were found",
+                file=sys.stderr,
+            )
+            return 1
         try:
             return run_remote(
                 hosts,
                 bind=getattr(args, "bind", "127.0.0.1"),
                 port=getattr(args, "port", 8080),
                 interval=args.interval,
-                mxsmi_path=getattr(args, "remote_mxsmi_path", "mx-smi"),
+                mxsmi_path=mxsmi_path,
                 open_browser=getattr(args, "open", False),
             )
         except Exception as exc:

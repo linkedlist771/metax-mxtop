@@ -75,6 +75,20 @@ class FrameSnapshot:
 
 
 @dataclass(**DATACLASS_SLOTS)
+class HostSnapshot:
+    """Host-level telemetry collected alongside GPU metrics."""
+
+    cpu_percent: float | None = None
+    memory_used_bytes: int | None = None
+    memory_total_bytes: int | None = None
+    memory_percent: float | None = None
+    load_average_1m: float | None = None
+    load_average_5m: float | None = None
+    load_average_15m: float | None = None
+    uptime_seconds: float | None = None
+
+
+@dataclass(**DATACLASS_SLOTS)
 class NodeSnapshot:
     """One remote node's telemetry for the cluster dashboard."""
 
@@ -83,6 +97,7 @@ class NodeSnapshot:
     frame: FrameSnapshot | None = None
     error: str | None = None
     latency_ms: float | None = None
+    host: HostSnapshot | None = None
 
 
 @dataclass(**DATACLASS_SLOTS)

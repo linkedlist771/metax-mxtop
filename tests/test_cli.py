@@ -395,6 +395,7 @@ def test_cli_remote_mode_is_mutually_exclusive_with_local_modes(mode, capsys):
     (
         ("--nodes", "node-a", "--once"),
         ("--nodes-file", "nodes.txt", "--once"),
+        ("--discover", "--once"),
         ("--port", "9000", "--once"),
         ("--bind", "0.0.0.0", "--once"),
         ("--remote-mxsmi-path", "/opt/mx-smi", "--once"),
@@ -465,6 +466,93 @@ def test_cli_reports_remote_startup_errors_on_stderr(monkeypatch, capsys):
     assert rc == 1
     assert captured.out == ""
     assert captured.err == "MXTOP ERROR: remote dependency unavailable\n"
+
+
+def test_cli_remote_mode_discovers_hosts_when_nodes_are_omitted(monkeypatch, capsys):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import discovery
+    from mxtop.remote.discovery import HostDiscovery
+
+    observed = {}
+    results = [HostDiscovery("node-a", True, gpu_count=8)]
+    monkeypatch.setattr(
+        discovery,
+        "discover_configured_hosts",
+        lambda **_kwargs: (["node-a"], results),
+    )
+    monkeypatch.setattr(
+        remote_app,
+        "report_discovery",
+        lambda value: observed.setdefault("results", value),
+    )
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda hosts, **kwargs: observed.update(hosts=hosts, kwargs=kwargs) or 0,
+    )
+
+    rc = main(["--remote-mode"])
+
+    assert rc == 0
+    assert observed["results"] == results
+    assert observed["hosts"] == ["node-a"]
+    assert observed["kwargs"]["mxsmi_path"] == "mx-smi"
+    assert capsys.readouterr().err == ""
+
+
+def test_cli_discover_merges_explicit_and_configured_hosts(monkeypatch):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import discovery
+
+    observed = {}
+
+    def capture_hosts(hosts, **_kwargs):
+        observed["hosts"] = hosts
+        return 0
+
+    monkeypatch.setattr(
+        discovery,
+        "discover_configured_hosts",
+        lambda **_kwargs: (["node-b", "node-c"], []),
+    )
+    monkeypatch.setattr(remote_app, "report_discovery", lambda _results: None)
+    monkeypatch.setattr(remote_app, "run_remote", capture_hosts)
+
+    rc = main(["--remote-mode", "--nodes", "node-a", "node-b", "--discover"])
+
+    assert rc == 0
+    assert observed["hosts"] == ["node-a", "node-b", "node-c"]
+
+
+def test_cli_explicit_hosts_do_not_trigger_discovery(monkeypatch):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import discovery
+
+    monkeypatch.setattr(
+        discovery,
+        "discover_configured_hosts",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected discovery")),
+    )
+    monkeypatch.setattr(remote_app, "run_remote", lambda *_args, **_kwargs: 0)
+
+    assert main(["--remote-mode", "--nodes", "node-a"]) == 0
+
+
+def test_cli_remote_mode_reports_empty_discovery(monkeypatch, capsys):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import discovery
+
+    monkeypatch.setattr(
+        discovery, "discover_configured_hosts", lambda **_kwargs: ([], [])
+    )
+    monkeypatch.setattr(remote_app, "report_discovery", lambda _results: None)
+
+    rc = main(["--remote-mode"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "no passwordless SSH config hosts" in captured.err
 
 
 def test_cli_rejects_non_finite_intervals(capsys):

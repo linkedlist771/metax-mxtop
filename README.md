@@ -211,11 +211,22 @@ Aggregate several SSH-reachable nodes into one local web dashboard:
 
 ```bash
 pip install 'metax-mxtop[remote]'        # pulls in asyncssh
+# Auto-discover concrete Host aliases from ~/.ssh/config which have mx-smi:
+mxtop --remote-mode --open
+# Add explicitly named nodes to the discovered set:
+mxtop --remote-mode --discover --nodes nodeA nodeB --open
+# Or monitor only an explicit set:
 mxtop --remote-mode --nodes nodeA nodeB nodeC --open
 # or list hosts in a file (one per line, # comments allowed)
 mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 ```
 
+- With no `--nodes` or `--nodes-file`, mxtop enumerates concrete `Host`
+  aliases in `~/.ssh/config` (including `Include` files), probes them in
+  parallel using key/agent authentication, and selects nodes where
+  `mx-smi -L` reports at least one GPU. Wildcard `Host` patterns cannot be
+  enumerated and are skipped. Use `--discover` to merge discovered nodes with
+  an explicit list.
 - Host names are plain SSH aliases resolved from your `~/.ssh/config`
   (HostName/User/Port/IdentityFile/ProxyJump all honoured), so nodes with
   different MetaX card configurations work without extra setup.
@@ -226,6 +237,13 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   serves on `127.0.0.1` by default (`--bind` to change), and streams live
   updates over Server-Sent Events. Unreachable nodes are shown as down
   instead of breaking the page.
+- The web UI provides a fleet overview with a switchable GPU heatmap, a
+  searchable node inventory, cluster-wide host CPU/RAM/load telemetry, a
+  process table, and per-node GPU, host, and process detail. Remote process
+  rows are enriched with one batched `ps` query per node; missing Linux host
+  fields degrade to unavailable values without taking the node offline. View
+  state is encoded in the URL hash, so browser back/forward navigation works
+  without reconnecting to the nodes.
 - Each node runs the same `mx-smi` queries as the local backend; override the
   remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
 

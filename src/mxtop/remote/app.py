@@ -1,35 +1,27 @@
-"""Entry point for ``mxtop --remote-mode``: inventory + poller + web server."""
+"""Web-server lifecycle for ``mxtop --remote-mode``."""
 
 from __future__ import annotations
 
 import asyncio
 import threading
 import webbrowser
-from pathlib import Path
 
 from mxtop.remote.cluster import ClusterMonitor
+from mxtop.remote.discovery import HostDiscovery
 from mxtop.remote.web import SnapshotHolder, make_server
 
 
-def load_hosts(nodes: list[str] | None, nodes_file: str | None) -> list[str]:
-    """Build the host list from ``--nodes`` tokens and/or a ``--nodes-file``.
-
-    Hosts are ssh aliases resolved via ``~/.ssh/config``. Commas and whitespace
-    both separate entries; ``#`` comments and blank lines in the file are
-    ignored. Order is preserved and duplicates removed.
-    """
-    raw: list[str] = []
-    for token in nodes or []:
-        raw.extend(token.replace(",", " ").split())
-    if nodes_file:
-        for line in Path(nodes_file).read_text().splitlines():
-            line = line.split("#", 1)[0].strip()
-            if line:
-                raw.extend(line.replace(",", " ").split())
-    seen: dict[str, None] = {}
-    for host in raw:
-        seen.setdefault(host, None)
-    return list(seen)
+def report_discovery(results: list[HostDiscovery]) -> None:
+    print(f"mxtop discovery: checked {len(results)} SSH config host(s)")
+    for result in results:
+        latency = (
+            "" if result.latency_ms is None else f", {round(result.latency_ms):d}ms"
+        )
+        if result.accepted:
+            print(f"  + {result.host}: {result.gpu_count} GPU(s){latency}")
+        else:
+            reason = (result.reason or "probe failed").replace("\n", " ")
+            print(f"  - {result.host}: {reason}{latency}")
 
 
 async def _poll_loop(monitor: ClusterMonitor, holder: SnapshotHolder, stop: threading.Event) -> None:
