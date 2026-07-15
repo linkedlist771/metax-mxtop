@@ -278,7 +278,7 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 | `K`, `k` | Open confirmation for `SIGKILL`. |
 | `Ctrl-C`, `I` | Open confirmation for `SIGINT`. Ctrl-C does not quit the TUI. |
 
-Signals apply to all tagged processes when tags exist, otherwise to the selected process (or highlighted process-tree entry). The dialog supports Left/Right, Tab/Shift-Tab, `,`/`.`, mouse wheel, and button clicks; choose `SIGTERM`, `SIGKILL`, `SIGINT`, or Cancel, then confirm with `Enter` or `Space`. Process actions require `psutil` and are disabled by `--readonly`.
+Signals apply to all tagged processes when tags exist, otherwise to the selected process (or highlighted process-tree entry). The dialog supports Left/Right, Tab/Shift-Tab, `,`/`.`, mouse wheel, and button clicks; choose `SIGTERM`, `SIGKILL`, `SIGINT`, or Cancel, then confirm with `Enter`, `Space`, or `y`. Process actions require `psutil` and are disabled by `--readonly`.
 
 ### Process sorting
 
