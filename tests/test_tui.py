@@ -1026,6 +1026,24 @@ def test_signal_dialog_navigation_aliases_and_numeric_choices(monkeypatch):
     assert state.pending_signal is None
 
 
+def test_signal_dialog_y_aliases_confirm_selected_signal(monkeypatch):
+    executed: list[ProcessSignal | None] = []
+    monkeypatch.setattr(
+        tui,
+        "_execute_pending_signal",
+        lambda value: executed.append(value.pending_signal),
+    )
+
+    for key in (ord("y"), ord("Y")):
+        state = tui.UiState(
+            pending_signal=ProcessSignal.TERMINATE,
+            pending_signal_targets=((10, 100.0),),
+        )
+        tui._handle_signal_dialog_key(key, state)
+
+    assert executed == [ProcessSignal.TERMINATE, ProcessSignal.TERMINATE]
+
+
 def test_signal_modal_uses_full_button_hitboxes_and_dims_base(monkeypatch):
     dialog = tui.render_signal_dialog(
         [(10, "alice")],

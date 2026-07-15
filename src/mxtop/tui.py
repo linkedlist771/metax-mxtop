@@ -1695,7 +1695,7 @@ def _handle_signal_dialog_key(key: int, state: UiState) -> bool:
         state.pending_signal = direct[key]
         state.pending_signal_option = _signal_option_index(state.pending_signal)
         _execute_pending_signal(state)
-    elif key in {ord("\n"), curses.KEY_ENTER, ord(" ")}:
+    elif key in {ord("\n"), curses.KEY_ENTER, ord(" "), ord("y"), ord("Y")}:
         if state.pending_signal_option == 3:
             _cancel_signal(state)
         else:
