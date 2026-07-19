@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SSH collect latency, honoring the dashboard auth token.
 - `--json-lines` / `--ndjson`: one compact JSON object per line for
   streaming pipelines, combinable with `--count`.
+- CI now tests Python 3.10-3.13 in a matrix alongside the existing 3.9
+  wheelhouse job, with the remote extra installed.
 
 ### Changed
 

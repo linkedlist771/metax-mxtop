@@ -304,7 +304,17 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   power, clocks, and ECC errors labelled by `node`/`gpu`/`name`/`uuid`, plus
   host CPU/RAM/load, per-node reachability (`mxtop_node_up`) and SSH collect
   latency. Point a Prometheus `scrape_config` at the dashboard (with the
-  bearer token when set) for alerting and long-term history.
+  bearer token when set) for alerting and long-term history:
+
+  ```yaml
+  scrape_configs:
+    - job_name: mxtop
+      static_configs:
+        - targets: ["monitor-host:8080"]
+      authorization:
+        type: Bearer
+        credentials: <your --auth-token value>
+  ```
 - The web UI provides a fleet overview with a switchable GPU heatmap, live
   trend sparklines (cluster GPU utilization, HBM, and host CPU; per-node
   GPU/HBM on the detail page), a searchable node inventory, cluster-wide
