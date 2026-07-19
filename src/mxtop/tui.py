@@ -8,6 +8,7 @@ import signal
 import sys
 import time
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from mxtop.backends import TelemetryBackend
@@ -49,6 +50,7 @@ from mxtop.ui.state import (
     ProcessSort,
     ScreenMode,
     UiState,
+    filter_processes_by_text,
     keep_selection,
     next_sort,
     sort_processes,
@@ -495,13 +497,53 @@ def _draw_signal_dialog_line(
             )
 
 
+_HELP_SIGNAL_ACTIONS = (
+    "interrupt selected process",
+    "kill selected process",
+    "terminate selected process",
+)
+
+# Content-derived coloring for the help screen: (left key column, right key
+# column, is-signal-action). Matching text keeps colors correct when help
+# lines are added, removed, or scrolled.
+def _help_line_colors(line: str) -> tuple[int | None, int | None, bool]:
+    if any(action in line for action in _HELP_SIGNAL_ACTIONS):
+        return PAIR_HEADER, PAIR_HOT, True
+    if "select sort column" in line:
+        return PAIR_MEM, PAIR_MEM, False
+    if "sort by" in line:
+        return PAIR_SWAP, PAIR_SWAP, False
+    if "Wheel:" in line:
+        return PAIR_SWAP, PAIR_SWAP, False
+    if "show this help screen" in line or line.rstrip().endswith(": quit"):
+        return PAIR_GOOD, PAIR_GOOD, False
+    if "tag/untag" in line or "clear process selection" in line:
+        return PAIR_HEADER, PAIR_WARN, False
+    if "filter processes" in line:
+        return PAIR_HEADER, PAIR_WARN, False
+    if (
+        "show process environment" in line
+        or "toggle tree-view" in line
+        or "show process metrics" in line
+    ):
+        return PAIR_HEADER, PAIR_GOOD, False
+    if "scroll" in line or "select the" in line:
+        return PAIR_HEADER, None, False
+    return None, None, False
+
+
 def _draw_help_line(screen, row: int, line: str, width: int, *, readonly: bool) -> None:
-    if row in {0, 1} or line.rstrip() == "Press any key to return.":
+    stripped = line.rstrip()
+    if (
+        (stripped.startswith("mxtop ") and "(C)" in stripped)
+        or stripped.startswith("Released under")
+        or stripped == "Press any key to return."
+    ):
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_HEADER, curses.A_BOLD))
         return
 
     _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE))
-    if row == 3:
+    if stripped.startswith("GPU Process Type:"):
         _safe_addnstr(
             screen, row, 0, line[:17], width, _attr(PAIR_VALUE, curses.A_BOLD)
         )
@@ -515,10 +557,10 @@ def _draw_help_line(screen, row: int, line: str, width: int, *, readonly: bool) 
                 _attr(PAIR_MEM, curses.A_BOLD),
             )
         return
-    if row == 5:
+    if stripped.startswith("Device coloring rules"):
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
         return
-    if row in {6, 7}:
+    if "GPU utilization:" in line or "GPU-MEM percent:" in line:
         for text, pair in (
             ("light", PAIR_GOOD),
             ("moderate", PAIR_WARN),
@@ -533,31 +575,12 @@ def _draw_help_line(screen, row: int, line: str, width: int, *, readonly: bool) 
                     width,
                     _attr(pair, curses.A_BOLD | getattr(curses, "A_ITALIC", 0)),
                 )
+        return
 
-    color_matrix = {
-        9: (PAIR_GOOD, PAIR_GOOD),
-        10: (PAIR_GOOD, PAIR_GOOD),
-        12: (PAIR_HEADER, PAIR_WARN),
-        13: (PAIR_HEADER, PAIR_WARN),
-        14: (PAIR_HEADER, PAIR_HOT),
-        15: (None, PAIR_HOT),
-        16: (PAIR_HEADER, PAIR_HOT),
-        17: (PAIR_HEADER, PAIR_GOOD),
-        18: (PAIR_HEADER, PAIR_GOOD),
-        19: (PAIR_HEADER, PAIR_GOOD),
-        21: (PAIR_SWAP, PAIR_SWAP),
-        22: (PAIR_SWAP, PAIR_SWAP),
-        24: (PAIR_SWAP, PAIR_SWAP),
-        25: (PAIR_SWAP, PAIR_SWAP),
-        26: (PAIR_SWAP, PAIR_SWAP),
-        27: (PAIR_SWAP, PAIR_SWAP),
-        28: (PAIR_SWAP, PAIR_SWAP),
-        29: (PAIR_MEM, PAIR_MEM),
-    }
-    left_pair, right_pair = color_matrix.get(row, (None, None))
-    if left_pair is not None:
+    left_pair, right_pair, is_signal = _help_line_colors(line)
+    if left_pair is not None and line[:12].strip():
         _safe_addnstr(screen, row, 0, line[:12], width, _attr(left_pair, curses.A_BOLD))
-    if readonly and row in {14, 15, 16}:
+    if readonly and is_signal:
         _safe_addnstr(screen, row, 39, line[39:], width, _attr(PAIR_DIM))
     elif right_pair is not None:
         _safe_addnstr(
@@ -1879,6 +1902,21 @@ def _handle_mouse(
         state.screen_selected_index = max(0, index)
 
 
+def _handle_filter_key(key: int, state: UiState) -> bool:
+    if key in {ord("\n"), curses.KEY_ENTER}:
+        state.filter_editing = False
+        state.text_filter = state.text_filter.strip()
+    elif key == 27:
+        state.filter_editing = False
+        state.text_filter = ""
+    elif key in {curses.KEY_BACKSPACE, 127, 8}:
+        state.text_filter = state.text_filter[:-1]
+    elif 32 <= key <= 126:
+        state.text_filter += chr(key)
+    state.follow_selection = True
+    return True
+
+
 def _handle_key(
     key: int,
     state: UiState,
@@ -1921,6 +1959,8 @@ def _handle_key(
                 state.reverse_sort = character.isupper()
                 state.follow_selection = True
         return True
+    if state.filter_editing:
+        return _handle_filter_key(key, state)
 
     if key in {ord("h"), ord("?")}:
         state.switch_screen(ScreenMode.HELP)
@@ -2037,7 +2077,15 @@ def _handle_key(
 
     if key in {ord("q"), ord("Q")}:
         return False
+    if key in {ord("\\"), getattr(curses, "KEY_F4", curses.KEY_F0 + 4)}:
+        state.filter_editing = True
+        return True
     if key == 27:
+        if state.text_filter:
+            state.text_filter = ""
+            state.filter_editing = False
+            state.follow_selection = True
+            return True
         state.clear_selection()
     elif key == ord("e"):
         _remember_selected_target(state, frame, fallback_host=True)
@@ -2402,6 +2450,13 @@ def run_tui(
                 frame, filter_error = _filtered_frame_with_error(
                     sampler_state.frame, options
                 )
+                if frame is not None and state.text_filter:
+                    frame = replace(
+                        frame,
+                        processes=filter_processes_by_text(
+                            frame.processes, state.text_filter
+                        ),
+                    )
             raw_key = screen.getch()
             key = _decode_alt_key(screen, raw_key)
             refresh_environment = state.active_screen == ScreenMode.ENVIRON and key in {
@@ -2654,6 +2709,20 @@ def run_tui(
             display_status = state.status_message
             if display_status is None and state.active_screen != ScreenMode.MAIN:
                 display_status = filter_error or sampler_state.error
+            if (
+                display_status is None
+                and state.active_screen == ScreenMode.MAIN
+                and (state.filter_editing or state.text_filter)
+            ):
+                cursor = "_" if state.filter_editing else ""
+                display_status = (
+                    f"Filter: {state.text_filter}{cursor}  "
+                    + (
+                        "(Enter: apply, Esc: clear)"
+                        if state.filter_editing
+                        else "(\\: edit, Esc: clear)"
+                    )
+                )
             if display_status and state.pending_signal is None and original_lines:
                 status = f" {display_status} "[:render_width]
                 original_lines[-1] = status.ljust(render_width)

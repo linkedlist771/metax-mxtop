@@ -779,6 +779,67 @@ def test_mouse_click_outside_tree_rows_clears_tree_selection(monkeypatch):
     assert not state.tagged_pids
 
 
+def test_backslash_enters_filter_mode_and_types_text():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    assert state.filter_editing is True
+
+    for character in "ali":
+        tui._handle_key(ord(character), state, frame, sampler)
+    assert state.text_filter == "ali"
+
+    tui._handle_key(ord("\n"), state, frame, sampler)
+    assert state.filter_editing is False
+    assert state.text_filter == "ali"
+
+
+def test_filter_backspace_and_escape_cancels():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    for character in "abc":
+        tui._handle_key(ord(character), state, frame, sampler)
+    tui._handle_key(tui.curses.KEY_BACKSPACE, state, frame, sampler)
+    assert state.text_filter == "ab"
+
+    tui._handle_key(27, state, frame, sampler)
+    assert state.filter_editing is False
+    assert state.text_filter == ""
+
+
+def test_escape_clears_applied_filter_before_selection():
+    frame = process_frame()
+    state = tui.UiState(text_filter="alice")
+    sampler = FakeSampler()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+    assert state.selected_key is not None
+
+    tui._handle_key(27, state, frame, sampler)
+    assert state.text_filter == ""
+    assert state.selected_key is not None
+
+    tui._handle_key(27, state, frame, sampler)
+    assert state.selected_key is None
+
+
+def test_filter_mode_captures_quit_and_sort_keys():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    assert tui._handle_key(ord("q"), state, frame, sampler) is True
+    assert state.text_filter == "q"
+    tui._handle_key(ord("/"), state, frame, sampler)
+    assert state.text_filter == "q/"
+    assert state.reverse_sort is False
+
+
 def test_header_click_sorts_and_reverses(monkeypatch):
     frame = process_frame()
     state = tui.UiState()
@@ -1176,19 +1237,45 @@ def test_help_colors_key_groups_and_dims_readonly_signal_actions(monkeypatch):
     tui._draw_help_line(header, 0, lines[0], 118, readonly=True)
     assert header.calls[0][-1][0] == tui.PAIR_HEADER
 
+    signal_row_index, signal_line = next(
+        (index, line)
+        for index, line in enumerate(lines)
+        if "interrupt selected process" in line
+    )
+
     readonly_row = FakeScreen(column_limit=118)
-    tui._draw_help_line(readonly_row, 14, lines[14], 118, readonly=True)
+    tui._draw_help_line(readonly_row, signal_row_index, signal_line, 118, readonly=True)
     assert any(
         column == 39 and attr[0] == tui.PAIR_DIM
         for _, column, _, _, attr in readonly_row.calls
     )
 
     writable_row = FakeScreen(column_limit=118)
-    tui._draw_help_line(writable_row, 14, lines[14], 118, readonly=False)
+    tui._draw_help_line(writable_row, signal_row_index, signal_line, 118, readonly=False)
     assert any(
         column == 39 and attr[0] == tui.PAIR_HOT
         for _, column, _, _, attr in writable_row.calls
     )
+
+
+def test_help_colors_survive_line_insertion(monkeypatch):
+    """Colors derive from content, so row offsets must not matter."""
+
+    monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: (pair, extra))
+    lines = tui.render_help_screen(118, 40).lines
+    sort_line = next(line for line in lines if "sort by GPU-MEM" in line)
+
+    for row in (0, 5, 23):
+        screen = FakeScreen(column_limit=118)
+        tui._draw_help_line(screen, row, sort_line, 118, readonly=False)
+        assert any(
+            attr[0] == tui.PAIR_SWAP for _, _, _, _, attr in screen.calls
+        ), f"sort line lost its color at row {row}"
+
+    filter_line = next(line for line in lines if "filter processes" in line)
+    screen = FakeScreen(column_limit=118)
+    tui._draw_help_line(screen, 11, filter_line, 118, readonly=False)
+    assert any(attr[0] == tui.PAIR_HEADER for _, _, _, _, attr in screen.calls)
 
 
 def test_metrics_graphs_use_dedicated_section_and_intensity_colors(monkeypatch):

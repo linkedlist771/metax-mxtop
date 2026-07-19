@@ -90,6 +90,8 @@ class UiState:
     command_offset: int = 0
     process_sort: ProcessSort = ProcessSort.DEFAULT
     reverse_sort: bool = False
+    text_filter: str = ""
+    filter_editing: bool = False
     pending_sort_key: bool = False
     active_screen: ScreenMode = ScreenMode.MAIN
     previous_screen: ScreenMode = ScreenMode.MAIN
@@ -251,6 +253,33 @@ def sort_processes(
         key=lambda process: process_sort_key(sort, process),
         reverse=sort_is_descending(sort, reverse),
     )
+
+
+def process_matches_filter(process: ProcessSnapshot, text_filter: str) -> bool:
+    """Case-insensitive substring match on command, name, user, and PID."""
+
+    needle = text_filter.strip().lower()
+    if not needle:
+        return True
+    haystacks = (
+        process.command or "",
+        process.name or "",
+        process.user or "",
+        str(process.pid),
+    )
+    return any(needle in value.lower() for value in haystacks)
+
+
+def filter_processes_by_text(
+    processes: list[ProcessSnapshot], text_filter: str
+) -> list[ProcessSnapshot]:
+    if not text_filter.strip():
+        return processes
+    return [
+        process
+        for process in processes
+        if process_matches_filter(process, text_filter)
+    ]
 
 
 def next_sort(sort: ProcessSort, step: int) -> ProcessSort:

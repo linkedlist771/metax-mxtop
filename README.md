@@ -302,7 +302,8 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 | Up/Down, `Shift-Tab`/`Tab`, `Alt-k`/`Alt-j` | Select the previous/next process or detail row. |
 | `Home`, `End` | Select the first/last row. |
 | `Space` | Tag or untag the current process, then advance. Tagged processes form the action target set. |
-| `Esc` | Clear the main-screen selection and tags; return from environment or metrics. It does not quit mxtop. |
+| `\`, `F4` | Filter the process table incrementally (htop-style): type to match user, command, or PID; `Enter` applies, `Esc` clears. |
+| `Esc` | Clear the active text filter first; then clear the main-screen selection and tags; return from environment or metrics. It does not quit mxtop. |
 | `PageUp`/`PageDown`, `[`/`]` | Scroll the viewport vertically; `Alt-K`/`Alt-J` are main-screen aliases. |
 | Left/Right, `Alt-h`/`Alt-l` | Scroll horizontally. |
 | `Ctrl-A`, `^` | Return to the leftmost column. |

@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being silently ignored.
 - Light theme for the remote web dashboard, following the browser's
   `prefers-color-scheme` with a header toggle persisted in the browser.
+- htop-style incremental process filter in the TUI: `\` or `F4` opens a
+  prompt that matches user, command, name, or PID as you type; `Enter`
+  applies, `Esc` clears.
+
+### Changed
+
+- Help-screen colorization now derives from line content instead of
+  hard-coded row numbers, so help edits can no longer silently break colors.
+- Failed pymxsml telemetry calls are logged once at debug level instead of
+  silently returning defaults; `--open` browser failures print a hint
+  instead of being swallowed.
 
 ### Removed
 

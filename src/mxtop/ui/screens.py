@@ -350,6 +350,8 @@ def render_help_screen(
         "   PageUp [: scroll entire screen up              t: toggle tree-view screen",
         " PageDown ]: scroll entire screen down        Enter: show process metrics",
         "",
+        "       \\ F4: filter processes (type text, Enter: apply, Esc: clear)",
+        "",
         "      Wheel: scroll process list        Shift-Wheel: scroll horizontally",
         "        Tab: scroll process list          Ctrl-Wheel: fast scroll (5x)",
         "",

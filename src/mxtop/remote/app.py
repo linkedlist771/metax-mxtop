@@ -82,9 +82,12 @@ def run_remote(
     print("Press Ctrl+C to stop.")
     if open_browser:
         try:
-            webbrowser.open(open_url)
-        except Exception:
-            pass
+            opened = webbrowser.open(open_url)
+        except Exception as exc:
+            print(f"Could not open a browser automatically: {exc}")
+            opened = True
+        if not opened:
+            print("No browser available; open the dashboard URL manually.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
