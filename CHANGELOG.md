@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming pipelines, combinable with `--count`.
 - CI now tests Python 3.10-3.13 in a matrix alongside the existing 3.9
   wheelhouse job, with the remote extra installed.
+- Pause key: `p` (or `Z`) freezes live updates on the main screen so
+  values can be read or copied; the status line shows PAUSED, and `p`,
+  `F5`, or `r` resumes.
 
 ### Changed
 

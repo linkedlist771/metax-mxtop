@@ -340,6 +340,7 @@ def render_help_screen(
         "",
         "      a f c: change display mode                h ?: show this help screen",
         "       F5 r: force refresh window                 q: quit",
+        "          p: pause/resume updates",
         "",
         "     Arrows: scroll process list              Space: tag/untag current process",
         "       Home: select the first process           Esc: clear process selection",

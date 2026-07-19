@@ -67,7 +67,7 @@ SHOWCASE_SPECS = (
     ShowcaseSpec("tui-142x036-heavy-4gpu", "142x36 viewport, 4 heavily loaded GPUs", "heavy", "tui", 142, 36),
     ShowcaseSpec("tui-172x044-many-16gpu", "172x44 viewport, 16 mixed-load GPUs", "many", "tui", 172, 44),
     ShowcaseSpec("tui-180x044-many-64gpu", "180x44 viewport, 64-GPU fleet overview", "sixty-four", "tui", 180, 44),
-    ShowcaseSpec("screen-help-118x034", "Help screen with nvitop-compatible key groups", "small", "help", 118, 34),
+    ShowcaseSpec("screen-help-118x035", "Help screen with nvitop-compatible key groups", "small", "help", 118, 35),
     ShowcaseSpec("screen-environment-120x018", "Process environment with empty, long, and multiline values", "small", "environment", 120, 18),
     ShowcaseSpec("screen-environment-error-100x008", "Stable process-environment permission error", "small", "environment-error", 100, 8),
     ShowcaseSpec("screen-tree-140x018", "GPU process tree with host ancestors and direct children", "small", "tree", 140, 18),
@@ -142,6 +142,8 @@ def _help_key_colors(line: str) -> tuple[str | None, str | None]:
         return ansi.FG_BLUE, ansi.FG_BLUE
     if "show this help screen" in line or line.rstrip().endswith(": quit"):
         return ansi.FG_GREEN, ansi.FG_GREEN
+    if "pause/resume" in line:
+        return ansi.FG_GREEN, None
     if "tag/untag" in line or "clear process selection" in line:
         return ansi.FG_CYAN, ansi.FG_YELLOW
     if "filter processes" in line:

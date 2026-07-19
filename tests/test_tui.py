@@ -1499,3 +1499,41 @@ def test_truecolor_requires_colorterm_and_curses_support(monkeypatch):
     monkeypatch.setenv("COLORTERM", "truecolor")
     monkeypatch.setattr(tui.curses, "can_change_color", lambda: False, raising=False)
     assert tui._setup_truecolor_spectrum() is False
+
+
+def test_pause_key_toggles_and_refresh_resumes():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("p"), state, frame, sampler)
+    assert state.paused is True
+    tui._handle_key(ord("p"), state, frame, sampler)
+    assert state.paused is False
+
+    tui._handle_key(ord("Z"), state, frame, sampler)
+    assert state.paused is True
+    tui._handle_key(ord("r"), state, frame, sampler)
+    assert state.paused is False
+    assert sampler.refreshed is True
+
+
+def test_pause_key_is_inactive_off_main_screen():
+    state = tui.UiState(active_screen=ScreenMode.TREE, screen_selection_active=True)
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("p"), state, process_frame(), sampler)
+
+    assert state.paused is False
+
+
+def test_filter_editing_captures_pause_key():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    tui._handle_key(ord("p"), state, frame, sampler)
+
+    assert state.paused is False
+    assert state.text_filter == "p"

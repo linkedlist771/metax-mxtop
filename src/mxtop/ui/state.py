@@ -92,6 +92,7 @@ class UiState:
     reverse_sort: bool = False
     text_filter: str = ""
     filter_editing: bool = False
+    paused: bool = False
     pending_sort_key: bool = False
     active_screen: ScreenMode = ScreenMode.MAIN
     previous_screen: ScreenMode = ScreenMode.MAIN

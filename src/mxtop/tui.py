@@ -20,7 +20,7 @@ from mxtop.filters import (
 )
 from mxtop.models import PROCESS_CREATE_TIME_TOLERANCE, FrameSnapshot, ProcessSnapshot
 from mxtop import rendering as _rendering
-from mxtop.sampler import SnapshotSampler
+from mxtop.sampler import SamplerState, SnapshotSampler
 from mxtop.ui import classify
 from mxtop.ui.classify import host_graph_context
 from mxtop.ui.history import HostHistory
@@ -577,6 +577,8 @@ def _help_line_colors(line: str) -> tuple[int | None, int | None, bool]:
         return PAIR_SWAP, PAIR_SWAP, False
     if "show this help screen" in line or line.rstrip().endswith(": quit"):
         return PAIR_GOOD, PAIR_GOOD, False
+    if "pause/resume" in line:
+        return PAIR_GOOD, None, False
     if "tag/untag" in line or "clear process selection" in line:
         return PAIR_HEADER, PAIR_WARN, False
     if "filter processes" in line:
@@ -2031,7 +2033,11 @@ def _handle_key(
     if key in {ord("h"), ord("?")}:
         state.switch_screen(ScreenMode.HELP)
         return True
+    if key in {ord("p"), ord("Z")} and state.active_screen == ScreenMode.MAIN:
+        state.paused = not state.paused
+        return True
     if key in {ord("r"), ord("R"), 18, getattr(curses, "KEY_F5", curses.KEY_F0 + 5)}:
+        state.paused = False
         if state.active_screen == ScreenMode.MAIN:
             state.clear_selection()
             state.scroll_offset = 0
@@ -2507,8 +2513,13 @@ def run_tui(
         environment_key: tuple[int, float | None] | None = None
         environment_variables: list[tuple[str, str]] = []
         environment_error: str | None = None
+        held_sampler_state: SamplerState | None = None
         while True:
-            sampler_state = sampler.snapshot()
+            if state.paused and held_sampler_state is not None:
+                sampler_state = held_sampler_state
+            else:
+                sampler_state = sampler.snapshot()
+                held_sampler_state = sampler_state
             filter_error: str | None = None
             if sampler_state.frame is None:
                 frame = None
@@ -2775,6 +2786,12 @@ def run_tui(
             display_status = state.status_message
             if display_status is None and state.active_screen != ScreenMode.MAIN:
                 display_status = filter_error or sampler_state.error
+            if (
+                display_status is None
+                and state.active_screen == ScreenMode.MAIN
+                and state.paused
+            ):
+                display_status = "PAUSED — press p to resume, F5/r to refresh"
             if (
                 display_status is None
                 and state.active_screen == ScreenMode.MAIN

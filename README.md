@@ -337,7 +337,8 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 | --- | --- |
 | `q`, `Q` | Quit from the main screen; return from a detail screen. |
 | `h`, `?` | Open help. Any key returns to the previous screen. |
-| `r`, `R`, `Ctrl-R`, `F5` | Refresh immediately. On the main screen this also resets selection and scrolling. |
+| `r`, `R`, `Ctrl-R`, `F5` | Refresh immediately and resume if paused. On the main screen this also resets selection and scrolling. |
+| `p`, `Z` | Pause or resume live updates on the main screen (the status line shows PAUSED). |
 | `a`, `f`, `c` | Switch to auto, full, or compact layout. |
 | Up/Down, `Shift-Tab`/`Tab`, `Alt-k`/`Alt-j` | Select the previous/next process or detail row. |
 | `Home`, `End` | Select the first/last row. |
