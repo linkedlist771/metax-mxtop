@@ -16,6 +16,51 @@ const state = {
   selectedGpu: {},
 };
 
+// Rolling client-side history for sparklines: one sample per SSE message,
+// bounded so an always-open tab cannot grow without limit.
+const HISTORY_LIMIT = 240;
+const history = {
+  timestamps: [],
+  cluster: { util: [], memory: [], hostCpu: [] },
+  nodes: new Map(),
+};
+
+function pushBounded(series, value) {
+  series.push(finite(value) ? value : null);
+  if (series.length > HISTORY_LIMIT) series.shift();
+}
+
+function recordHistory() {
+  const stats = clusterStats();
+  if (!stats.nodeCount) return;
+  pushBounded(history.timestamps, state.cluster.timestamp);
+  pushBounded(history.cluster.util, stats.avgUtil);
+  pushBounded(history.cluster.memory, stats.memory);
+  pushBounded(history.cluster.hostCpu, stats.hostCpu);
+  const seen = new Set();
+  for (const node of stats.nodes) {
+    seen.add(node.hostname);
+    let series = history.nodes.get(node.hostname);
+    if (!series) {
+      series = { util: [], memory: [] };
+      history.nodes.set(node.hostname, series);
+    }
+    const nodeData = nodeStats(node);
+    pushBounded(series.util, node.reachable ? nodeData.util : null);
+    pushBounded(series.memory, node.reachable ? nodeData.memory : null);
+  }
+  for (const hostname of history.nodes.keys()) {
+    if (!seen.has(hostname)) history.nodes.delete(hostname);
+  }
+}
+
+function applyCluster(cluster) {
+  if (!cluster || !Array.isArray(cluster.nodes)) return false;
+  state.cluster = cluster;
+  recordHistory();
+  return true;
+}
+
 const GIB = 1024 ** 3;
 const TIB = 1024 ** 4;
 
@@ -365,6 +410,7 @@ function cell(row, content, className = "") {
 function nodeState(node) {
   const view = element("span", `node-state ${node.reachable ? "online" : "offline"}`);
   append(view, element("span", "status-dot"), element("span", "", node.reachable ? "Online" : "Down"));
+  if (!node.reachable && node.error) view.title = node.error;
   return view;
 }
 
@@ -530,7 +576,9 @@ function renderHotspots(stats) {
     target.type = "button";
     target.addEventListener("click", () => navigateNode(item.node.hostname, item.device ? item.device.index : null));
     if (item.down) {
-      append(row, target, element("span", "hotspot-metric critical", "DOWN"));
+      const down = element("span", "hotspot-metric critical", "DOWN");
+      if (item.node.error) down.title = item.node.error;
+      append(row, target, down);
     } else {
       append(
         row,
@@ -544,6 +592,77 @@ function renderHotspots(stats) {
   }
   if (!items.length) list.append(element("li", "empty-state", "No GPU data"));
   return list;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function sparkline(values, options = {}) {
+  const width = options.width || 220;
+  const height = options.height || 44;
+  const max = finite(options.max) ? options.max : Math.max(1, ...values.filter(finite));
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.classList.add("sparkline");
+  if (options.label) svg.setAttribute("aria-label", options.label);
+  svg.setAttribute("role", "img");
+  const points = values.length;
+  if (points < 2) return svg;
+  const step = width / (points - 1);
+  const y = (value) => height - 1 - Math.max(0, Math.min(1, value / max)) * (height - 2);
+  let linePath = "";
+  let areaPath = "";
+  let open = false;
+  for (let index = 0; index < points; index += 1) {
+    const value = values[index];
+    const x = index * step;
+    if (!finite(value)) {
+      if (open && areaPath) areaPath += ` V ${height} Z`;
+      open = false;
+      continue;
+    }
+    if (!open) {
+      linePath += ` M ${x.toFixed(1)} ${y(value).toFixed(1)}`;
+      areaPath += ` M ${x.toFixed(1)} ${height} L ${x.toFixed(1)} ${y(value).toFixed(1)}`;
+      open = true;
+    } else {
+      linePath += ` L ${x.toFixed(1)} ${y(value).toFixed(1)}`;
+      areaPath += ` L ${x.toFixed(1)} ${y(value).toFixed(1)}`;
+    }
+  }
+  if (open && areaPath) areaPath += ` V ${height} Z`;
+  const area = document.createElementNS(SVG_NS, "path");
+  area.setAttribute("d", areaPath.trim());
+  area.classList.add("sparkline-area");
+  const line = document.createElementNS(SVG_NS, "path");
+  line.setAttribute("d", linePath.trim());
+  line.classList.add("sparkline-line");
+  svg.append(area, line);
+  return svg;
+}
+
+function trendCard(title, values, formatValue, options = {}) {
+  const card = element("div", "trend-card");
+  const latest = [...values].reverse().find(finite);
+  const head = element("div", "trend-head");
+  append(
+    head,
+    element("span", "trend-title", title),
+    element("span", "trend-value", finite(latest) ? formatValue(latest) : "-"),
+  );
+  append(card, head, sparkline(values, { ...options, label: `${title} history` }));
+  return card;
+}
+
+function renderTrends() {
+  const strip = element("div", "trend-strip");
+  append(
+    strip,
+    trendCard("Avg GPU util", history.cluster.util, formatPercent, { max: 100 }),
+    trendCard("HBM used", history.cluster.memory, formatPercent, { max: 100 }),
+    trendCard("Host CPU", history.cluster.hostCpu, formatPercent, { max: 100 }),
+  );
+  return strip;
 }
 
 function renderOverview() {
@@ -561,8 +680,17 @@ function renderOverview() {
     fragment,
     pageHead("Fleet overview", `${stats.processCount} unique GPU processes`),
     clusterKpis(stats),
-    section("GPU matrix", renderHeatmap(stats), controls),
   );
+  if (history.timestamps.length >= 2) {
+    fragment.append(
+      section(
+        "Trends",
+        renderTrends(),
+        element("span", "section-count", `${history.timestamps.length} samples`),
+      ),
+    );
+  }
+  fragment.append(section("GPU matrix", renderHeatmap(stats), controls));
   const lower = element("div", "overview-lower");
   append(
     lower,
@@ -793,6 +921,22 @@ function renderNodeDetail(host) {
     { label: "Uptime", value: formatDuration(stats.host.uptime_seconds) },
   ]));
   fragment.append(section("GPU devices", renderGpuTable(node, selectedGpu), element("span", "section-count", `${stats.gpuCount} devices`)));
+  const nodeHistory = history.nodes.get(host);
+  if (nodeHistory && nodeHistory.util.filter(finite).length >= 2) {
+    const strip = element("div", "trend-strip");
+    append(
+      strip,
+      trendCard("GPU util", nodeHistory.util, formatPercent, { max: 100 }),
+      trendCard("HBM used", nodeHistory.memory, formatPercent, { max: 100 }),
+    );
+    fragment.append(
+      section(
+        "Trends",
+        strip,
+        element("span", "section-count", `${history.timestamps.length} samples`),
+      ),
+    );
+  }
   const processRows = stats.processes
     .filter((process) => selectedGpu === null || process.gpu_index === selectedGpu)
     .map((process) => ({ node, process }));
@@ -873,7 +1017,10 @@ if (!window.location.hash) {
 fetch("/api/snapshot")
   .then((response) => response.ok ? response.json() : null)
   .then((cluster) => {
-    if (cluster && Array.isArray(cluster.nodes)) {
+    // The SSE stream replays the same snapshot as its first message, so
+    // don't record history here — this fetch only paints the first frame
+    // faster.
+    if (cluster && Array.isArray(cluster.nodes) && !state.cluster) {
       state.cluster = cluster;
       render();
     }
@@ -888,8 +1035,7 @@ stream.onopen = () => {
 stream.onmessage = (event) => {
   try {
     const cluster = JSON.parse(event.data);
-    if (cluster && Array.isArray(cluster.nodes)) {
-      state.cluster = cluster;
+    if (applyCluster(cluster)) {
       state.connected = true;
       render();
     }

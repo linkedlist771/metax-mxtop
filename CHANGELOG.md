@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - htop-style incremental process filter in the TUI: `\` or `F4` opens a
   prompt that matches user, command, name, or PID as you type; `Enter`
   applies, `Esc` clears.
+- Live trend sparklines in the remote dashboard: the Overview shows rolling
+  cluster GPU-utilization, HBM, and host-CPU history, and each node detail
+  page shows per-node GPU/HBM history — accumulated client-side from the
+  SSE stream, bounded to the most recent 240 samples.
 
 ### Changed
 
@@ -36,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Failed pymxsml telemetry calls are logged once at debug level instead of
   silently returning defaults; `--open` browser failures print a hint
   instead of being swallowed.
+- The dashboard's SSE stream is capped at 32 concurrent clients; excess
+  clients receive 503 with `Retry-After` while `/api/snapshot` polling stays
+  available, bounding per-connection thread growth.
+- Node failures surface their SSH error reason in the dashboard (hover the
+  Down badge or the hotspot DOWN entry), and empty exception messages fall
+  back to the exception type name.
 
 ### Removed
 

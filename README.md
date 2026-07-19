@@ -277,9 +277,11 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   token, mxtop prints a warning: all cluster telemetry (hostnames, users,
   process command lines) would otherwise be readable by anyone who can reach
   the port.
-- The web UI provides a fleet overview with a switchable GPU heatmap, a
-  searchable node inventory, cluster-wide host CPU/RAM/load telemetry, a
-  process table, and per-node GPU, host, and process detail. Remote process
+- The web UI provides a fleet overview with a switchable GPU heatmap, live
+  trend sparklines (cluster GPU utilization, HBM, and host CPU; per-node
+  GPU/HBM on the detail page), a searchable node inventory, cluster-wide
+  host CPU/RAM/load telemetry, a process table, and per-node GPU, host, and
+  process detail. Remote process
   rows are enriched with one batched `ps` query per node; missing Linux host
   fields degrade to unavailable values without taking the node offline. View
   state is encoded in the URL hash, so browser back/forward navigation works

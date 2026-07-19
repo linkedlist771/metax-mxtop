@@ -24,6 +24,10 @@ _ASSET_TYPES = {
 
 _TOKEN_COOKIE = "mxtop_token"
 
+# ThreadingHTTPServer spawns one thread per connection; SSE clients hold
+# theirs open indefinitely, so cap them to bound thread growth.
+MAX_SSE_CLIENTS = 32
+
 
 class SnapshotHolder:
     """Thread-safe latest-snapshot store bridging the poller and HTTP."""
@@ -62,7 +66,10 @@ def _make_handler(
     holder: SnapshotHolder,
     assets: dict[str, bytes],
     auth_token: str | None,
+    max_sse_clients: int = MAX_SSE_CLIENTS,
 ) -> type[BaseHTTPRequestHandler]:
+    sse_slots = threading.BoundedSemaphore(max_sse_clients)
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: Any) -> None:
             pass
@@ -156,6 +163,20 @@ def _make_handler(
                 self._send(404, "text/plain; charset=utf-8", b"not found")
 
         def _stream(self) -> None:
+            if not sse_slots.acquire(blocking=False):
+                self._send(
+                    503,
+                    "text/plain; charset=utf-8",
+                    b"too many live-stream clients; retry later or use /api/snapshot",
+                    {"Retry-After": "5"},
+                )
+                return
+            try:
+                self._stream_events()
+            finally:
+                sse_slots.release()
+
+        def _stream_events(self) -> None:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -185,8 +206,9 @@ def make_server(
     bind: str = "127.0.0.1",
     port: int = 8080,
     auth_token: str | None = None,
+    max_sse_clients: int = MAX_SSE_CLIENTS,
 ) -> ThreadingHTTPServer:
     assets = load_dashboard_assets()
     return ThreadingHTTPServer(
-        (bind, port), _make_handler(holder, assets, auth_token)
+        (bind, port), _make_handler(holder, assets, auth_token, max_sse_clients)
     )

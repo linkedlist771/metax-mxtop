@@ -367,6 +367,52 @@ def test_web_server_enforces_auth_token():
         server.server_close()
 
 
+def test_web_server_caps_sse_clients():
+    holder = SnapshotHolder()
+    holder.update(ClusterSnapshot(nodes=[]))
+    server = make_server(holder, bind="127.0.0.1", port=0, max_sse_clients=1)
+    import threading
+    import urllib.error
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        base = f"http://{host}:{port}"
+        first = urllib.request.urlopen(f"{base}/api/stream", timeout=5)
+        assert first.readline().startswith(b"data: ")
+
+        try:
+            urllib.request.urlopen(f"{base}/api/stream", timeout=5)
+            raise AssertionError("expected HTTP 503 beyond the SSE cap")
+        except urllib.error.HTTPError as error:
+            assert error.code == 503
+            assert error.headers.get("Retry-After") == "5"
+
+        # Snapshot polling stays available even at the cap.
+        with urllib.request.urlopen(f"{base}/api/snapshot", timeout=5) as resp:
+            assert resp.status == 200
+
+        first.close()
+        # The handler only notices the disconnect when a write fails, which
+        # can take more than one send due to TCP buffering — keep publishing
+        # snapshots until the slot frees.
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            holder.update(ClusterSnapshot(nodes=[]))
+            try:
+                second = urllib.request.urlopen(f"{base}/api/stream", timeout=5)
+                break
+            except urllib.error.HTTPError:
+                time.sleep(0.05)
+        else:
+            raise AssertionError("SSE slot was not released after disconnect")
+        second.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_web_server_treats_sse_disconnect_as_normal(capsys):
     holder = SnapshotHolder()
     holder.update(ClusterSnapshot(nodes=[]))

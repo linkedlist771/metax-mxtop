@@ -134,7 +134,12 @@ class ClusterMonitor:
         except Exception as exc:
             await self._drop(host)
             latency = (time.monotonic() - start) * 1000
-            return NodeSnapshot(hostname=host, reachable=False, error=str(exc), latency_ms=latency)
+            # str() of e.g. TimeoutError is empty; keep the type visible so
+            # the dashboard can show a real reason.
+            reason = str(exc).strip() or type(exc).__name__
+            return NodeSnapshot(
+                hostname=host, reachable=False, error=reason, latency_ms=latency
+            )
 
     async def _drop(self, host: str) -> None:
         self._host_cpu_samples.pop(host, None)
