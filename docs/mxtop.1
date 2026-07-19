@@ -71,6 +71,10 @@ below.
 .BR \-\-version ", " \-V
 Print the version and exit.
 .TP
+.B \-\-print\-completion \fR{bash,zsh,fish}
+Print a shell completion script on stdout and exit. For example:
+.B mxtop \-\-print\-completion bash > /etc/bash_completion.d/mxtop
+.TP
 .B \-\-backend \fR{auto,pymxsml,mxsmi}
 Select the telemetry backend (default: auto, preferring Pymxsml).
 .TP

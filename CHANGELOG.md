@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `COLORTERM=truecolor`/`24bit` with redefinable curses colors, bar
   gradients use a smooth 16-step 24-bit green-to-red ramp instead of the
   6-color 256-palette approximation.
+- Shell completions generated from the CLI itself:
+  `mxtop --print-completion {bash,zsh,fish}`, kept complete by tests.
 
 ### Changed
 

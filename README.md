@@ -84,6 +84,14 @@ pip install -e .
 A man page ships with the package (`man mxtop` after a system-wide or
 user-scheme install); it is also readable in-repo with `man -l docs/mxtop.1`.
 
+Shell completions are generated from the CLI itself:
+
+```bash
+mxtop --print-completion bash > ~/.local/share/bash-completion/completions/mxtop
+mxtop --print-completion zsh  > ~/.zfunc/_mxtop     # ensure ~/.zfunc is in fpath
+mxtop --print-completion fish > ~/.config/fish/completions/mxtop.fish
+```
+
 ## MetaX backend discovery
 
 `mxtop` tries backends in this order when `--backend auto` is used:
@@ -178,6 +186,7 @@ Useful CLI flags:
 | Flag | Meaning |
 | --- | --- |
 | `--version`, `-V` | Print the runtime version. |
+| `--print-completion {bash,zsh,fish}` | Print a shell completion script and exit. |
 | `--backend {auto,pymxsml,mxsmi}` | Select telemetry backend. |
 | `--interval SECONDS` | Refresh interval (default `2.0`, minimum `0.25`). |
 | `--once`, `-1` | Print one text snapshot and exit. |

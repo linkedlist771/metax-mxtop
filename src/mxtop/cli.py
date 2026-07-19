@@ -194,6 +194,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", "-V", action="version", version=f"mxtop {__version__}"
     )
     _ = parser.add_argument(
+        "--print-completion",
+        choices=["bash", "zsh", "fish"],
+        default=None,
+        metavar="SHELL",
+        help="print a completion script for bash, zsh, or fish and exit",
+    )
+    _ = parser.add_argument(
         "--backend", choices=["auto", "pymxsml", "mxsmi"], default="auto"
     )
     mode = parser.add_mutually_exclusive_group()
@@ -619,6 +626,11 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     parser = build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
+    if args.print_completion:
+        from mxtop.completions import render_completion
+
+        print(render_completion(parser, args.print_completion), end="")
+        return 0
     _validate_remote_arguments(parser, args, raw_argv)
     file_config = load_config()
     _apply_config_defaults(args, raw_argv, file_config)
