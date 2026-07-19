@@ -162,6 +162,13 @@ mxtop --json-lines -n 60 --interval 1 | jq '.devices[0].gpu_util_percent'
 
 `--json-lines` / `--ndjson` emits one compact JSON object per line, the natural shape for `jq`, log shippers, and time-series ingestion.
 
+For Prometheus-based monitoring of a single host, `--export-metrics` serves the local backend's telemetry on `/metrics` (default port `9532`, dcgm-exporter style) — no SSH or remote extra needed:
+
+```bash
+mxtop --export-metrics --port 9532 --auth-token secret
+curl -H 'Authorization: Bearer secret' http://127.0.0.1:9532/metrics
+```
+
 Common filters:
 
 ```bash
@@ -203,6 +210,7 @@ Useful CLI flags:
 | `--monitor`, `-m [auto\|full\|compact]` | Run interactively, optionally choosing the layout. |
 | `--json` | Print one JSON snapshot and exit. |
 | `--json-lines`, `--ndjson` | Print snapshots as one compact JSON object per line (NDJSON). |
+| `--export-metrics` | Serve local telemetry as a Prometheus `/metrics` endpoint (default port `9532`); honors `--bind`, `--port`, `--auth-token`, and `--interval`. |
 | `--no-color` | Disable ANSI colors in text output. |
 | `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
 | `--colorful` | Use spectrum-like gradient colors for bar charts. On terminals advertising truecolor (`COLORTERM=truecolor`), the gradient uses a smooth 16-step 24-bit ramp; otherwise the 256-color palette. |

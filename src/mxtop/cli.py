@@ -237,6 +237,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="serve a local web dashboard aggregating multiple SSH nodes",
     )
+    _ = mode.add_argument(
+        "--export-metrics",
+        action="store_true",
+        help=(
+            "serve local telemetry as a Prometheus /metrics endpoint\n"
+            "(honors --bind, --port [default: 9532], --auth-token, --interval)"
+        ),
+    )
     _ = parser.add_argument(
         "--interval",
         type=_interval,
@@ -613,10 +621,17 @@ def _validate_remote_arguments(
         if unsupported is not None:
             parser.error(f"{unsupported} is not supported with --remote-mode")
         return
-    supplied = [name for name in REMOTE_ARGUMENTS if hasattr(args, name)]
+    # --export-metrics reuses the server options but stays local.
+    exporter_allowed = {"port", "bind", "auth_token"} if args.export_metrics else set()
+    supplied = [
+        name
+        for name in REMOTE_ARGUMENTS
+        if hasattr(args, name) and name not in exporter_allowed
+    ]
     if supplied:
         option = "--" + supplied[0].replace("_", "-")
-        parser.error(f"{option} requires --remote-mode")
+        suffix = " or --export-metrics" if supplied[0] in {"port", "bind", "auth_token"} else ""
+        parser.error(f"{option} requires --remote-mode{suffix}")
 
 
 def _should_use_color(
@@ -656,7 +671,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     file_config = load_config()
     _apply_config_defaults(args, raw_argv, file_config)
     if args.count is not None:
-        if hasattr(args, "monitor") or args.remote_mode:
+        if hasattr(args, "monitor") or args.remote_mode or args.export_metrics:
             parser.error("--count requires --once or --json")
         if not args.json and not args.json_lines:
             args.once = True
@@ -678,6 +693,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         and stdin_is_tty
         and stdout_is_tty
         and not args.remote_mode
+        and not args.export_metrics
     )
     if monitor_requested:
         requested_layout = getattr(args, "monitor", None)
@@ -749,6 +765,25 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         "process_context_types",
         None,
     )
+
+    if args.export_metrics:
+        from mxtop.exporter import run_exporter
+
+        try:
+            return run_exporter(
+                selected_backend,
+                bind=getattr(args, "bind", "127.0.0.1"),
+                port=getattr(args, "port", 9532),
+                interval=args.interval,
+                auth_token=(
+                    getattr(args, "auth_token", None)
+                    or os.environ.get(MXTOP_AUTH_TOKEN_ENV)
+                    or None
+                ),
+            )
+        except Exception as exc:
+            print(f"MXTOP ERROR: {exc}", file=sys.stderr)
+            return 1
 
     if args.json or args.json_lines:
         had_errors = False

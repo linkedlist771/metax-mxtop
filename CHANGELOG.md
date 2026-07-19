@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard keyboard shortcuts (`1`/`2`/`3` switch views, `/` focuses
   search, `Esc` blurs), a footer button to download the current cluster
   snapshot as JSON, and a CONTRIBUTING.md development guide.
+- `--export-metrics`: a local Prometheus exporter (default port 9532,
+  dcgm-exporter style) serving this host's telemetry on `/metrics`
+  without SSH; honors `--bind`, `--port`, `--auth-token`, `--interval`.
 
 ### Changed
 

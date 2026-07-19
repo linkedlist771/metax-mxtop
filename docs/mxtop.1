@@ -71,6 +71,16 @@ Serve a local web dashboard aggregating multiple SSH-reachable nodes.
 See
 .B REMOTE MODE
 below.
+.TP
+.B \-\-export\-metrics
+Serve this host's telemetry as a Prometheus
+.I /metrics
+endpoint (default port 9532) without SSH. Honors
+.BR \-\-bind ,
+.BR \-\-port ,
+.BR \-\-auth\-token ,
+and samples at
+.BR \-\-interval .
 .SH OPTIONS
 .TP
 .BR \-\-version ", " \-V
