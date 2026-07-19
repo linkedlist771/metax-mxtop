@@ -75,6 +75,12 @@ Print the version and exit.
 Print a shell completion script on stdout and exit. For example:
 .B mxtop \-\-print\-completion bash > /etc/bash_completion.d/mxtop
 .TP
+.B \-\-doctor
+Diagnose the environment and exit: backend availability (Pymxsml, mx-smi),
+device visibility, psutil, terminal capabilities, config file validity, and
+the remote extra. Prints PASS/WARN/FAIL per check with fix hints; exits
+non-zero when no telemetry backend works.
+.TP
 .B \-\-backend \fR{auto,pymxsml,mxsmi}
 Select the telemetry backend (default: auto, preferring Pymxsml).
 .TP

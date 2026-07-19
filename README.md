@@ -112,6 +112,11 @@ Example:
 MXTOP_MXSMI_PATH=/opt/mxdriver/bin/mx-smi mxtop --backend mxsmi
 ```
 
+When GPUs don't show up, `mxtop --doctor` walks the whole discovery chain —
+Pymxsml importability and SDK wheels, mx-smi resolution, a live backend
+snapshot with device count, terminal capabilities, and config validity —
+printing a fix hint for anything that isn't a PASS.
+
 ## Usage
 
 On a terminal, the default command opens the interactive dashboard:
@@ -187,6 +192,7 @@ Useful CLI flags:
 | --- | --- |
 | `--version`, `-V` | Print the runtime version. |
 | `--print-completion {bash,zsh,fish}` | Print a shell completion script and exit. |
+| `--doctor` | Diagnose the environment (backends, devices, terminal, config) with PASS/WARN/FAIL checks and fix hints; exits non-zero when no telemetry backend works. |
 | `--backend {auto,pymxsml,mxsmi}` | Select telemetry backend. |
 | `--interval SECONDS` | Refresh interval (default `2.0`, minimum `0.25`). |
 | `--once`, `-1` | Print one text snapshot and exit. |

@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   6-color 256-palette approximation.
 - Shell completions generated from the CLI itself:
   `mxtop --print-completion {bash,zsh,fish}`, kept complete by tests.
+- `mxtop --doctor` environment diagnostics: PASS/WARN/FAIL checks with fix
+  hints for Pymxsml, mx-smi resolution, live backend snapshots, psutil,
+  terminal capabilities, config-file validity, and the remote extra; exits
+  non-zero when no telemetry backend works.
 
 ### Changed
 

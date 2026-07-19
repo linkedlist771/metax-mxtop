@@ -201,6 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print a completion script for bash, zsh, or fish and exit",
     )
     _ = parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="diagnose the environment (backends, terminal, config) and exit",
+    )
+    _ = parser.add_argument(
         "--backend", choices=["auto", "pymxsml", "mxsmi"], default="auto"
     )
     mode = parser.add_mutually_exclusive_group()
@@ -631,6 +636,16 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
 
         print(render_completion(parser, args.print_completion), end="")
         return 0
+    if args.doctor:
+        from mxtop.doctor import run_doctor
+
+        return run_doctor(
+            use_color=_should_use_color(
+                no_color=args.no_color,
+                force_color=args.force_color,
+                stdout_is_tty=sys.stdout.isatty(),
+            )
+        )
     _validate_remote_arguments(parser, args, raw_argv)
     file_config = load_config()
     _apply_config_defaults(args, raw_argv, file_config)
