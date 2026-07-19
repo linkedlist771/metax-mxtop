@@ -1,6 +1,5 @@
 import pytest
 
-from mxtop import config as config_module
 from mxtop.cli import main
 from mxtop.config import config_path, load_config
 from mxtop.models import DeviceSnapshot, FrameSnapshot

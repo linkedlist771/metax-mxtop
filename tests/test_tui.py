@@ -1456,3 +1456,46 @@ def test_ascii_lines_keep_semantic_tui_coloring(monkeypatch):
     assert any(
         text == "0" and attr == tui.PAIR_GOOD for _, _, text, _, attr in screen.calls
     )
+
+
+def test_spectrum_rgb_ramp_is_monotonic_green_to_red():
+    start = tui._spectrum_rgb(0.0)
+    end = tui._spectrum_rgb(1.0)
+    assert start[1] > start[0]  # green-dominant at idle
+    assert end[0] > end[1]  # red-dominant at saturation
+    reds = [tui._spectrum_rgb(f / 10)[0] for f in range(11)]
+    assert reds == sorted(reds)  # red channel only ever grows
+    for fraction in (0.0, 0.31, 0.5, 0.77, 1.0):
+        assert all(0 <= channel <= 1000 for channel in tui._spectrum_rgb(fraction))
+
+
+def test_spectrum_pair_uses_truecolor_ramp_when_ready(monkeypatch):
+    monkeypatch.setattr(tui, "_truecolor_ready", False)
+    assert tui._spectrum_pair(0.0) == tui.PAIR_SPECTRUM_FIRST
+    assert (
+        tui._spectrum_pair(1.0)
+        == tui.PAIR_SPECTRUM_FIRST + len(tui.SPECTRUM_COLORS) - 1
+    )
+
+    monkeypatch.setattr(tui, "_truecolor_ready", True)
+    assert tui._spectrum_pair(0.0) == tui.PAIR_TRUECOLOR_FIRST
+    assert (
+        tui._spectrum_pair(1.0)
+        == tui.PAIR_TRUECOLOR_FIRST + tui.TRUECOLOR_SPECTRUM_STEPS - 1
+    )
+    assert tui._spectrum_pair(2.0) <= tui.PAIR_TRUECOLOR_FIRST + tui.TRUECOLOR_SPECTRUM_STEPS - 1
+
+
+def test_truecolor_requires_colorterm_and_curses_support(monkeypatch):
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert tui._terminal_advertises_truecolor()
+    monkeypatch.setenv("COLORTERM", "24bit")
+    assert tui._terminal_advertises_truecolor()
+    monkeypatch.setenv("COLORTERM", "256color")
+    assert not tui._terminal_advertises_truecolor()
+    monkeypatch.delenv("COLORTERM")
+    assert not tui._terminal_advertises_truecolor()
+
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setattr(tui.curses, "can_change_color", lambda: False, raising=False)
+    assert tui._setup_truecolor_spectrum() is False

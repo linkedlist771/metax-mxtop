@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SSE stream, bounded to the most recent 240 samples.
 - A `mxtop(1)` man page (`docs/mxtop.1`), installed to `share/man/man1` and
   kept in sync with the CLI by tests.
+- Truecolor support for `--colorful`: on terminals advertising
+  `COLORTERM=truecolor`/`24bit` with redefinable curses colors, bar
+  gradients use a smooth 16-step 24-bit green-to-red ramp instead of the
+  6-color 256-palette approximation.
 
 ### Changed
 

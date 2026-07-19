@@ -88,6 +88,12 @@ PAIR_BRIGHT_RED = 14
 PAIR_SPECTRUM_FIRST = 15
 SPECTRUM_COLORS = (40, 46, 190, 226, 208, 196)
 PAIR_TREE_SELECTED = 21
+# Truecolor spectrum: pairs and redefinable color slots above everything the
+# UI otherwise uses. Colors 232-247 shadow the xterm grayscale ramp, which
+# mxtop never draws.
+PAIR_TRUECOLOR_FIRST = 32
+TRUECOLOR_SPECTRUM_STEPS = 16
+TRUECOLOR_COLOR_BASE = 232
 MIN_TUI_WIDTH = MIN_SCREEN_WIDTH
 
 SCROLL_STEP = 3
@@ -125,6 +131,58 @@ def _alt_key(character: str) -> int:
     return ALT_KEY_BASE + ord(character)
 
 
+_truecolor_ready = False
+
+
+def _terminal_advertises_truecolor() -> bool:
+    return os.environ.get("COLORTERM", "").strip().lower() in {"truecolor", "24bit"}
+
+
+def _spectrum_rgb(fraction: float) -> tuple[int, int, int]:
+    """nvitop-like green->yellow->orange->red ramp on a 0..1000 curses scale."""
+
+    fraction = max(0.0, min(1.0, fraction))
+    stops = (
+        (0.0, (0, 800, 250)),
+        (0.35, (250, 900, 0)),
+        (0.6, (900, 900, 0)),
+        (0.8, (950, 550, 0)),
+        (1.0, (950, 150, 100)),
+    )
+    for (left_pos, left_rgb), (right_pos, right_rgb) in zip(stops, stops[1:]):
+        if fraction <= right_pos:
+            span = right_pos - left_pos
+            weight = 0.0 if span <= 0 else (fraction - left_pos) / span
+            return tuple(
+                round(left + (right - left) * weight)
+                for left, right in zip(left_rgb, right_rgb)
+            )
+    return stops[-1][1]
+
+
+def _setup_truecolor_spectrum() -> bool:
+    """Redefine a color ramp for smooth --colorful gradients when supported."""
+
+    if not (
+        _terminal_advertises_truecolor()
+        and curses.can_change_color()
+        and getattr(curses, "COLORS", 0) >= 256
+        and getattr(curses, "COLOR_PAIRS", 0)
+        > PAIR_TRUECOLOR_FIRST + TRUECOLOR_SPECTRUM_STEPS
+    ):
+        return False
+    try:
+        for step in range(TRUECOLOR_SPECTRUM_STEPS):
+            fraction = step / (TRUECOLOR_SPECTRUM_STEPS - 1)
+            red, green, blue = _spectrum_rgb(fraction)
+            color = TRUECOLOR_COLOR_BASE + step
+            curses.init_color(color, red, green, blue)
+            curses.init_pair(PAIR_TRUECOLOR_FIRST + step, color, -1)
+    except curses.error:
+        return False
+    return True
+
+
 def _setup_colors() -> None:
     if not curses.has_colors():
         return
@@ -155,6 +213,8 @@ def _setup_colors() -> None:
         for offset, color in enumerate(SPECTRUM_COLORS):
             curses.init_pair(PAIR_SPECTRUM_FIRST + offset, color, -1)
     curses.init_pair(PAIR_TREE_SELECTED, curses.COLOR_GREEN, -1)
+    global _truecolor_ready
+    _truecolor_ready = _setup_truecolor_spectrum()
 
 
 def _attr(pair: int, extra: int = 0) -> int:
@@ -1024,6 +1084,12 @@ def _intensity_pair(value: float | None, *, memory: bool) -> int:
 
 
 def _spectrum_pair(fraction: float) -> int:
+    if _truecolor_ready:
+        index = min(
+            TRUECOLOR_SPECTRUM_STEPS - 1,
+            max(0, round((TRUECOLOR_SPECTRUM_STEPS - 1) * fraction)),
+        )
+        return PAIR_TRUECOLOR_FIRST + index
     index = min(
         len(SPECTRUM_COLORS) - 1, max(0, round((len(SPECTRUM_COLORS) - 1) * fraction))
     )

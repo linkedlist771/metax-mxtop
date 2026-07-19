@@ -186,7 +186,7 @@ Useful CLI flags:
 | `--json` | Print one JSON snapshot and exit. |
 | `--no-color` | Disable ANSI colors in text output. |
 | `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
-| `--colorful` | Use spectrum-like gradient colors for bar charts. |
+| `--colorful` | Use spectrum-like gradient colors for bar charts. On terminals advertising truecolor (`COLORTERM=truecolor`), the gradient uses a smooth 16-step 24-bit ramp; otherwise the 256-color palette. |
 | `--light` | Use colors suitable for a light terminal theme. |
 | `--gpu-util-thresh LOW HIGH` | Override GPU utilization intensity thresholds. |
 | `--mem-util-thresh LOW HIGH` | Override GPU-memory intensity thresholds. |
