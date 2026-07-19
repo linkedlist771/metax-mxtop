@@ -406,7 +406,8 @@ See the [output gallery](https://github.com/linkedlist771/metax-mxtop/blob/main/
 
 ## Development
 
-Run tests and lint locally:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, including the
+docs-sync tests and help-screen colorization rules. Run tests and lint locally:
 
 ```bash
 uv run --locked --with pytest --with psutil --with pillow==11.3.0 pytest -q

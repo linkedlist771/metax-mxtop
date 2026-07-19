@@ -787,6 +787,33 @@ tbody tr:last-child td {
   font-size: 10px;
 }
 
+.footer-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer-button {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.footer-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+@media (max-width: 760px) {
+  .footer-hints {
+    display: none;
+  }
+}
+
 @media (max-width: 1100px) {
   .overview-lower {
     grid-template-columns: minmax(0, 1fr);

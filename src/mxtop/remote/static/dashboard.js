@@ -1008,6 +1008,47 @@ themeToggle.addEventListener("click", () => {
 
 syncThemeToggle();
 
+const downloadButton = document.getElementById("download-snapshot");
+downloadButton.addEventListener("click", () => {
+  if (!state.cluster) return;
+  const stamp = finite(state.cluster.timestamp)
+    ? new Date(state.cluster.timestamp * 1000).toISOString().replace(/[:.]/g, "-")
+    : "snapshot";
+  const blob = new Blob(
+    [JSON.stringify(state.cluster, null, 2)],
+    { type: "application/json" },
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `mxtop-cluster-${stamp}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+});
+
+function _isTypingTarget(target) {
+  return target instanceof HTMLElement
+    && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (_isTypingTarget(event.target)) {
+    if (event.key === "Escape") event.target.blur();
+    return;
+  }
+  if (event.key === "1") navigate("overview");
+  else if (event.key === "2") navigate("nodes");
+  else if (event.key === "3") navigate("processes");
+  else if (event.key === "/") {
+    const box = document.querySelector(".search-box");
+    if (box) {
+      event.preventDefault();
+      box.focus();
+    }
+  }
+});
+
 window.addEventListener("hashchange", render);
 
 if (!window.location.hash) {

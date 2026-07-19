@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pause key: `p` (or `Z`) freezes live updates on the main screen so
   values can be read or copied; the status line shows PAUSED, and `p`,
   `F5`, or `r` resumes.
+- Dashboard keyboard shortcuts (`1`/`2`/`3` switch views, `/` focuses
+  search, `Esc` blurs), a footer button to download the current cluster
+  snapshot as JSON, and a CONTRIBUTING.md development guide.
 
 ### Changed
 
