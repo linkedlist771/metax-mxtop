@@ -307,6 +307,11 @@ def test_dashboard_assets_have_views_and_responsive_guards():
     )
     assert "@media (max-width: 760px)" in assets["dashboard.css"]
     assert "overflow-x: auto" in assets["dashboard.css"]
+    assert 'data-theme="light"' in assets["dashboard.css"]
+    assert '<meta name="color-scheme" content="dark light">' in assets["index.html"]
+    assert 'id="theme-toggle"' in assets["index.html"]
+    assert "prefers-color-scheme" in assets["index.html"]
+    assert "mxtop-theme" in assets["dashboard.js"]
     assert "function renderOverview()" in assets["dashboard.js"]
     assert "function renderNodes()" in assets["dashboard.js"]
     assert "function renderProcesses()" in assets["dashboard.js"]

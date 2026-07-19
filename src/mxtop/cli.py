@@ -14,6 +14,7 @@ import time
 from mxtop import __version__
 from mxtop._compat import DATACLASS_SLOTS
 from mxtop.backends import TelemetryBackend, create_backend
+from mxtop.config import load_config
 from mxtop.filters import (
     apply_filters,
     normalize_indices,
@@ -164,9 +165,11 @@ def _monitor_mode_tokens() -> set[str]:
     }
 
 
-def _monitor_layout_from_env(tokens: set[str]) -> str:
+def _monitor_layout_from_env(tokens: set[str], fallback: str | None = None) -> str:
     modes = tokens.intersection({mode.value for mode in LayoutMode})
-    return modes.pop() if len(modes) == 1 else LayoutMode.AUTO.value
+    if len(modes) == 1:
+        return modes.pop()
+    return fallback or LayoutMode.AUTO.value
 
 
 def _visible_device_identifiers() -> tuple[str, ...] | None:
@@ -523,6 +526,58 @@ def _supplied_option(argv: list[str], option: str) -> bool:
     return any(token == option or token.startswith(option) for token in argv)
 
 
+def _apply_config_defaults(
+    args: argparse.Namespace, argv: list[str], config: dict[str, object]
+) -> None:
+    """Layer config-file values under CLI flags (flags and env always win)."""
+
+    if not config:
+        return
+    monitor_tokens = _monitor_mode_tokens()
+    if "interval" in config and not _supplied_option(argv, "--interval"):
+        args.interval = float(config["interval"])  # type: ignore[arg-type]
+    for flag, name, negation in (
+        ("--colorful", "colorful", "plain"),
+        ("--light", "light", "dark"),
+        ("--readonly", "readonly", None),
+    ):
+        if negation is not None and negation in monitor_tokens:
+            continue
+        if config.get(name) and not _supplied_option(argv, flag):
+            setattr(args, name, True)
+    if config.get("no_unicode") and not (
+        _supplied_option(argv, "--no-unicode")
+        or _supplied_option(argv, "--ascii")
+        or _supplied_option(argv, "-U")
+    ):
+        args.no_unicode = True
+    for name, env_name in (
+        ("gpu_util_thresh", MXTOP_GPU_THRESHOLDS_ENV),
+        ("mem_util_thresh", MXTOP_MEM_THRESHOLDS_ENV),
+    ):
+        option = "--" + name.replace("_", "-")
+        if os.environ.get(env_name):
+            continue
+        if name in config and getattr(args, name) is None and not _supplied_option(argv, option):
+            setattr(args, name, list(config[name]))  # type: ignore[call-overload]
+    # Remote-section defaults apply only when --remote-mode is active, and
+    # use setattr-if-missing because these args use argparse.SUPPRESS.
+    if args.remote_mode:
+        for config_key, arg_name in (
+            ("remote_bind", "bind"),
+            ("remote_port", "port"),
+            ("remote_auth_token", "auth_token"),
+            ("remote_mxsmi_path", "remote_mxsmi_path"),
+            ("remote_open", "open"),
+        ):
+            if config_key == "remote_auth_token" and os.environ.get(
+                MXTOP_AUTH_TOKEN_ENV
+            ):
+                continue
+            if config_key in config and not hasattr(args, arg_name):
+                setattr(args, arg_name, config[config_key])
+
+
 def _validate_remote_arguments(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
@@ -565,6 +620,8 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
     _validate_remote_arguments(parser, args, raw_argv)
+    file_config = load_config()
+    _apply_config_defaults(args, raw_argv, file_config)
     if args.count is not None:
         if hasattr(args, "monitor") or args.remote_mode:
             parser.error("--count requires --once or --json")
@@ -590,7 +647,9 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     )
     if monitor_requested:
         requested_layout = getattr(args, "monitor", None)
-        args.monitor = requested_layout or _monitor_layout_from_env(monitor_tokens)
+        args.monitor = requested_layout or _monitor_layout_from_env(
+            monitor_tokens, fallback=file_config.get("monitor")  # type: ignore[arg-type]
+        )
     if args.user is not None and not args.user:
         args.user.append(getpass.getuser())
     if not args.colorful:

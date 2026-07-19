@@ -3,9 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <title>mxtop cluster</title>
   <link rel="stylesheet" href="/assets/dashboard.css">
+  <script>
+    (function () {
+      let theme = null;
+      try { theme = localStorage.getItem("mxtop-theme"); } catch (_) {}
+      if (theme !== "light" && theme !== "dark") {
+        theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+          ? "light"
+          : "dark";
+      }
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <script src="/assets/dashboard.js" defer></script>
 </head>
 <body>
@@ -25,6 +37,7 @@
         <span class="status-dot"></span>
         <span id="connection-label">Connecting</span>
       </span>
+      <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" title="Toggle color theme"></button>
     </div>
   </header>
   <main id="app" tabindex="-1">

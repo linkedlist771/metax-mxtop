@@ -213,6 +213,29 @@ Useful CLI flags:
 | `ANSI_COLORS_DISABLED` | Disable ANSI output unless `--force-color` is explicit. |
 | `NO_COLOR` | Disable ANSI output unless `--force-color` is explicit. |
 | `FORCE_COLOR` | Force ANSI output when neither disable variable is present. |
+| `MXTOP_CONFIG` | Path to the configuration file (default: `~/.config/mxtop/config.toml`). |
+
+### Configuration file
+
+Persistent defaults live in `~/.config/mxtop/config.toml` (or `$XDG_CONFIG_HOME/mxtop/config.toml`, or the file named by `MXTOP_CONFIG`). Explicit CLI flags and environment variables always take precedence over the file. Unknown or invalid keys print a warning instead of being silently ignored.
+
+```toml
+interval = 1.0            # refresh cadence in seconds (min 0.25)
+monitor = "full"          # default layout: auto | full | compact
+colorful = true           # spectrum bar colors
+light = false             # light terminal theme
+readonly = false          # disable process signals
+no-unicode = false        # ASCII output only
+gpu-util-thresh = [10, 75]
+mem-util-thresh = [10, 80]
+
+[remote]                  # --remote-mode defaults
+bind = "127.0.0.1"
+port = 8080
+auth-token = "change-me"
+mxsmi-path = "mx-smi"
+open = false
+```
 
 ## Remote mode (cluster dashboard)
 
@@ -260,7 +283,9 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   rows are enriched with one batched `ps` query per node; missing Linux host
   fields degrade to unavailable values without taking the node offline. View
   state is encoded in the URL hash, so browser back/forward navigation works
-  without reconnecting to the nodes.
+  without reconnecting to the nodes. Dark and light themes follow the
+  browser's `prefers-color-scheme` and can be switched with the header
+  toggle; the choice persists in the browser.
 - Each node runs the same `mx-smi` queries as the local backend; override the
   remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
 

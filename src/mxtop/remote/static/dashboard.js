@@ -844,6 +844,26 @@ for (const button of navButtons) {
   button.addEventListener("click", () => navigate(button.dataset.route));
 }
 
+const themeToggle = document.getElementById("theme-toggle");
+
+function syncThemeToggle() {
+  const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  themeToggle.textContent = theme === "light" ? "☾" : "☀";
+  themeToggle.setAttribute(
+    "aria-label",
+    theme === "light" ? "Switch to dark theme" : "Switch to light theme",
+  );
+}
+
+themeToggle.addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("mxtop-theme", next); } catch (_) {}
+  syncThemeToggle();
+});
+
+syncThemeToggle();
+
 window.addEventListener("hashchange", render);
 
 if (!window.location.hash) {
