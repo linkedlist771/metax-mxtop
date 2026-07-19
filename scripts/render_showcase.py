@@ -67,7 +67,7 @@ SHOWCASE_SPECS = (
     ShowcaseSpec("tui-142x036-heavy-4gpu", "142x36 viewport, 4 heavily loaded GPUs", "heavy", "tui", 142, 36),
     ShowcaseSpec("tui-172x044-many-16gpu", "172x44 viewport, 16 mixed-load GPUs", "many", "tui", 172, 44),
     ShowcaseSpec("tui-180x044-many-64gpu", "180x44 viewport, 64-GPU fleet overview", "sixty-four", "tui", 180, 44),
-    ShowcaseSpec("screen-help-118x030", "Help screen with nvitop-compatible key groups", "small", "help", 118, 30),
+    ShowcaseSpec("screen-help-118x034", "Help screen with nvitop-compatible key groups", "small", "help", 118, 34),
     ShowcaseSpec("screen-environment-120x018", "Process environment with empty, long, and multiline values", "small", "environment", 120, 18),
     ShowcaseSpec("screen-environment-error-100x008", "Stable process-environment permission error", "small", "environment-error", 100, 8),
     ShowcaseSpec("screen-tree-140x018", "GPU process tree with host ancestors and direct children", "small", "tree", 140, 18),
@@ -122,65 +122,83 @@ def _styled_spans(line: str, spans: list[tuple[int, int, tuple[str, ...]]]) -> s
     return "".join(output)
 
 
+_HELP_SIGNAL_ACTIONS = (
+    "interrupt selected process",
+    "kill selected process",
+    "terminate selected process",
+)
+
+
+def _help_key_colors(line: str) -> tuple[str | None, str | None]:
+    """Mirror mxtop.tui._help_line_colors for the ANSI showcase renderer."""
+
+    if any(action in line for action in _HELP_SIGNAL_ACTIONS):
+        return ansi.FG_CYAN, ansi.FG_RED
+    if "select sort column" in line:
+        return ansi.FG_MAGENTA, ansi.FG_MAGENTA
+    if "sort by" in line:
+        return ansi.FG_BLUE, ansi.FG_BLUE
+    if "Wheel:" in line:
+        return ansi.FG_BLUE, ansi.FG_BLUE
+    if "show this help screen" in line or line.rstrip().endswith(": quit"):
+        return ansi.FG_GREEN, ansi.FG_GREEN
+    if "tag/untag" in line or "clear process selection" in line:
+        return ansi.FG_CYAN, ansi.FG_YELLOW
+    if "filter processes" in line:
+        return ansi.FG_CYAN, ansi.FG_YELLOW
+    if (
+        "show process environment" in line
+        or "toggle tree-view" in line
+        or "show process metrics" in line
+    ):
+        return ansi.FG_CYAN, ansi.FG_GREEN
+    if "scroll" in line or "select the" in line:
+        return ansi.FG_CYAN, None
+    return None, None
+
+
 def _colorize_help(lines: list[str]) -> str:
     output = list(lines)
-    for row in (0, 1):
-        if row < len(output):
-            output[row] = _style(output[row], ansi.BOLD, ansi.FG_CYAN)
-    if len(output) > 3:
-        spans = [(0, 17, (ansi.BOLD,))]
-        for marker in ("C:", "G:", "X/"):
-            start = output[3].find(marker)
-            if start >= 0:
-                spans.append((start, start + 1, (ansi.BOLD, ansi.FG_MAGENTA)))
-        output[3] = _styled_spans(output[3], spans)
-    if len(output) > 5:
-        output[5] = _style(output[5], ansi.BOLD)
-    for row in (6, 7):
-        if row >= len(output):
-            continue
-        spans = []
-        for word, color in (
-            ("light", ansi.FG_GREEN),
-            ("moderate", ansi.FG_YELLOW),
-            ("heavy", ansi.FG_RED),
+    for row, line in enumerate(output):
+        stripped = line.rstrip()
+        if (
+            (stripped.startswith("mxtop ") and "(C)" in stripped)
+            or stripped.startswith("Released under")
+            or stripped == "Press any key to return."
         ):
-            start = output[row].find(word)
-            if start >= 0:
-                spans.append((start, start + len(word), (ansi.BOLD, color)))
-        output[row] = _styled_spans(output[row], spans)
-    key_colors = {
-        9: (ansi.FG_GREEN, ansi.FG_GREEN),
-        10: (ansi.FG_GREEN, ansi.FG_GREEN),
-        12: (ansi.FG_CYAN, ansi.FG_YELLOW),
-        13: (ansi.FG_CYAN, ansi.FG_YELLOW),
-        14: (ansi.FG_CYAN, ansi.FG_RED),
-        15: (None, ansi.FG_RED),
-        16: (ansi.FG_CYAN, ansi.FG_RED),
-        17: (ansi.FG_CYAN, ansi.FG_GREEN),
-        18: (ansi.FG_CYAN, ansi.FG_GREEN),
-        19: (ansi.FG_CYAN, ansi.FG_GREEN),
-        21: (ansi.FG_BLUE, ansi.FG_BLUE),
-        22: (ansi.FG_BLUE, ansi.FG_BLUE),
-        24: (ansi.FG_BLUE, ansi.FG_BLUE),
-        25: (ansi.FG_BLUE, ansi.FG_BLUE),
-        26: (ansi.FG_BLUE, ansi.FG_BLUE),
-        27: (ansi.FG_BLUE, ansi.FG_BLUE),
-        28: (ansi.FG_BLUE, ansi.FG_BLUE),
-        29: (ansi.FG_MAGENTA, ansi.FG_MAGENTA),
-    }
-    for row, (left, right) in key_colors.items():
-        if row >= len(output):
+            output[row] = _style(line, ansi.BOLD, ansi.FG_CYAN)
             continue
+        if stripped.startswith("GPU Process Type:"):
+            spans = [(0, 17, (ansi.BOLD,))]
+            for marker in ("C:", "G:", "X/"):
+                start = line.find(marker)
+                if start >= 0:
+                    spans.append((start, start + 1, (ansi.BOLD, ansi.FG_MAGENTA)))
+            output[row] = _styled_spans(line, spans)
+            continue
+        if stripped.startswith("Device coloring rules"):
+            output[row] = _style(line, ansi.BOLD)
+            continue
+        if "GPU utilization:" in line or "GPU-MEM percent:" in line:
+            spans = []
+            for word, color in (
+                ("light", ansi.FG_GREEN),
+                ("moderate", ansi.FG_YELLOW),
+                ("heavy", ansi.FG_RED),
+            ):
+                start = line.find(word)
+                if start >= 0:
+                    spans.append((start, start + len(word), (ansi.BOLD, color)))
+            output[row] = _styled_spans(line, spans)
+            continue
+        left, right = _help_key_colors(line)
         spans = []
-        if left is not None:
+        if left is not None and line[:12].strip():
             spans.append((0, 12, (ansi.BOLD, left)))
         if right is not None:
             spans.append((39, 52, (ansi.BOLD, right)))
-        output[row] = _styled_spans(output[row], spans)
-    for row, line in enumerate(output):
-        if line.rstrip() == "Press any key to return.":
-            output[row] = _style(line, ansi.BOLD, ansi.FG_CYAN)
+        if spans:
+            output[row] = _styled_spans(line, spans)
     return "\n".join(output)
 
 

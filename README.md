@@ -81,6 +81,9 @@ cd metax-mxtop
 pip install -e .
 ```
 
+A man page ships with the package (`man mxtop` after a system-wide or
+user-scheme install); it is also readable in-repo with `man -l docs/mxtop.1`.
+
 ## MetaX backend discovery
 
 `mxtop` tries backends in this order when `--backend auto` is used:

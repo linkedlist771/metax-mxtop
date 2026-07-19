@@ -1,0 +1,285 @@
+.TH MXTOP 1 "2026-07" "metax-mxtop" "User Commands"
+.SH NAME
+mxtop \- an nvitop-like interactive terminal monitor for MetaX GPUs
+.SH SYNOPSIS
+.B mxtop
+.RI [ options ]
+.br
+.B mxtop
+.B \-\-once
+|
+.B \-\-json
+.RB [ \-\-count
+.IR N ]
+.br
+.B mxtop
+.B \-\-remote\-mode
+.RB [ \-\-nodes
+.IR HOST .\|.\|.]
+.RB [ \-\-auth\-token
+.IR TOKEN ]
+.SH DESCRIPTION
+.B mxtop
+displays live telemetry for MetaX GPUs: per-device temperature, power,
+utilization, memory, memory bandwidth, and clocks; host CPU/memory/swap
+history graphs; and a sortable, filterable GPU process table with
+per-process metrics, environment, and tree views.
+.PP
+Telemetry is read-only through MXSML/Pymxsml or the
+.B mx-smi
+CLI.
+.B mxtop
+never updates firmware, resets GPUs, or changes persistence or
+administration settings. Process signals (SIGINT, SIGTERM, SIGKILL) are
+presented for confirmation, validate process identity against PID reuse,
+and require process ownership unless run as root; use
+.B \-\-readonly
+to disable them entirely.
+.SH MODES
+The default mode runs the interactive monitor when stdin and stdout are
+terminals, and prints one snapshot otherwise.
+.TP
+.BR \-\-monitor ", " \-m " [" auto | full | compact ]
+Run interactively with the given layout.
+.TP
+.BR \-\-once ", " \-1
+Print one ANSI-colored text snapshot and exit.
+.TP
+.B \-\-json
+Print one machine-readable JSON snapshot and exit.
+.TP
+.BR \-\-count ", " \-n " " \fIN\fR
+With
+.B \-\-once
+or
+.BR \-\-json ,
+print
+.I N
+snapshots separated by
+.B \-\-interval
+seconds. Implies
+.B \-\-once
+when neither is given.
+.TP
+.B \-\-remote\-mode
+Serve a local web dashboard aggregating multiple SSH-reachable nodes.
+See
+.B REMOTE MODE
+below.
+.SH OPTIONS
+.TP
+.BR \-\-version ", " \-V
+Print the version and exit.
+.TP
+.B \-\-backend \fR{auto,pymxsml,mxsmi}
+Select the telemetry backend (default: auto, preferring Pymxsml).
+.TP
+.B \-\-interval \fISEC\fR
+Refresh interval in seconds (default: 2.0, minimum 0.25).
+.TP
+.BR \-\-no\-unicode ", " \-\-ascii ", " \-U
+Use ASCII characters only. Automatic for non-UTF-8 locales.
+.TP
+.B \-\-readonly
+Disable process-changing actions in the interactive UI.
+.SS Coloring
+.TP
+.B \-\-no\-color
+Disable ANSI colors.
+.TP
+.B \-\-colorful
+Spectrum-like gradient bar colors (requires 256-color terminal support).
+.TP
+.B \-\-light
+Colors suitable for light terminal themes.
+.TP
+.B \-\-force\-color
+Emit ANSI color even when stdout is not a TTY.
+.TP
+.B \-\-gpu\-util\-thresh \fILOW HIGH\fR
+GPU utilization intensity thresholds (default: 10 75).
+.TP
+.B \-\-mem\-util\-thresh \fILOW HIGH\fR
+GPU memory intensity thresholds (default: 10 80).
+.SS Device and process filtering
+.TP
+.BR \-\-only ", " \-o " " \fIINDEX\fR.\|.\|.
+Show only the selected GPU indices.
+.TP
+.BR \-\-only\-visible ", " \-ov
+Follow MACA_VISIBLE_DEVICES or CUDA_VISIBLE_DEVICES.
+.TP
+.BR \-\-compute ", " \-c " / " \-\-only\-compute ", " \-C
+Show processes with a compute context / exactly compute-only processes.
+.TP
+.BR \-\-graphics ", " \-g " / " \-\-only\-graphics ", " \-G
+Show processes with a graphics context / exactly graphics-only processes.
+.TP
+.BR \-\-user ", " \-u " [" \fIUSERNAME\fR.\|.\|.]
+Show selected users (the current user when the list is empty).
+.TP
+.BR \-\-pid ", " \-p " " \fIPID\fR.\|.\|.
+Show only the selected process IDs.
+.SH REMOTE MODE
+.B mxtop \-\-remote\-mode
+opens persistent SSH connections (key/agent authentication only) to the
+nodes given by
+.B \-\-nodes
+or
+.BR \-\-nodes\-file ,
+or auto-discovered from
+.I ~/.ssh/config
+when neither is given (or with
+.BR \-\-discover ).
+It serves a live web dashboard with a fleet overview, GPU heatmap, trend
+sparklines, node inventory, process table, and per-node detail.
+.TP
+.B \-\-port \fIPORT\fR
+Dashboard port (default: 8080).
+.TP
+.B \-\-bind \fIADDR\fR
+Bind address (default: 127.0.0.1). Binding beyond localhost without
+.B \-\-auth\-token
+prints a warning: cluster telemetry would be readable by anyone who can
+reach the port.
+.TP
+.B \-\-auth\-token \fITOKEN\fR
+Require this shared token for dashboard access, via
+.B Authorization: Bearer
+or a one-time
+.B ?token=
+visit that sets an HttpOnly cookie. Defaults to the
+.B MXTOP_AUTH_TOKEN
+environment variable.
+.TP
+.B \-\-remote\-mxsmi\-path \fIPATH\fR
+Path to mx-smi on the remote hosts.
+.TP
+.B \-\-open
+Open the dashboard in a browser.
+.SH INTERACTIVE KEYS
+.TP
+.B a f c
+Switch to auto, full, or compact layout.
+.TP
+.B h ?
+Help screen.
+.TP
+.B F5 r
+Refresh immediately.
+.TP
+.B Arrows, Tab/Shift-Tab, Home, End
+Move the process selection.
+.TP
+.B Space
+Tag/untag the current process; tagged processes form the signal target set.
+.TP
+.B \\\\ F4
+Incremental filter: typed text matches user, command, or PID;
+Enter applies, Esc clears.
+.TP
+.B Esc
+Clear the filter first, then selection and tags.
+.TP
+.B , . / o\fIkey\fR
+Cycle sort column / invert order / direct sort
+.RB ( n
+GPU,
+.B p
+PID,
+.B u
+USER,
+.B g
+GPU-MEM,
+.B s
+%SM,
+.B b
+%GMBW,
+.B c
+%CPU,
+.B m
+%MEM,
+.B t
+TIME; uppercase reverses). Column headers are also click-to-sort.
+.TP
+.B e t Enter
+Process environment / tree view / metrics screen.
+.TP
+.B Ctrl-C I K T
+Send SIGINT / SIGINT / SIGKILL / SIGTERM to the selected or tagged
+processes (with confirmation).
+.TP
+.B q
+Quit.
+.SH CONFIGURATION
+Persistent defaults are read from
+.IR ~/.config/mxtop/config.toml ,
+.IR $XDG_CONFIG_HOME/mxtop/config.toml ,
+or the file named by
+.BR MXTOP_CONFIG .
+CLI flags and environment variables take precedence. Keys:
+.BR interval ,
+.BR monitor ,
+.BR colorful ,
+.BR light ,
+.BR readonly ,
+.BR no-unicode ,
+.BR gpu-util-thresh ,
+.BR mem-util-thresh ,
+and a
+.B [remote]
+table with
+.BR bind ,
+.BR port ,
+.BR auth-token ,
+.BR mxsmi-path ,
+.BR open .
+.SH ENVIRONMENT
+.TP
+.B MXTOP_MXSMI_PATH
+Path to the local mx-smi executable.
+.TP
+.B MXTOP_MONITOR_MODE
+Comma-separated defaults: auto|full|compact, colorful|plain, light|dark,
+readonly.
+.TP
+.B MXTOP_GPU_UTILIZATION_THRESHOLDS, MXTOP_MEMORY_UTILIZATION_THRESHOLDS
+LOW,HIGH intensity thresholds.
+.TP
+.B MXTOP_AUTH_TOKEN
+Default dashboard token for \-\-remote\-mode.
+.TP
+.B MXTOP_CONFIG
+Path to the configuration file.
+.TP
+.B MACA_VISIBLE_DEVICES, CUDA_VISIBLE_DEVICES
+Device visibility lists for \-\-only\-visible.
+.TP
+.B NO_COLOR, ANSI_COLORS_DISABLED, FORCE_COLOR
+Standard color overrides.
+.TP
+.B MXTOP_PYMXSML_ECC_ERRORS
+Set to 1/true/yes/on to opt into cached ECC-error polling.
+.SH EXIT STATUS
+0 on success; 1 on backend or telemetry errors (invalid device indices in
+one-shot output also yield 1); 2 on usage errors.
+.SH EXAMPLES
+.TP
+Interactive full layout, 1s refresh:
+.B mxtop \-m full \-\-interval 1
+.TP
+Ten text snapshots five seconds apart:
+.B mxtop \-n 10 \-\-interval 5
+.TP
+One minute of JSON samples for logging:
+.B mxtop \-\-json \-n 60 \-\-interval 1
+.TP
+Cluster dashboard for three nodes with a token:
+.B mxtop \-\-remote\-mode \-\-nodes nodeA nodeB nodeC \-\-auth\-token secret \-\-open
+.SH SEE ALSO
+.BR mx-smi (1),
+.BR top (1),
+.BR htop (1)
+.PP
+Project home:
+.I https://github.com/linkedlist771/metax-mxtop

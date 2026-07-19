@@ -173,7 +173,12 @@ def test_canonical_dashboard_images_use_consistent_box_widths() -> None:
 
 def test_clipped_help_preview_does_not_color_sort_row_as_footer() -> None:
     showcase = _with_pillow("render_showcase")
-    lines = showcase.render_help_screen(118, 30).lines
+    full = showcase.render_help_screen(118, None).lines
+    # Clip exactly at the ", .:" sort-column row so it lands on the last line.
+    clip_height = next(
+        index for index, line in enumerate(full) if line.lstrip().startswith(", .:")
+    ) + 1
+    lines = showcase.render_help_screen(118, clip_height).lines
 
     colored = showcase._colorize_help(lines).splitlines()
 

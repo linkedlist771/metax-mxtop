@@ -18,7 +18,7 @@ Re-render with ``uv run --locked --with pillow==11.3.0 --with psutil python scri
 
 | Scenario | Preview |
 | --- | --- |
-| Help screen with nvitop-compatible key groups | ![Help screen with nvitop-compatible key groups](assets/showcase/screen-help-118x030.png) |
+| Help screen with nvitop-compatible key groups | ![Help screen with nvitop-compatible key groups](assets/showcase/screen-help-118x034.png) |
 | Process environment with empty, long, and multiline values | ![Process environment with empty, long, and multiline values](assets/showcase/screen-environment-120x018.png) |
 | Stable process-environment permission error | ![Stable process-environment permission error](assets/showcase/screen-environment-error-100x008.png) |
 | GPU process tree with host ancestors and direct children | ![GPU process tree with host ancestors and direct children](assets/showcase/screen-tree-140x018.png) |

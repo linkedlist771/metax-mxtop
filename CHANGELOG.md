@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cluster GPU-utilization, HBM, and host-CPU history, and each node detail
   page shows per-node GPU/HBM history — accumulated client-side from the
   SSE stream, bounded to the most recent 240 samples.
+- A `mxtop(1)` man page (`docs/mxtop.1`), installed to `share/man/man1` and
+  kept in sync with the CLI by tests.
 
 ### Changed
 
