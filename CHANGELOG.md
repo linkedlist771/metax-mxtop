@@ -61,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dcgm-exporter style) serving this host's telemetry on `/metrics`
   without SSH; honors `--bind`, `--port`, `--auth-token`, `--interval`.
 
+### Fixed
+
+- Process-table header detection (click-to-sort and header coloring) no
+  longer breaks when the active sort indicator (`▲`/`▼`) replaces the
+  space after the GPU, PID, or USER column label.
+- While paused, repaints no longer re-record the frozen frame's stale
+  values into the host history graphs.
+
 ### Changed
 
 - Help-screen colorization now derives from line content instead of

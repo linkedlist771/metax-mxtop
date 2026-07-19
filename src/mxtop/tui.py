@@ -309,7 +309,7 @@ def _draw_line(
     if "Processes:" in semantic_line and "@" in semantic_line:
         _draw_process_title_line(screen, row, line, width, attr)
         return
-    if " GPU     PID      USER  GPU-MEM" in semantic_line:
+    if _matches_process_header(semantic_line):
         _draw_process_header_line(screen, row, line, width)
         return
     if _is_process_data_line(semantic_line):
@@ -879,7 +879,7 @@ def _draw_metrics_line(
             _attr(PAIR_HEADER, curses.A_BOLD),
         )
         return
-    if row == 2 and " GPU     PID      USER  GPU-MEM" in semantic_line:
+    if row == 2 and _matches_process_header(semantic_line):
         _draw_process_header_line(screen, row, line, width)
         return
     if _is_process_data_line(semantic_line):
@@ -1548,6 +1548,12 @@ def _command_column_offset() -> int:
 
 
 PROCESS_HEADER_MARKER = " GPU     PID      USER  GPU-MEM"
+
+
+def _matches_process_header(line: str) -> bool:
+    # The sort indicator replaces the space after the active column's label
+    # (e.g. "PID▼"), so normalize indicators back to spaces before matching.
+    return PROCESS_HEADER_MARKER in line.replace("▲", " ").replace("▼", " ")
 
 # Longest labels first so overlapping substrings ("GPU" inside "GPU-MEM",
 # "%MEM" inside an already-claimed span) resolve to the right column.
@@ -2520,6 +2526,7 @@ def run_tui(
             else:
                 sampler_state = sampler.snapshot()
                 held_sampler_state = sampler_state
+            host_history.hold = state.paused
             filter_error: str | None = None
             if sampler_state.frame is None:
                 frame = None
@@ -2925,7 +2932,7 @@ def run_tui(
                 }
                 visible_keys = iter(view.selection_ids)
                 for row, line in enumerate(original_lines[:draw_height]):
-                    if PROCESS_HEADER_MARKER in line:
+                    if _matches_process_header(line):
                         header_rows[row + row_origin] = _header_sort_spans(line)
                     if _is_process_data_line(line):
                         selection_key = next(visible_keys, None)

@@ -1537,3 +1537,13 @@ def test_filter_editing_captures_pause_key():
 
     assert state.paused is False
     assert state.text_filter == "p"
+
+
+def test_header_detection_survives_sort_indicators():
+    frame = process_frame()
+    for sort in (ProcessSort.PID, ProcessSort.USER, ProcessSort.DEFAULT):
+        state = tui.UiState(process_sort=sort, reverse_sort=sort is ProcessSort.PID)
+        lines, _, _ = render_process_panel(frame, state, width=120)
+        header = next(line for line in lines if "USER" in line and "PID" in line)
+        assert tui._matches_process_header(header), f"header lost for sort={sort}"
+        assert tui._header_sort_spans(header)

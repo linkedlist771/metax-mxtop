@@ -86,6 +86,9 @@ class HostHistory:
         self.swap = HistoryGraph(1)
         self.gpu_memory = HistoryGraph(5)
         self.gpu_utilization = HistoryGraph(5, upsidedown=True)
+        # While held (TUI paused), repaints of the frozen frame must not
+        # re-record its stale values as new samples.
+        self.hold = False
         self._graphs = {
             "cpu": self.cpu,
             "memory": self.memory,
@@ -126,6 +129,8 @@ class HostHistory:
         gpu_utilization: float | None = None,
         now: float | None = None,
     ) -> None:
+        if self.hold:
+            return
         now = time.monotonic() if now is None else now
         values = {
             "cpu": cpu,
