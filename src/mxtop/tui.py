@@ -46,6 +46,7 @@ from mxtop.ui.state import (
     DIRECT_SORT_KEYS,
     LayoutMode,
     ProcessSignal,
+    ProcessSort,
     ScreenMode,
     UiState,
     keep_selection,
@@ -1450,10 +1451,63 @@ def _select_edge(state: UiState, frame: FrameSnapshot, *, last: bool) -> None:
     state.follow_selection = True
 
 
-def _command_column_offset(frame: FrameSnapshot | None) -> int:
-    del frame
+def _command_column_offset() -> int:
     # The process renderer clamps this sentinel to the longest visible row.
     return LARGE_SCROLL_OFFSET
+
+
+PROCESS_HEADER_MARKER = " GPU     PID      USER  GPU-MEM"
+
+# Longest labels first so overlapping substrings ("GPU" inside "GPU-MEM",
+# "%MEM" inside an already-claimed span) resolve to the right column.
+_HEADER_SORT_LABELS = (
+    ("GPU-MEM", ProcessSort.GPU_MEMORY),
+    ("COMMAND", ProcessSort.COMMAND),
+    ("%GMBW", ProcessSort.GPU_MEMORY_BANDWIDTH),
+    ("%CPU", ProcessSort.CPU),
+    ("%MEM", ProcessSort.HOST_MEMORY),
+    ("USER", ProcessSort.USER),
+    ("TIME", ProcessSort.TIME),
+    ("%SM", ProcessSort.GPU_UTIL),
+    ("PID", ProcessSort.PID),
+    ("GPU", ProcessSort.DEFAULT),
+)
+
+
+def _header_sort_spans(line: str) -> list[tuple[int, int, ProcessSort]]:
+    """Map column-label character spans of a process header line to sorts."""
+
+    spans: list[tuple[int, int, ProcessSort]] = []
+
+    def _occupied(start: int, end: int) -> bool:
+        return any(start < span_end and end > span_start for span_start, span_end, _ in spans)
+
+    for label, sort in _HEADER_SORT_LABELS:
+        cursor = 0
+        while (start := line.find(label, cursor)) >= 0:
+            end = start + len(label)
+            if not _occupied(start, end):
+                spans.append((start, end, sort))
+                break
+            cursor = start + 1
+    return spans
+
+
+def _apply_header_sort_click(
+    state: UiState,
+    spans: list[tuple[int, int, ProcessSort]],
+    mouse_x: int,
+) -> None:
+    for start, end, sort in spans:
+        # The extra cell covers the ▲/▼ indicator drawn after the label.
+        if start <= mouse_x <= end:
+            if state.process_sort == sort:
+                state.reverse_sort = not state.reverse_sort
+            else:
+                state.process_sort = sort
+                state.reverse_sort = False
+            state.follow_selection = True
+            return
 
 
 def _selected_processes(state: UiState, frame: FrameSnapshot) -> list[ProcessSnapshot]:
@@ -1756,6 +1810,7 @@ def _handle_mouse(
     *,
     mouse_rows: dict[int, int] | None,
     modal_buttons: dict[tuple[int, int], int] | None,
+    header_rows: dict[int, list[tuple[int, int, ProcessSort]]] | None = None,
 ) -> None:
     try:
         _, mouse_x, mouse_y, _, button_state = curses.getmouse()
@@ -1794,6 +1849,13 @@ def _handle_mouse(
         return
     if not _mouse_clicked(button_state):
         return
+    if (
+        header_rows
+        and state.active_screen == ScreenMode.MAIN
+        and mouse_y in header_rows
+    ):
+        _apply_header_sort_click(state, header_rows[mouse_y], mouse_x)
+        return
     if mouse_rows is None or mouse_y not in mouse_rows:
         if state.active_screen == ScreenMode.MAIN:
             state.clear_selection()
@@ -1826,6 +1888,7 @@ def _handle_key(
     readonly: bool = False,
     mouse_rows: dict[int, int] | None = None,
     modal_buttons: dict[tuple[int, int], int] | None = None,
+    header_rows: dict[int, list[tuple[int, int, ProcessSort]]] | None = None,
 ) -> bool:
     if key == -1:
         return True
@@ -1833,7 +1896,13 @@ def _handle_key(
         return True
     state.status_message = None
     if key == curses.KEY_MOUSE:
-        _handle_mouse(state, frame, mouse_rows=mouse_rows, modal_buttons=modal_buttons)
+        _handle_mouse(
+            state,
+            frame,
+            mouse_rows=mouse_rows,
+            modal_buttons=modal_buttons,
+            header_rows=header_rows,
+        )
         return True
     if state.pending_signal is not None:
         return _handle_signal_dialog_key(key, state)
@@ -2024,7 +2093,7 @@ def _handle_key(
     elif key in {1, ord("^")}:
         state.command_offset = 0
     elif key in {5, ord("$")}:
-        state.command_offset = _command_column_offset(frame)
+        state.command_offset = _command_column_offset()
     elif key in {ord("T"), ord("K"), ord("k"), 3, ord("I")}:
         process_signal = (
             ProcessSignal.TERMINATE
@@ -2313,6 +2382,7 @@ def run_tui(
         painted_size = (-1, -1)
         painted_at = 0.0
         mouse_rows: dict[int, int] = {}
+        header_rows: dict[int, list[tuple[int, int, ProcessSort]]] = {}
         modal_buttons: dict[tuple[int, int], int] = {}
         tree_entries: list[ProcessTreeEntry] = []
         tree_version = -1
@@ -2348,6 +2418,7 @@ def run_tui(
                 readonly=readonly,
                 mouse_rows=mouse_rows,
                 modal_buttons=modal_buttons,
+                header_rows=header_rows,
             ):
                 break
             size = screen.getmaxyx()
@@ -2684,6 +2755,7 @@ def run_tui(
                 else {}
             )
             mouse_rows = {}
+            header_rows = {}
             selected_rows: set[int] = set()
             tagged_selected_rows: set[int] = set()
             tagged_rows: set[int] = set()
@@ -2701,6 +2773,8 @@ def run_tui(
                 }
                 visible_keys = iter(view.selection_ids)
                 for row, line in enumerate(original_lines[:draw_height]):
+                    if PROCESS_HEADER_MARKER in line:
+                        header_rows[row + row_origin] = _header_sort_spans(line)
                     if _is_process_data_line(line):
                         selection_key = next(visible_keys, None)
                         if selection_key is None:

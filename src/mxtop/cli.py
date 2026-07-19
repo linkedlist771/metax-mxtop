@@ -40,6 +40,7 @@ MIN_INTERVAL = 0.25
 MXTOP_GPU_THRESHOLDS_ENV = "MXTOP_GPU_UTILIZATION_THRESHOLDS"
 MXTOP_MEM_THRESHOLDS_ENV = "MXTOP_MEMORY_UTILIZATION_THRESHOLDS"
 MXTOP_MONITOR_MODE_ENV = "MXTOP_MONITOR_MODE"
+MXTOP_AUTH_TOKEN_ENV = "MXTOP_AUTH_TOKEN"
 VISIBLE_DEVICE_ENVS = ("MACA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES")
 
 
@@ -74,6 +75,13 @@ def _port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return port
+
+
+def _count(value: str) -> int:
+    count = int(value)
+    if count < 1:
+        raise argparse.ArgumentTypeError("count must be at least 1")
+    return count
 
 
 def _single_snapshot_with_cpu_sample(
@@ -214,6 +222,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=2.0,
         metavar="SEC",
         help="process status update interval in seconds (default: 2)",
+    )
+    _ = parser.add_argument(
+        "--count",
+        "-n",
+        type=_count,
+        default=None,
+        metavar="N",
+        help=(
+            "with --once or --json, print N snapshots separated by --interval\n"
+            "and exit (default: 1)"
+        ),
     )
     _ = parser.add_argument(
         "--no-unicode",
@@ -373,6 +392,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="mx-smi path on remote hosts",
     )
     _ = remote.add_argument(
+        "--auth-token",
+        default=argparse.SUPPRESS,
+        metavar="TOKEN",
+        help=(
+            "require this token for dashboard access\n"
+            f"(default: {MXTOP_AUTH_TOKEN_ENV} environment variable, if set)"
+        ),
+    )
+    _ = remote.add_argument(
         "--open",
         action="store_true",
         default=argparse.SUPPRESS,
@@ -448,6 +476,7 @@ REMOTE_ARGUMENTS = (
     "port",
     "bind",
     "remote_mxsmi_path",
+    "auth_token",
     "open",
 )
 
@@ -536,6 +565,11 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
     _validate_remote_arguments(parser, args, raw_argv)
+    if args.count is not None:
+        if hasattr(args, "monitor") or args.remote_mode:
+            parser.error("--count requires --once or --json")
+        if not args.json:
+            args.once = True
 
     monitor_tokens = _monitor_mode_tokens()
     explicit_monitor = hasattr(args, "monitor")
@@ -599,6 +633,11 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
                 interval=args.interval,
                 mxsmi_path=mxsmi_path,
                 open_browser=getattr(args, "open", False),
+                auth_token=(
+                    getattr(args, "auth_token", None)
+                    or os.environ.get(MXTOP_AUTH_TOKEN_ENV)
+                    or None
+                ),
             )
         except Exception as exc:
             print(f"MXTOP ERROR: {exc}", file=sys.stderr)
@@ -619,20 +658,24 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     )
 
     if args.json:
-        try:
-            frame = _single_snapshot_with_cpu_sample(selected_backend, options)
-        except Exception as exc:
-            print(f"MXTOP ERROR: {exc}", file=sys.stderr)
-            return 1
-        had_errors = _report_invalid_device_indices(frame, options)
-        print(
-            json.dumps(
-                sanitize_json_value(frame.to_dict()),
-                indent=2,
-                sort_keys=True,
-                allow_nan=False,
+        had_errors = False
+        for iteration in range(args.count or 1):
+            if iteration:
+                time.sleep(args.interval)
+            try:
+                frame = _single_snapshot_with_cpu_sample(selected_backend, options)
+            except Exception as exc:
+                print(f"MXTOP ERROR: {exc}", file=sys.stderr)
+                return 1
+            had_errors = _report_invalid_device_indices(frame, options) or had_errors
+            print(
+                json.dumps(
+                    sanitize_json_value(frame.to_dict()),
+                    indent=2,
+                    sort_keys=True,
+                    allow_nan=False,
+                )
             )
-        )
         return int(had_errors)
 
     use_color = _should_use_color(
@@ -641,14 +684,18 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         stdout_is_tty=stdout_is_tty,
     )
     if args.once or not monitor_requested:
-        try:
-            frame = _single_snapshot_with_cpu_sample(selected_backend, options)
-        except Exception as exc:
-            print(f"MXTOP ERROR: {exc}", file=sys.stderr)
-            return 1
-        had_errors = _report_invalid_device_indices(frame, options)
-        output = render_once(frame, use_color=use_color, width=_snapshot_width())
-        print(to_ascii(output) if options.no_unicode else output)
+        had_errors = False
+        for iteration in range(args.count or 1):
+            if iteration:
+                time.sleep(args.interval)
+            try:
+                frame = _single_snapshot_with_cpu_sample(selected_backend, options)
+            except Exception as exc:
+                print(f"MXTOP ERROR: {exc}", file=sys.stderr)
+                return 1
+            had_errors = _report_invalid_device_indices(frame, options) or had_errors
+            output = render_once(frame, use_color=use_color, width=_snapshot_width())
+            print(to_ascii(output) if options.no_unicode else output)
         return int(had_errors or monitor_unavailable)
 
     try:

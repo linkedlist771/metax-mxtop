@@ -49,6 +49,66 @@ def test_cli_json_prints_frame(capsys):
     assert payload["devices"][0]["name"] == "MXC500"
 
 
+def test_cli_count_repeats_once_output(monkeypatch, capsys):
+    sleeps: list[float] = []
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda value: sleeps.append(value))
+
+    rc = main(
+        ["--once", "--no-color", "--count", "3", "--interval", "0.5"],
+        backend=StaticBackend(),
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.count("MXC500") == 3
+    assert sleeps == [0.5, 0.5]
+
+
+def test_cli_count_implies_once(monkeypatch, capsys):
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda _: None)
+
+    rc = main(["-n", "2", "--no-color"], backend=StaticBackend())
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.count("MXC500") == 2
+
+
+def test_cli_count_repeats_json_output(monkeypatch, capsys):
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda _: None)
+
+    rc = main(["--json", "-n", "2"], backend=StaticBackend())
+
+    captured = capsys.readouterr()
+    decoder = json.JSONDecoder()
+    text = captured.out.strip()
+    payloads = []
+    while text:
+        payload, end = decoder.raw_decode(text)
+        payloads.append(payload)
+        text = text[end:].lstrip()
+
+    assert rc == 0
+    assert len(payloads) == 2
+    assert all(p["devices"][0]["name"] == "MXC500" for p in payloads)
+
+
+def test_cli_count_rejects_monitor_mode(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--monitor", "--count", "2"], backend=StaticBackend())
+
+    assert excinfo.value.code == 2
+    assert "--count requires --once or --json" in capsys.readouterr().err
+
+
+def test_cli_count_rejects_zero(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--once", "--count", "0"], backend=StaticBackend())
+
+    assert excinfo.value.code == 2
+    assert "count must be at least 1" in capsys.readouterr().err
+
+
 def test_cli_json_replaces_non_finite_telemetry_with_null(capsys):
     class NonFiniteBackend:
         name = "non-finite"

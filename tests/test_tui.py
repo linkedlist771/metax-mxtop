@@ -779,6 +779,45 @@ def test_mouse_click_outside_tree_rows_clears_tree_selection(monkeypatch):
     assert not state.tagged_pids
 
 
+def test_header_click_sorts_and_reverses(monkeypatch):
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+    header = tui.PROCESS_HEADER_MARKER + " %SM %GMBW  %CPU  %MEM  TIME  COMMAND"
+    spans = tui._header_sort_spans(header)
+    pid_start = header.find("PID")
+    button = getattr(tui.curses, "BUTTON1_CLICKED", 0x4)
+    monkeypatch.setattr(
+        tui.curses, "getmouse", lambda: (0, pid_start, 5, 0, button)
+    )
+
+    tui._handle_key(
+        tui.curses.KEY_MOUSE, state, frame, sampler, header_rows={5: spans}
+    )
+    assert state.process_sort == tui.ProcessSort.PID
+    assert state.reverse_sort is False
+
+    tui._handle_key(
+        tui.curses.KEY_MOUSE, state, frame, sampler, header_rows={5: spans}
+    )
+    assert state.process_sort == tui.ProcessSort.PID
+    assert state.reverse_sort is True
+
+
+def test_header_sort_spans_resolve_overlapping_labels():
+    header = tui.PROCESS_HEADER_MARKER + " %SM %GMBW  %CPU  %MEM  TIME  COMMAND"
+    spans = tui._header_sort_spans(header)
+    by_sort = {sort: (start, end) for start, end, sort in spans}
+
+    gpu_mem = by_sort[tui.ProcessSort.GPU_MEMORY]
+    assert header[gpu_mem[0] : gpu_mem[1]] == "GPU-MEM"
+    gpu = by_sort[tui.ProcessSort.DEFAULT]
+    assert header[gpu[0] : gpu[1]] == "GPU"
+    assert gpu[0] < gpu_mem[0]
+    host_mem = by_sort[tui.ProcessSort.HOST_MEMORY]
+    assert header[host_mem[0] : host_mem[1]] == "%MEM"
+
+
 def test_shift_mouse_wheel_scrolls_host_columns(monkeypatch):
     state = tui.UiState()
     sampler = FakeSampler()

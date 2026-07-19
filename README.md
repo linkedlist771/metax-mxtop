@@ -136,6 +136,13 @@ mxtop --once --force-color
 mxtop --json
 ```
 
+`--count` / `-n` repeats one-shot or JSON output N times at the `--interval` cadence, for cron jobs and logging pipelines:
+
+```bash
+mxtop -n 10 --interval 5           # ten text snapshots, 5s apart
+mxtop --json -n 60 --interval 1    # one minute of JSON samples
+```
+
 Common filters:
 
 ```bash
@@ -171,6 +178,7 @@ Useful CLI flags:
 | `--backend {auto,pymxsml,mxsmi}` | Select telemetry backend. |
 | `--interval SECONDS` | Refresh interval (default `2.0`, minimum `0.25`). |
 | `--once`, `-1` | Print one text snapshot and exit. |
+| `--count N`, `-n N` | With `--once` or `--json`, print N snapshots separated by `--interval` and exit. Implies `--once` when neither is given. |
 | `--monitor`, `-m [auto\|full\|compact]` | Run interactively, optionally choosing the layout. |
 | `--json` | Print one JSON snapshot and exit. |
 | `--no-color` | Disable ANSI colors in text output. |
@@ -201,6 +209,7 @@ Useful CLI flags:
 | `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU-memory thresholds when the CLI option is omitted. |
 | `MACA_VISIBLE_DEVICES` | Device indices, UUID prefixes, or BDF prefixes used by `--only-visible`. |
 | `CUDA_VISIBLE_DEVICES` | Fallback visibility list when `MACA_VISIBLE_DEVICES` is not set. |
+| `MXTOP_AUTH_TOKEN` | Default dashboard token for `--remote-mode` when `--auth-token` is omitted. |
 | `ANSI_COLORS_DISABLED` | Disable ANSI output unless `--force-color` is explicit. |
 | `NO_COLOR` | Disable ANSI output unless `--force-color` is explicit. |
 | `FORCE_COLOR` | Force ANSI output when neither disable variable is present. |
@@ -237,6 +246,14 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   serves on `127.0.0.1` by default (`--bind` to change), and streams live
   updates over Server-Sent Events. Unreachable nodes are shown as down
   instead of breaking the page.
+- Dashboard access can be protected with a shared token via `--auth-token`
+  or the `MXTOP_AUTH_TOKEN` environment variable. Requests must then carry
+  `Authorization: Bearer <token>`, or visit `http://host:port/?token=<token>`
+  once — the token is stored in an `HttpOnly` cookie for the rest of the
+  session. When `--bind` exposes the dashboard beyond localhost without a
+  token, mxtop prints a warning: all cluster telemetry (hostnames, users,
+  process command lines) would otherwise be readable by anyone who can reach
+  the port.
 - The web UI provides a fleet overview with a switchable GPU heatmap, a
   searchable node inventory, cluster-wide host CPU/RAM/load telemetry, a
   process table, and per-node GPU, host, and process detail. Remote process
@@ -265,7 +282,7 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 | Left/Right, `Alt-h`/`Alt-l` | Scroll horizontally. |
 | `Ctrl-A`, `^` | Return to the leftmost column. |
 | `Ctrl-E`, `$` | Jump to the rightmost process-table column. |
-| Mouse wheel | Move vertically; hold Ctrl for 5x movement or Shift for horizontal movement. Click a row to select it. |
+| Mouse wheel | Move vertically; hold Ctrl for 5x movement or Shift for horizontal movement. Click a row to select it. Click a process-table column header to sort by it; click again to reverse. |
 
 ### Screens and process actions
 

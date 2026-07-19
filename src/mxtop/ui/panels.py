@@ -27,7 +27,6 @@ from mxtop.models import (
     FrameSnapshot,
     ProcessSnapshot,
 )
-from mxtop.ui.help import HELP_LINES
 from mxtop.ui.history import HostHistory
 from mxtop.ui.state import (
     LayoutMode,
@@ -531,10 +530,6 @@ def _process_body_height(processes: list[ProcessSnapshot], *, compact: bool) -> 
     return len(processes) + groups - 1
 
 
-def render_help(width: int) -> list[str]:
-    return [ellipsize(line, width) for line in HELP_LINES]
-
-
 def render_main_screen(
     frame: FrameSnapshot,
     state: UiState | None = None,
@@ -547,8 +542,6 @@ def render_main_screen(
 ) -> RenderedScreen:
     del interval
     state = state or UiState()
-    if state.show_help:
-        return RenderedScreen(render_help(width), process_start=0, process_count=0)
     if width < MIN_SCREEN_WIDTH or (height is not None and height < 8):
         return render_small_terminal_message(width, height)
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from importlib.resources import files
+import hmac
 import json
 import threading
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from mxtop.jsonutil import sanitize_json_value
 from mxtop.models import ClusterSnapshot
@@ -19,6 +21,8 @@ _ASSET_TYPES = {
     "dashboard.css": "text/css; charset=utf-8",
     "dashboard.js": "text/javascript; charset=utf-8",
 }
+
+_TOKEN_COOKIE = "mxtop_token"
 
 
 class SnapshotHolder:
@@ -57,26 +61,78 @@ def load_dashboard_assets() -> dict[str, bytes]:
 def _make_handler(
     holder: SnapshotHolder,
     assets: dict[str, bytes],
+    auth_token: str | None,
 ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: Any) -> None:
             pass
 
-        def _send(self, code: int, content_type: str, body: bytes) -> None:
+        def _send(
+            self,
+            code: int,
+            content_type: str,
+            body: bytes,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             try:
                 self.wfile.write(body)
             except OSError:
                 pass
 
+        def _token_matches(self, presented: str | None) -> bool:
+            if auth_token is None:
+                return True
+            if not presented:
+                return False
+            return hmac.compare_digest(presented, auth_token)
+
+        def _presented_token(self, query: str) -> str | None:
+            authorization = self.headers.get("Authorization", "")
+            if authorization.startswith("Bearer "):
+                return authorization[len("Bearer ") :]
+            query_tokens = parse_qs(query).get("token")
+            if query_tokens:
+                return query_tokens[0]
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            if _TOKEN_COOKIE in cookie:
+                return cookie[_TOKEN_COOKIE].value
+            return None
+
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            path = urlsplit(self.path).path
+            split = urlsplit(self.path)
+            path = split.path
+            authorized = self._token_matches(self._presented_token(split.query))
+            if not authorized and path != "/favicon.ico":
+                self._send(
+                    401,
+                    "text/plain; charset=utf-8",
+                    b"unauthorized: provide the dashboard token via "
+                    b"'Authorization: Bearer <token>' or '?token=<token>'",
+                )
+                return
+            # A valid ?token= visit sets a cookie so the SPA's later
+            # fetch/EventSource requests (which cannot add headers) pass.
+            cookie_headers: dict[str, str] | None = None
+            if auth_token is not None and parse_qs(split.query).get("token"):
+                cookie_headers = {
+                    "Set-Cookie": (
+                        f"{_TOKEN_COOKIE}={auth_token}; HttpOnly; SameSite=Strict; Path=/"
+                    )
+                }
             if path in ("/", "/index.html"):
-                self._send(200, _ASSET_TYPES["index.html"], assets["index.html"])
+                self._send(
+                    200,
+                    _ASSET_TYPES["index.html"],
+                    assets["index.html"],
+                    cookie_headers,
+                )
             elif path == "/assets/dashboard.css":
                 self._send(
                     200,
@@ -128,6 +184,9 @@ def make_server(
     *,
     bind: str = "127.0.0.1",
     port: int = 8080,
+    auth_token: str | None = None,
 ) -> ThreadingHTTPServer:
     assets = load_dashboard_assets()
-    return ThreadingHTTPServer((bind, port), _make_handler(holder, assets))
+    return ThreadingHTTPServer(
+        (bind, port), _make_handler(holder, assets, auth_token)
+    )

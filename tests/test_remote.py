@@ -313,6 +313,55 @@ def test_dashboard_assets_have_views_and_responsive_guards():
     assert "function renderNodeDetail(host)" in assets["dashboard.js"]
 
 
+def test_web_server_enforces_auth_token():
+    holder = SnapshotHolder()
+    holder.update(ClusterSnapshot(nodes=[NodeSnapshot("n1", True, FrameSnapshot([], []))]))
+    server = make_server(holder, bind="127.0.0.1", port=0, auth_token="s3cret")
+    import threading
+    import urllib.error
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[0], server.server_address[1]
+        base = f"http://{host}:{port}"
+
+        try:
+            urllib.request.urlopen(f"{base}/api/snapshot", timeout=5)
+            raise AssertionError("expected HTTP 401 without token")
+        except urllib.error.HTTPError as error:
+            assert error.code == 401
+
+        request = urllib.request.Request(
+            f"{base}/api/snapshot",
+            headers={"Authorization": "Bearer s3cret"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as resp:
+            payload = json.loads(resp.read())
+        assert payload["nodes"][0]["hostname"] == "n1"
+
+        with urllib.request.urlopen(f"{base}/?token=s3cret", timeout=5) as resp:
+            cookie = resp.headers.get("Set-Cookie", "")
+            assert "mxtop_token=s3cret" in cookie
+            assert "HttpOnly" in cookie
+
+        cookie_request = urllib.request.Request(
+            f"{base}/api/snapshot",
+            headers={"Cookie": "mxtop_token=s3cret"},
+        )
+        with urllib.request.urlopen(cookie_request, timeout=5) as resp:
+            assert resp.status == 200
+
+        try:
+            urllib.request.urlopen(f"{base}/api/snapshot?token=wrong", timeout=5)
+            raise AssertionError("expected HTTP 401 with wrong token")
+        except urllib.error.HTTPError as error:
+            assert error.code == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_web_server_treats_sse_disconnect_as_normal(capsys):
     holder = SnapshotHolder()
     holder.update(ClusterSnapshot(nodes=[]))

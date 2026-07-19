@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import threading
 import webbrowser
 
 from mxtop.remote.cluster import ClusterMonitor
 from mxtop.remote.discovery import HostDiscovery
 from mxtop.remote.web import SnapshotHolder, make_server
+
+
+def _is_loopback(bind: str) -> bool:
+    if bind in ("localhost",):
+        return True
+    try:
+        return ipaddress.ip_address(bind).is_loopback
+    except ValueError:
+        return False
 
 
 def report_discovery(results: list[HostDiscovery]) -> None:
@@ -42,6 +52,7 @@ def run_remote(
     interval: float = 2.0,
     mxsmi_path: str = "mx-smi",
     open_browser: bool = False,
+    auth_token: str | None = None,
 ) -> int:
     from mxtop.remote import ssh
 
@@ -57,13 +68,21 @@ def run_remote(
     poller = threading.Thread(target=_worker, name="mxtop-cluster", daemon=True)
     poller.start()
 
-    server = make_server(holder, bind=bind, port=port)
+    server = make_server(holder, bind=bind, port=port, auth_token=auth_token)
     url = f"http://{bind}:{port}/"
+    open_url = url if auth_token is None else f"{url}?token={auth_token}"
     print(f"mxtop remote dashboard: {url}  ({len(hosts)} node(s): {', '.join(hosts)})")
+    if auth_token is not None:
+        print("Dashboard access requires the configured token (append ?token=... on first visit).")
+    elif not _is_loopback(bind):
+        print(
+            "WARNING: dashboard is exposed beyond localhost without authentication; "
+            "consider --auth-token or the MXTOP_AUTH_TOKEN environment variable."
+        )
     print("Press Ctrl+C to stop.")
     if open_browser:
         try:
-            webbrowser.open(url)
+            webbrowser.open(open_url)
         except Exception:
             pass
     try:

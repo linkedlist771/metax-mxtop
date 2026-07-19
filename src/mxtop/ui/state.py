@@ -90,7 +90,6 @@ class UiState:
     command_offset: int = 0
     process_sort: ProcessSort = ProcessSort.DEFAULT
     reverse_sort: bool = False
-    show_help: bool = False
     pending_sort_key: bool = False
     active_screen: ScreenMode = ScreenMode.MAIN
     previous_screen: ScreenMode = ScreenMode.MAIN
@@ -150,7 +149,6 @@ class UiState:
 
     def _activate_screen(self, screen: ScreenMode, *, reset_view: bool = True) -> None:
         self.active_screen = screen
-        self.show_help = screen == ScreenMode.HELP
         if reset_view:
             self._reset_screen_view()
         self.pending_sort_key = False
