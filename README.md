@@ -157,7 +157,10 @@ mxtop --json
 ```bash
 mxtop -n 10 --interval 5           # ten text snapshots, 5s apart
 mxtop --json -n 60 --interval 1    # one minute of JSON samples
+mxtop --json-lines -n 60 --interval 1 | jq '.devices[0].gpu_util_percent'
 ```
+
+`--json-lines` / `--ndjson` emits one compact JSON object per line, the natural shape for `jq`, log shippers, and time-series ingestion.
 
 Common filters:
 
@@ -199,6 +202,7 @@ Useful CLI flags:
 | `--count N`, `-n N` | With `--once` or `--json`, print N snapshots separated by `--interval` and exit. Implies `--once` when neither is given. |
 | `--monitor`, `-m [auto\|full\|compact]` | Run interactively, optionally choosing the layout. |
 | `--json` | Print one JSON snapshot and exit. |
+| `--json-lines`, `--ndjson` | Print snapshots as one compact JSON object per line (NDJSON). |
 | `--no-color` | Disable ANSI colors in text output. |
 | `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
 | `--colorful` | Use spectrum-like gradient colors for bar charts. On terminals advertising truecolor (`COLORTERM=truecolor`), the gradient uses a smooth 16-step 24-bit ramp; otherwise the 256-color palette. |
@@ -295,6 +299,12 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   token, mxtop prints a warning: all cluster telemetry (hostnames, users,
   process command lines) would otherwise be readable by anyone who can reach
   the port.
+- A Prometheus endpoint at `/metrics` exports the latest cluster snapshot as
+  text exposition: per-GPU utilization, memory, bandwidth, temperature,
+  power, clocks, and ECC errors labelled by `node`/`gpu`/`name`/`uuid`, plus
+  host CPU/RAM/load, per-node reachability (`mxtop_node_up`) and SSH collect
+  latency. Point a Prometheus `scrape_config` at the dashboard (with the
+  bearer token when set) for alerting and long-term history.
 - The web UI provides a fleet overview with a switchable GPU heatmap, live
   trend sparklines (cluster GPU utilization, HBM, and host CPU; per-node
   GPU/HBM on the detail page), a searchable node inventory, cluster-wide

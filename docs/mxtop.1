@@ -48,6 +48,11 @@ Print one ANSI-colored text snapshot and exit.
 .B \-\-json
 Print one machine-readable JSON snapshot and exit.
 .TP
+.BR \-\-json\-lines ", " \-\-ndjson
+Print snapshots as one compact JSON object per line (NDJSON), for
+streaming pipelines. Combines with
+.BR \-\-count .
+.TP
 .BR \-\-count ", " \-n " " \fIN\fR
 With
 .B \-\-once

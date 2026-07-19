@@ -36,17 +36,23 @@ class SnapshotHolder:
         self._condition = threading.Condition()
         self._payload = "{}"
         self._version = 0
+        self._cluster: ClusterSnapshot | None = None
 
     def update(self, cluster: ClusterSnapshot) -> None:
         payload = json.dumps(sanitize_json_value(cluster.to_dict()), allow_nan=False)
         with self._condition:
             self._payload = payload
+            self._cluster = cluster
             self._version += 1
             self._condition.notify_all()
 
     def current(self) -> tuple[str, int]:
         with self._condition:
             return self._payload, self._version
+
+    def current_cluster(self) -> ClusterSnapshot | None:
+        with self._condition:
+            return self._cluster
 
     def wait(self, last_version: int, timeout: float) -> tuple[str, int]:
         with self._condition:
@@ -157,6 +163,16 @@ def _make_handler(
             elif path == "/api/snapshot":
                 payload, _ = holder.current()
                 self._send(200, "application/json", payload.encode())
+            elif path == "/metrics":
+                from mxtop.remote.metrics import render_metrics
+
+                cluster = holder.current_cluster()
+                body = "" if cluster is None else render_metrics(cluster)
+                self._send(
+                    200,
+                    "text/plain; version=0.0.4; charset=utf-8",
+                    body.encode(),
+                )
             elif path == "/api/stream":
                 self._stream()
             else:

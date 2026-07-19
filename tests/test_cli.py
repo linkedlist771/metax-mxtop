@@ -799,3 +799,26 @@ def test_python_m_mxtop_runs_the_cli_module():
     assert result.returncode == 0
     assert result.stdout == f"mxtop {cli.__version__}\n"
     assert result.stderr == ""
+
+
+def test_cli_json_lines_prints_compact_ndjson(monkeypatch, capsys):
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda _: None)
+
+    rc = main(["--json-lines", "-n", "3"], backend=StaticBackend())
+
+    captured = capsys.readouterr()
+    lines = captured.out.strip().splitlines()
+    assert rc == 0
+    assert len(lines) == 3
+    for line in lines:
+        payload = json.loads(line)
+        assert payload["devices"][0]["name"] == "MXC500"
+        assert ": " not in line  # compact separators
+
+
+def test_cli_json_lines_conflicts_with_json(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--json", "--json-lines"], backend=StaticBackend())
+
+    assert excinfo.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err

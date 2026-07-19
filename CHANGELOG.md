@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hints for Pymxsml, mx-smi resolution, live backend snapshots, psutil,
   terminal capabilities, config-file validity, and the remote extra; exits
   non-zero when no telemetry backend works.
+- Prometheus `/metrics` endpoint on the remote dashboard: per-GPU and
+  per-host gauges labelled by node/gpu/name/uuid, node reachability and
+  SSH collect latency, honoring the dashboard auth token.
+- `--json-lines` / `--ndjson`: one compact JSON object per line for
+  streaming pipelines, combinable with `--count`.
 
 ### Changed
 

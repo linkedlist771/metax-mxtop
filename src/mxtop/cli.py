@@ -227,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print one JSON snapshot and exit"
     )
     _ = mode.add_argument(
+        "--json-lines",
+        "--ndjson",
+        action="store_true",
+        help="print snapshots as one compact JSON object per line (NDJSON)",
+    )
+    _ = mode.add_argument(
         "--remote-mode",
         action="store_true",
         help="serve a local web dashboard aggregating multiple SSH nodes",
@@ -652,7 +658,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     if args.count is not None:
         if hasattr(args, "monitor") or args.remote_mode:
             parser.error("--count requires --once or --json")
-        if not args.json:
+        if not args.json and not args.json_lines:
             args.once = True
 
     monitor_tokens = _monitor_mode_tokens()
@@ -668,6 +674,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     monitor_requested = (explicit_monitor and not monitor_unavailable) or (
         not args.once
         and not args.json
+        and not args.json_lines
         and stdin_is_tty
         and stdout_is_tty
         and not args.remote_mode
@@ -743,7 +750,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         None,
     )
 
-    if args.json:
+    if args.json or args.json_lines:
         had_errors = False
         for iteration in range(args.count or 1):
             if iteration:
@@ -754,14 +761,21 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
                 print(f"MXTOP ERROR: {exc}", file=sys.stderr)
                 return 1
             had_errors = _report_invalid_device_indices(frame, options) or had_errors
-            print(
-                json.dumps(
-                    sanitize_json_value(frame.to_dict()),
-                    indent=2,
-                    sort_keys=True,
-                    allow_nan=False,
+            payload = sanitize_json_value(frame.to_dict())
+            if args.json_lines:
+                print(
+                    json.dumps(
+                        payload,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                        allow_nan=False,
+                    ),
+                    flush=True,
                 )
-            )
+            else:
+                print(
+                    json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)
+                )
         return int(had_errors)
 
     use_color = _should_use_color(
