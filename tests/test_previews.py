@@ -442,11 +442,14 @@ def test_canonical_commands_pin_the_pillow_version() -> None:
         assert pillow_arguments, relative_path
         assert set(pillow_arguments) == {expected}, relative_path
 
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert f'"pillow=={previews.CANONICAL_PILLOW_VERSION}"' in pyproject
+
     workflow = (PROJECT_ROOT / ".github/workflows/wheels.yml").read_text(
         encoding="utf-8"
     )
-    assert f"pillow=={previews.CANONICAL_PILLOW_VERSION}" in workflow
-    assert not re.search(r"\bpillow\b(?!==)", workflow, flags=re.IGNORECASE)
+    assert ".[remote,dev]" in workflow
+    assert ".[dev]" in workflow
 
 
 def test_committed_preview_assets_are_fresh() -> None:

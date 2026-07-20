@@ -7,3 +7,17 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: ci
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      development-tooling:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: deps

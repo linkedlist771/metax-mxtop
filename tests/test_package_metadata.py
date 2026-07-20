@@ -27,6 +27,12 @@ def test_package_metadata_links_community_documents():
     assert urls["Issues"].endswith("/issues")
 
 
+def test_development_extra_covers_ci_tooling():
+    dev = set(PROJECT["project"]["optional-dependencies"]["dev"])
+    for prefix in ("build", "pillow", "pytest", "pytest-cov", "ruff", "twine"):
+        assert any(requirement.startswith(prefix) for requirement in dev)
+
+
 def test_pep639_license_expression_and_policy_files_are_present():
     assert PROJECT["project"]["license"] == "MIT"
     for name in ("LICENSE", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md"):

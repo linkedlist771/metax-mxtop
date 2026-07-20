@@ -41,6 +41,14 @@ Issues = "https://github.com/linkedlist771/metax-mxtop/issues"
 
 [project.optional-dependencies]
 remote = ["asyncssh>=2.14"]
+dev = [
+    "build>=1.2",
+    "pillow==11.3.0",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.11",
+    "twine>=6",
+]
 
 [project.scripts]
 mxtop = "mxtop.cli:main"

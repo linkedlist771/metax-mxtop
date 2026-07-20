@@ -8,12 +8,14 @@ the [README](README.md) covers what the tool does.
 ```bash
 git clone https://github.com/linkedlist771/metax-mxtop.git
 cd metax-mxtop
-pip install -e '.[remote]'        # or: uv pip install -e '.[remote]'
+pip install -e '.[remote,dev]'    # or: uv pip install -e '.[remote,dev]'
 ```
 
 The `remote` extra pulls in `asyncssh` so the `--remote-mode` tests run
-instead of skipping. No MetaX hardware is needed for development: the test
-suite and all preview assets use deterministic synthetic fixtures.
+instead of skipping. The `dev` extra is the single source of truth for CI and
+local test/build/release tools; Dependabot groups its routine updates monthly.
+No MetaX hardware is needed for development: the test suite and all preview
+assets use deterministic synthetic fixtures.
 
 ## Running checks
 

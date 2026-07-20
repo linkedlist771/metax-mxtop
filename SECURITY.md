@@ -63,9 +63,9 @@ limits concurrent SSE clients. These are defense-in-depth measures, not a
 replacement for TLS and network access control.
 
 The release workflow pins every third-party GitHub Action to an immutable
-40-character commit SHA. Dependabot monitors the GitHub Actions ecosystem for
-updates so these pins remain reviewable rather than silently following mutable
-tags.
+40-character commit SHA. Dependabot monitors both the GitHub Actions and Python
+package ecosystems monthly, so action pins and dependencies remain reviewable
+rather than silently following mutable tags or going stale.
 
 ## Out of scope
 

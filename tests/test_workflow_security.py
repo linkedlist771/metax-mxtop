@@ -21,6 +21,9 @@ def test_third_party_actions_are_pinned_to_full_commit_shas():
     assert not mutable, "mutable action references:\n" + "\n".join(mutable)
 
 
-def test_dependabot_tracks_github_action_updates():
+def test_dependabot_tracks_action_and_python_dependency_updates():
     config = (ROOT / ".github" / "dependabot.yml").read_text()
     assert "package-ecosystem: github-actions" in config
+    assert "package-ecosystem: pip" in config
+    assert "development-tooling:" in config
+    assert config.count("interval: monthly") == 2
