@@ -34,8 +34,9 @@ ruff check .
 ```
 
 CI runs the suite on Python 3.9 through 3.13; the 3.13 leg enforces branch
-coverage while the other compatibility legs stay fast. `uv run --python 3.9 ...`
-reproduces the floor version locally.
+coverage while the other compatibility legs stay fast. CodeQL separately scans
+Python and dashboard JavaScript with extended security queries. `uv run
+--python 3.9 ...` reproduces the floor version locally.
 
 ## Things the test suite enforces
 

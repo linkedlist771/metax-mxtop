@@ -27,3 +27,14 @@ def test_dependabot_tracks_action_and_python_dependency_updates():
     assert "package-ecosystem: pip" in config
     assert "development-tooling:" in config
     assert config.count("interval: monthly") == 2
+
+
+def test_codeql_scans_python_and_javascript_with_extended_queries():
+    workflow = (WORKFLOWS / "codeql.yml").read_text()
+    assert "- python" in workflow
+    assert "- javascript-typescript" in workflow
+    assert "queries: security-extended" in workflow
+    assert "security-events: write" in workflow
+    assert "head.repo.full_name == github.repository" in workflow
+    assert "schedule:" in workflow
+    assert "workflow_dispatch:" in workflow

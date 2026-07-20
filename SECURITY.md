@@ -65,7 +65,9 @@ replacement for TLS and network access control.
 The release workflow pins every third-party GitHub Action to an immutable
 40-character commit SHA. Dependabot monitors both the GitHub Actions and Python
 package ecosystems monthly, so action pins and dependencies remain reviewable
-rather than silently following mutable tags or going stale.
+rather than silently following mutable tags or going stale. CodeQL runs
+`security-extended` queries over both the Python package and the dashboard's
+JavaScript on every push/PR and on a weekly schedule.
 
 ## Out of scope
 

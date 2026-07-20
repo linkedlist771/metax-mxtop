@@ -84,7 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verify downloaded SHA256SUMS, derive tagged release notes from CHANGELOG,
   and run Twine metadata validation before PyPI publication. All third-party
   Actions are pinned to immutable commit SHAs, with Dependabot tracking Action
-  and Python dependency updates. A `dev` extra centralizes CI/local tooling.
+  and Python dependency updates. A `dev` extra centralizes CI/local tooling,
+  and CodeQL runs extended Python/JavaScript security analysis.
 
 ### Changed
 
