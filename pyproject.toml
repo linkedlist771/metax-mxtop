@@ -12,12 +12,19 @@ authors = [{ name = "mxtop contributors" }]
 license = "MIT"
 keywords = ["metax", "mx-smi", "maca", "gpu", "monitoring", "top"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Environment :: Console :: Curses",
     "Environment :: GPU",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: System :: Hardware",
     "Topic :: System :: Monitoring",
 ]
@@ -27,6 +34,8 @@ dependencies = ["psutil>=5.6", "tomli>=1.1; python_version < '3.11'"]
 Homepage = "https://github.com/linkedlist771/metax-mxtop"
 Repository = "https://github.com/linkedlist771/metax-mxtop.git"
 Documentation = "https://github.com/linkedlist771/metax-mxtop#readme"
+Changelog = "https://github.com/linkedlist771/metax-mxtop/blob/main/CHANGELOG.md"
+Contributing = "https://github.com/linkedlist771/metax-mxtop/blob/main/CONTRIBUTING.md"
 Issues = "https://github.com/linkedlist771/metax-mxtop/issues"
 
 [project.optional-dependencies]
