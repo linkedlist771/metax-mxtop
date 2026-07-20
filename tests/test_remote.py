@@ -3,6 +3,7 @@ import json
 import math
 from types import SimpleNamespace
 import time
+from urllib.parse import urlencode
 import urllib.request
 
 from mxtop.backends.mxsmi import build_frame_from_outputs
@@ -387,6 +388,36 @@ def test_web_server_enforces_auth_token():
         server.server_close()
 
 
+def test_auth_cookie_round_trips_special_character_token():
+    from http.cookies import SimpleCookie
+    import threading
+
+    token = 'value with spaces;quotes="and\\slashes'
+    holder = SnapshotHolder()
+    holder.update(ClusterSnapshot(nodes=[]))
+    server = make_server(holder, bind="127.0.0.1", port=0, auth_token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        base = f"http://{host}:{port}"
+        query = urlencode({"token": token})
+        with urllib.request.urlopen(f"{base}/?{query}", timeout=5) as resp:
+            set_cookie = resp.headers["Set-Cookie"]
+        parsed = SimpleCookie(set_cookie)
+        assert parsed["mxtop_token"].value == token
+
+        cookie_request = urllib.request.Request(
+            f"{base}/api/snapshot",
+            headers={"Cookie": parsed["mxtop_token"].OutputString()},
+        )
+        with urllib.request.urlopen(cookie_request, timeout=5) as resp:
+            assert resp.status == 200
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_web_server_caps_sse_clients():
     holder = SnapshotHolder()
     holder.update(ClusterSnapshot(nodes=[]))
@@ -446,6 +477,9 @@ def test_web_server_treats_sse_disconnect_as_normal(capsys):
         response = urllib.request.urlopen(
             f"http://{host}:{port}/api/stream", timeout=5
         )
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["Referrer-Policy"] == "no-referrer"
+        assert "script-src 'self'" in response.headers["Content-Security-Policy"]
         assert response.readline().startswith(b"data: ")
         response.close()
         holder.update(ClusterSnapshot(nodes=[]))

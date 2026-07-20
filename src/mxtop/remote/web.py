@@ -93,6 +93,11 @@ def _make_handler(
         def log_message(self, *args: Any) -> None:
             pass
 
+        def _send_security_headers(self) -> None:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for name, value in _SECURITY_HEADERS.items():
+                self.send_header(name, value)
+
         def _send(
             self,
             code: int,
@@ -103,9 +108,7 @@ def _make_handler(
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("X-Content-Type-Options", "nosniff")
-            for name, value in _SECURITY_HEADERS.items():
-                self.send_header(name, value)
+            self._send_security_headers()
             for name, value in (extra_headers or {}).items():
                 self.send_header(name, value)
             self.end_headers()
@@ -149,11 +152,15 @@ def _make_handler(
             # fetch/EventSource requests (which cannot add headers) pass.
             cookie_headers: dict[str, str] | None = None
             if auth_token is not None and parse_qs(split.query).get("token"):
+                cookie = SimpleCookie()
+                cookie[_TOKEN_COOKIE] = auth_token
+                morsel = cookie[_TOKEN_COOKIE]
+                morsel["httponly"] = True
+                morsel["samesite"] = "Strict"
+                morsel["path"] = "/"
+                morsel["max-age"] = 86400
                 cookie_headers = {
-                    "Set-Cookie": (
-                        f"{_TOKEN_COOKIE}={auth_token}; HttpOnly; "
-                        "SameSite=Strict; Path=/; Max-Age=86400"
-                    ),
+                    "Set-Cookie": morsel.OutputString(),
                     "Cache-Control": "no-store",
                 }
             if path in ("/", "/index.html"):
@@ -216,6 +223,7 @@ def _make_handler(
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
+            self._send_security_headers()
             self.end_headers()
             last = -1
             try:

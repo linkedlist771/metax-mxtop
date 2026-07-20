@@ -68,9 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   space after the GPU, PID, or USER column label.
 - While paused, repaints no longer re-record the frozen frame's stale
   values into the host history graphs.
-- Dashboard responses now set CSP, frame-deny, no-referrer, and browser
-  permissions headers; the one-time `?token=` bootstrap is removed from
-  the address bar/history immediately after setting the HttpOnly cookie.
+- Dashboard responses (including long-lived SSE streams) now set CSP,
+  frame-deny, no-referrer, and browser permissions headers; the one-time
+  `?token=` bootstrap is removed from the address bar/history immediately
+  after setting the HttpOnly cookie. Cookie serialization now safely
+  round-trips tokens containing spaces, quotes, semicolons, or backslashes.
 
 ### Changed
 
