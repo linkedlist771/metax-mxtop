@@ -15,7 +15,7 @@ import time
 
 from mxtop.backends import TelemetryBackend
 from mxtop.models import ClusterSnapshot, HostSnapshot, NodeSnapshot
-from mxtop.remote.web import SnapshotHolder, make_server
+from mxtop.remote.web import SnapshotHolder, access_url, make_server
 
 
 def _local_host_snapshot() -> HostSnapshot | None:
@@ -93,7 +93,9 @@ def run_exporter(
     poller.start()
 
     server = make_server(holder, bind=bind, port=port, auth_token=auth_token)
-    print(f"mxtop metrics exporter: http://{bind}:{port}/metrics")
+    print(f"mxtop metrics exporter: {access_url(bind, port, path='/metrics')}")
+    if bind in {"", "0.0.0.0", "::", "[::]", "*"}:
+        print(f"Listening on all interfaces ({bind or '*'}:{port}).")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

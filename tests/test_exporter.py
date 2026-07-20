@@ -45,7 +45,7 @@ def test_build_local_cluster_reports_backend_failure():
     assert node.error == "TimeoutError"
 
 
-def test_run_exporter_serves_metrics(monkeypatch):
+def test_run_exporter_serves_metrics(monkeypatch, capsys):
     exit_codes = []
 
     class InstantServer:
@@ -85,6 +85,7 @@ def test_run_exporter_serves_metrics(monkeypatch):
     assert instant.served
     assert captured["port"] == 9532
     assert captured["auth_token"] == "tok"
+    assert "http://127.0.0.1:9532/metrics" in capsys.readouterr().out
     cluster = captured["holder"].current_cluster()
     assert cluster is not None and cluster.nodes[0].reachable
 
@@ -106,3 +107,28 @@ def test_exporter_end_to_end_over_http():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_run_exporter_prints_usable_url_for_wildcard_bind(monkeypatch, capsys):
+    class InstantServer:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(
+        "mxtop.exporter.make_server", lambda *_args, **_kwargs: InstantServer()
+    )
+
+    assert (
+        run_exporter(StaticBackend(), bind="0.0.0.0", port=9532, interval=60)
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "http://localhost:9532/metrics" in output
+    assert "Listening on all interfaces (0.0.0.0:9532)" in output

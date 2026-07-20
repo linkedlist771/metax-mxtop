@@ -298,7 +298,9 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   passwords.
 - The dashboard polls every node concurrently (`--interval`, default 2s),
   serves on `127.0.0.1` by default (`--bind` to change), and streams live
-  updates over Server-Sent Events. Unreachable nodes are shown as down
+  updates over Server-Sent Events. Wildcard binds (`0.0.0.0` / `::`) print a
+  usable localhost access URL separately from the all-interfaces listener;
+  IPv6 access URLs are bracketed correctly. Unreachable nodes are shown as down
   instead of breaking the page.
 - Dashboard access can be protected with a shared token via `--auth-token`
   or the `MXTOP_AUTH_TOKEN` environment variable. Requests must then carry

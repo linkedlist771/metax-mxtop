@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
+import socket
 import threading
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from mxtop.jsonutil import sanitize_json_value
 from mxtop.models import ClusterSnapshot
@@ -40,6 +42,25 @@ _TOKEN_COOKIE = "mxtop_token"
 # ThreadingHTTPServer spawns one thread per connection; SSE clients hold
 # theirs open indefinitely, so cap them to bound thread growth.
 MAX_SSE_CLIENTS = 32
+
+
+def access_url(
+    bind: str,
+    port: int,
+    *,
+    path: str = "/",
+    auth_token: str | None = None,
+) -> str:
+    """Return a usable browser/client URL for a listening bind address."""
+
+    host = "localhost" if bind in {"", "0.0.0.0", "::", "[::]", "*"} else bind
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    path = "/" + path.lstrip("/")
+    url = f"http://{host}:{port}{path}"
+    if auth_token is not None:
+        url += "?" + urlencode({"token": auth_token})
+    return url
 
 
 class SnapshotHolder:
@@ -252,6 +273,17 @@ def make_server(
     max_sse_clients: int = MAX_SSE_CLIENTS,
 ) -> ThreadingHTTPServer:
     assets = load_dashboard_assets()
-    return ThreadingHTTPServer(
-        (bind, port), _make_handler(holder, assets, auth_token, max_sse_clients)
+    server_type = ThreadingHTTPServer
+    try:
+        is_ipv6 = ipaddress.ip_address(bind.strip("[]")).version == 6
+    except ValueError:
+        is_ipv6 = False
+    if is_ipv6:
+        class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+
+        server_type = IPv6ThreadingHTTPServer
+    return server_type(
+        (bind.strip("[]"), port),
+        _make_handler(holder, assets, auth_token, max_sse_clients),
     )

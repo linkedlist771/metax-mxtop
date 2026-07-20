@@ -9,7 +9,7 @@ import webbrowser
 
 from mxtop.remote.cluster import ClusterMonitor
 from mxtop.remote.discovery import HostDiscovery
-from mxtop.remote.web import SnapshotHolder, make_server
+from mxtop.remote.web import SnapshotHolder, access_url, make_server
 
 
 def _is_loopback(bind: str) -> bool:
@@ -69,9 +69,11 @@ def run_remote(
     poller.start()
 
     server = make_server(holder, bind=bind, port=port, auth_token=auth_token)
-    url = f"http://{bind}:{port}/"
-    open_url = url if auth_token is None else f"{url}?token={auth_token}"
+    url = access_url(bind, port)
+    open_url = access_url(bind, port, auth_token=auth_token)
     print(f"mxtop remote dashboard: {url}  ({len(hosts)} node(s): {', '.join(hosts)})")
+    if bind in {"", "0.0.0.0", "::", "[::]", "*"}:
+        print(f"Listening on all interfaces ({bind or '*'}:{port}).")
     if auth_token is not None:
         print("Dashboard access requires the configured token (append ?token=... on first visit).")
     elif not _is_loopback(bind):

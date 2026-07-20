@@ -15,6 +15,7 @@ from mxtop.remote.nodes import load_hosts, merge_hosts
 from mxtop.remote.web import (
     SnapshotHolder,
     _sanitize,
+    access_url,
     load_dashboard_assets,
     make_server,
 )
@@ -490,3 +491,33 @@ def test_web_server_treats_sse_disconnect_as_normal(capsys):
         server.server_close()
 
     assert "Exception occurred during processing" not in capsys.readouterr().err
+
+
+def test_access_url_handles_wildcards_ipv6_paths_and_tokens():
+    assert access_url("127.0.0.1", 8080) == "http://127.0.0.1:8080/"
+    assert access_url("0.0.0.0", 8080) == "http://localhost:8080/"
+    assert access_url("::", 8080) == "http://localhost:8080/"
+    assert access_url("2001:db8::1", 8080) == "http://[2001:db8::1]:8080/"
+    assert access_url("[2001:db8::1]", 8080) == "http://[2001:db8::1]:8080/"
+    assert access_url("gpu-host", 9532, path="metrics") == "http://gpu-host:9532/metrics"
+    assert (
+        access_url("0.0.0.0", 8080, auth_token="a&b #c?")
+        == "http://localhost:8080/?token=a%26b+%23c%3F"
+    )
+
+
+def test_web_server_binds_ipv6_loopback_when_available():
+    import socket
+
+    holder = SnapshotHolder()
+    try:
+        server = make_server(holder, bind="::1", port=0)
+    except OSError as error:
+        import pytest
+
+        pytest.skip(f"IPv6 loopback unavailable: {error}")
+    try:
+        assert server.address_family == socket.AF_INET6
+        assert server.server_address[0] == "::1"
+    finally:
+        server.server_close()
