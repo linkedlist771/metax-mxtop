@@ -23,11 +23,16 @@ Everything CI runs, locally:
 # Tests (Pillow is pinned so preview PNG tests validate byte-identical output)
 uv run --with pytest --with 'pillow==11.3.0' --extra remote pytest -q
 
+# Branch coverage (CI enforces at least 75%; current baseline is about 77%)
+uv run --with pytest --with pytest-cov --extra remote \
+  pytest -q --cov --cov-branch --cov-report=term-missing:skip-covered
+
 # Lint
 ruff check .
 ```
 
-CI runs the suite on Python 3.9 through 3.13; `uv run --python 3.9 ...`
+CI runs the suite on Python 3.9 through 3.13; the 3.13 leg enforces branch
+coverage while the other compatibility legs stay fast. `uv run --python 3.9 ...`
 reproduces the floor version locally.
 
 ## Things the test suite enforces

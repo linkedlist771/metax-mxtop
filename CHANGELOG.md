@@ -77,6 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round-trips tokens containing spaces, quotes, semicolons, or backslashes.
 - Expanded `--doctor` branch coverage from 68% to 95%, including installed,
   SDK-wheel, missing-tool, special-path, remote-extra, and ANSI output cases.
+- CI now enforces at least 75% project-wide branch coverage on Python 3.13
+  (current baseline about 77%) and the README exposes the workflow status.
 
 ### Changed
 

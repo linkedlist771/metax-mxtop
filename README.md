@@ -3,6 +3,7 @@
 <p align="center">
   <a href="https://github.com/linkedlist771/metax-mxtop"><img src="https://img.shields.io/github/stars/linkedlist771/metax-mxtop?style=flat-square&logo=github&color=181717" alt="GitHub stars"/></a>
   <a href="https://pypi.org/project/metax-mxtop/"><img src="https://img.shields.io/pypi/v/metax-mxtop?style=flat-square&logo=pypi&logoColor=white" alt="PyPI version"/></a>
+  <a href="https://github.com/linkedlist771/metax-mxtop/actions/workflows/wheels.yml"><img src="https://img.shields.io/github/actions/workflow/status/linkedlist771/metax-mxtop/wheels.yml?branch=main&style=flat-square&label=CI" alt="CI status"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="MIT License"/></a>
   <img src="https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+"/>
   <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"/>

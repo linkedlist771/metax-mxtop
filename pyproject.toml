@@ -58,6 +58,15 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 
+[tool.coverage.run]
+branch = true
+source = ["mxtop"]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
+skip_covered = true
+
 [tool.basedpyright]
 stubPath = "typings"
 typeCheckingMode = "basic"
