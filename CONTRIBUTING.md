@@ -85,7 +85,8 @@ Before tagging, run:
 python scripts/check_release_version.py vX.Y.Z
 ```
 
-GitHub Actions runs the same guard before building or publishing, then builds
-the wheelhouse, creates the GitHub Release, and publishes to PyPI via Trusted
-Publishing. A mismatched tag/package/changelog fails before any release asset
-is published.
+GitHub Actions runs the same guard before building or publishing, verifies the
+downloaded wheelhouse checksums, derives the tagged GitHub Release notes from
+the matching CHANGELOG section, validates wheel/sdist metadata with Twine, and
+publishes to PyPI via Trusted Publishing. A mismatch, corrupt artifact, stale
+release note, or invalid distribution fails before publication.

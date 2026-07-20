@@ -139,41 +139,47 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Download wheel artifacts
         uses: actions/download-artifact@v4
         with:
           name: metax-mxtop-linux-x86_64-wheels
           path: release-assets
 
+      - name: Verify downloaded artifact checksums
+        working-directory: release-assets
+        run: sha256sum --check SHA256SUMS.txt
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cd release-assets
-
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
             title="${GITHUB_REF_NAME}"
-            notes="Automated wheel release for ${GITHUB_REF_NAME}."
+            python scripts/extract_release_notes.py "${tag}" --output /tmp/release-notes.md
             create_args=(--verify-tag)
           else
             short_sha="${GITHUB_SHA::7}"
             tag="build-${short_sha}"
             title="Build ${short_sha}"
-            notes="Automated Linux x86_64 wheel build for commit ${GITHUB_SHA}."
+            printf 'Automated Linux x86_64 wheel build for commit %s.\n' "${GITHUB_SHA}" > /tmp/release-notes.md
             create_args=(--target "${GITHUB_SHA}" --prerelease)
           fi
 
-          mapfile -t assets < <(find . -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) | sort)
+          mapfile -t assets < <(find release-assets -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) | sort)
 
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release upload "${tag}" "${assets[@]}" --clobber
+            gh release edit "${tag}" --title "${title}" --notes-file /tmp/release-notes.md
           else
             gh release create "${tag}" \
               "${assets[@]}" \
               --title "${title}" \
-              --notes "${notes}" \
+              --notes-file /tmp/release-notes.md \
               "${create_args[@]}"
           fi
 
@@ -200,13 +206,16 @@ jobs:
           cache: pip
 
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build
+        run: python -m pip install --upgrade pip build twine
 
       - name: Verify release tag matches package metadata
         run: python scripts/check_release_version.py "${GITHUB_REF_NAME}"
 
       - name: Build PyPI distributions
         run: python -m build
+
+      - name: Validate PyPI distributions
+        run: python -m twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
