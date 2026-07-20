@@ -1,5 +1,7 @@
 """Tests for mxtop --doctor environment diagnostics."""
 
+from types import SimpleNamespace
+
 from mxtop import doctor
 from mxtop.cli import main
 from mxtop.doctor import FAIL, PASS, WARN, CheckResult, run_doctor
@@ -98,3 +100,118 @@ def test_cli_doctor_flag_runs_and_propagates_exit(monkeypatch, capsys):
     rc = main(["--doctor", "--no-color"])
     assert rc == 1
     assert "mxtop" in capsys.readouterr().out
+
+
+def test_python_and_psutil_checks(monkeypatch):
+    assert doctor._check_python().status == PASS
+
+    monkeypatch.setattr(
+        doctor.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(__version__="9.9")
+        if name == "psutil"
+        else None,
+    )
+    result = doctor._check_psutil()
+    assert result.status == PASS
+    assert result.detail == "9.9"
+
+    def missing(_name):
+        raise ModuleNotFoundError
+
+    monkeypatch.setattr(doctor.importlib, "import_module", missing)
+    result = doctor._check_psutil()
+    assert result.status == WARN
+    assert "pip install psutil" in (result.hint or "")
+
+
+def test_pymxsml_check_installed_sdk_wheel_and_missing(monkeypatch):
+    monkeypatch.setattr(
+        doctor.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(__file__="/sdk/pymxsml.py"),
+    )
+    result = doctor._check_pymxsml()
+    assert result.status == PASS
+    assert result.detail == "/sdk/pymxsml.py"
+
+    def missing(_name):
+        raise ModuleNotFoundError
+
+    monkeypatch.setattr(doctor.importlib, "import_module", missing)
+    monkeypatch.setattr(
+        doctor,
+        "glob",
+        lambda pattern: ["/opt/maca/share/mxsml/pymxsml-2.whl"]
+        if "/opt/maca/" in pattern
+        else [],
+    )
+    result = doctor._check_pymxsml()
+    assert result.status == WARN
+    assert "pymxsml-2.whl" in result.detail
+
+    monkeypatch.setattr(doctor, "glob", lambda _pattern: [])
+    result = doctor._check_pymxsml()
+    assert result.status == WARN
+    assert "no SDK wheel" in result.detail
+
+
+def test_mxsmi_check_reports_env_path_path_lookup_and_missing(monkeypatch, tmp_path):
+    executable = tmp_path / "mx-smi"
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("MXTOP_MXSMI_PATH", str(executable))
+    result = doctor._check_mxsmi()
+    assert result.status == PASS
+    assert "environment variable" in result.detail
+
+    monkeypatch.setenv("MXTOP_MXSMI_PATH", "mx-smi-missing")
+    monkeypatch.setattr(
+        doctor.shutil,
+        "which",
+        lambda value: "/usr/bin/mx-smi" if value == "mx-smi-missing" else None,
+    )
+    result = doctor._check_mxsmi()
+    assert result.status == PASS
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _value: None)
+    result = doctor._check_mxsmi()
+    assert result.status == WARN
+    assert "MXTOP_MXSMI_PATH" in (result.hint or "")
+
+
+def test_remote_check_missing_and_installed(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.Path, "home", lambda: tmp_path)
+
+    def missing(_name):
+        raise ModuleNotFoundError
+
+    monkeypatch.setattr(doctor.importlib, "import_module", missing)
+    result = doctor._check_remote()
+    assert result.status == WARN
+    assert "[remote]" in (result.hint or "")
+
+    config = tmp_path / ".ssh" / "config"
+    config.parent.mkdir()
+    config.write_text("Host gpu\n")
+    monkeypatch.setattr(
+        doctor.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(__version__="2.23.0"),
+    )
+    result = doctor._check_remote()
+    assert result.status == PASS
+    assert "2.23.0" in result.detail
+    assert "config present" in result.detail
+
+
+def test_doctor_all_pass_and_ansi_color(monkeypatch, capsys):
+    monkeypatch.setattr(
+        doctor,
+        "CHECKS",
+        (lambda: CheckResult("Backend", PASS, "one GPU"),),
+    )
+    assert run_doctor(use_color=True) == 0
+    output = capsys.readouterr().out
+    assert "\x1b[32mPASS\x1b[0m" in output
+    assert "everything looks good" in output

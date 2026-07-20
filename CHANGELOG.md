@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `?token=` bootstrap is removed from the address bar/history immediately
   after setting the HttpOnly cookie. Cookie serialization now safely
   round-trips tokens containing spaces, quotes, semicolons, or backslashes.
+- Expanded `--doctor` branch coverage from 68% to 95%, including installed,
+  SDK-wheel, missing-tool, special-path, remote-extra, and ANSI output cases.
 
 ### Changed
 
