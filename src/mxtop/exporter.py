@@ -15,7 +15,7 @@ import time
 
 from mxtop.backends import TelemetryBackend
 from mxtop.models import ClusterSnapshot, HostSnapshot, NodeSnapshot
-from mxtop.remote.web import SnapshotHolder, access_url, make_server
+from mxtop.remote.web import SnapshotHolder, access_url, is_wildcard_bind, make_server
 
 
 def _local_host_snapshot() -> HostSnapshot | None:
@@ -94,7 +94,7 @@ def run_exporter(
 
     server = make_server(holder, bind=bind, port=port, auth_token=auth_token)
     print(f"mxtop metrics exporter: {access_url(bind, port, path='/metrics')}")
-    if bind in {"", "0.0.0.0", "::", "[::]", "*"}:
+    if is_wildcard_bind(bind):
         print(f"Listening on all interfaces ({bind or '*'}:{port}).")
     print("Press Ctrl+C to stop.")
     try:

@@ -71,8 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - While paused, repaints no longer re-record the frozen frame's stale
   values into the host history graphs.
 - Dashboard/exporter now print usable localhost URLs for wildcard binds,
-  bracket IPv6 literals, and percent-encode token query values before
-  opening a browser.
+  accept `*` as an all-interface alias, bracket and bind IPv6 literals,
+  correctly classify bracketed loopback addresses, and percent-encode token
+  query values before opening a browser.
 - Dashboard responses (including long-lived SSE streams) now set CSP,
   frame-deny, no-referrer, and browser permissions headers; the one-time
   `?token=` bootstrap is removed from the address bar/history immediately

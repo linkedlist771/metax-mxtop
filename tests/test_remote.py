@@ -9,7 +9,7 @@ import urllib.request
 from mxtop.backends.mxsmi import build_frame_from_outputs
 from mxtop.models import ClusterSnapshot, DeviceSnapshot, FrameSnapshot, NodeSnapshot
 from mxtop.remote import discovery, ssh
-from mxtop.remote.app import report_discovery
+from mxtop.remote.app import _is_loopback, report_discovery
 from mxtop.remote.discovery import discover_configured_hosts
 from mxtop.remote.nodes import load_hosts, merge_hosts
 from mxtop.remote.web import (
@@ -519,5 +519,21 @@ def test_web_server_binds_ipv6_loopback_when_available():
     try:
         assert server.address_family == socket.AF_INET6
         assert server.server_address[0] == "::1"
+    finally:
+        server.server_close()
+
+
+def test_bind_normalization_handles_star_and_bracketed_loopback():
+    assert _is_loopback("127.0.0.1")
+    assert _is_loopback("[::1]")
+    assert not _is_loopback("*")
+    assert not _is_loopback("[::]")
+
+
+def test_web_server_accepts_star_wildcard_bind():
+    holder = SnapshotHolder()
+    server = make_server(holder, bind="*", port=0)
+    try:
+        assert server.server_address[0] == "0.0.0.0"
     finally:
         server.server_close()

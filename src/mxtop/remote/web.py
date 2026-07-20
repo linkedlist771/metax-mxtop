@@ -42,6 +42,20 @@ _TOKEN_COOKIE = "mxtop_token"
 # ThreadingHTTPServer spawns one thread per connection; SSE clients hold
 # theirs open indefinitely, so cap them to bound thread growth.
 MAX_SSE_CLIENTS = 32
+WILDCARD_BINDS = frozenset({"", "*", "0.0.0.0", "::", "[::]"})
+
+
+def normalized_bind(bind: str) -> str:
+    """Normalize user-facing bind aliases into socket-compatible hosts."""
+
+    bind = bind.strip()
+    if bind == "*":
+        return ""
+    return bind.strip("[]")
+
+
+def is_wildcard_bind(bind: str) -> bool:
+    return bind.strip() in WILDCARD_BINDS
 
 
 def access_url(
@@ -53,7 +67,7 @@ def access_url(
 ) -> str:
     """Return a usable browser/client URL for a listening bind address."""
 
-    host = "localhost" if bind in {"", "0.0.0.0", "::", "[::]", "*"} else bind
+    host = "localhost" if is_wildcard_bind(bind) else normalized_bind(bind)
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     path = "/" + path.lstrip("/")
@@ -273,9 +287,10 @@ def make_server(
     max_sse_clients: int = MAX_SSE_CLIENTS,
 ) -> ThreadingHTTPServer:
     assets = load_dashboard_assets()
+    socket_bind = normalized_bind(bind)
     server_type = ThreadingHTTPServer
     try:
-        is_ipv6 = ipaddress.ip_address(bind.strip("[]")).version == 6
+        is_ipv6 = ipaddress.ip_address(socket_bind).version == 6
     except ValueError:
         is_ipv6 = False
     if is_ipv6:
@@ -284,6 +299,6 @@ def make_server(
 
         server_type = IPv6ThreadingHTTPServer
     return server_type(
-        (bind.strip("[]"), port),
+        (socket_bind, port),
         _make_handler(holder, assets, auth_token, max_sse_clients),
     )
