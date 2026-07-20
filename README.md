@@ -412,6 +412,10 @@ GitHub Actions then builds the wheelhouse, creates or updates the versioned GitH
 
 See the [output gallery](https://github.com/linkedlist771/metax-mxtop/blob/main/GALLERY.md) and [screen showcase](https://github.com/linkedlist771/metax-mxtop/blob/main/SHOWCASE.md) for rendered stdout and deterministic secondary-screen fixtures across palettes, layouts, filters, edge telemetry, and 32/64-GPU fleets.
 
+## Security
+
+See [SECURITY.md](SECURITY.md) for responsible disclosure and secure deployment guidance. In particular, `--auth-token` controls access but does not encrypt HTTP traffic; use a TLS reverse proxy, VPN, or SSH tunnel across untrusted networks.
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, including the

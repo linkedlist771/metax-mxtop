@@ -23,9 +23,11 @@ def test_package_metadata_links_community_documents():
     urls = PROJECT["project"]["urls"]
     assert urls["Changelog"].endswith("/CHANGELOG.md")
     assert urls["Contributing"].endswith("/CONTRIBUTING.md")
+    assert urls["Security"].endswith("/SECURITY.md")
     assert urls["Issues"].endswith("/issues")
 
 
-def test_pep639_license_expression_and_file_are_present():
+def test_pep639_license_expression_and_policy_files_are_present():
     assert PROJECT["project"]["license"] == "MIT"
-    assert (ROOT / "LICENSE").is_file()
+    for name in ("LICENSE", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md"):
+        assert (ROOT / name).is_file()

@@ -60,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--export-metrics`: a local Prometheus exporter (default port 9532,
   dcgm-exporter style) serving this host's telemetry on `/metrics`
   without SSH; honors `--bind`, `--port`, `--auth-token`, `--interval`.
+- SECURITY.md with a private disclosure path, security boundaries, and
+  concrete TLS/token/network guidance for dashboard and exporter deployments.
 
 ### Fixed
 
