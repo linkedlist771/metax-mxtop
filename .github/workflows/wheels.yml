@@ -65,6 +65,10 @@ jobs:
       - name: Install project
         run: python -m pip install --editable .
 
+      - name: Verify release tag matches package metadata
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python scripts/check_release_version.py "${GITHUB_REF_NAME}"
+
       - name: Run tests
         shell: bash
         run: |
@@ -197,6 +201,9 @@ jobs:
 
       - name: Install build tooling
         run: python -m pip install --upgrade pip build
+
+      - name: Verify release tag matches package metadata
+        run: python scripts/check_release_version.py "${GITHUB_REF_NAME}"
 
       - name: Build PyPI distributions
         run: python -m build

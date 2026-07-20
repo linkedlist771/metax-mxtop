@@ -79,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SDK-wheel, missing-tool, special-path, remote-extra, and ANSI output cases.
 - CI now enforces at least 75% project-wide branch coverage on Python 3.13
   (current baseline about 77%) and the README exposes the workflow status.
+- Release jobs now reject `v*` tags that disagree with `pyproject.toml`,
+  `mxtop.__version__`, or the CHANGELOG release heading/comparison link.
 
 ### Changed
 

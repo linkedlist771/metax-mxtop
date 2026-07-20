@@ -75,6 +75,17 @@ them by hand.
 ## Releases
 
 Pushing to `main` builds a commit-addressed prerelease. Versioned releases
-are tag-driven: bump `version` in `pyproject.toml`, update `CHANGELOG.md`,
-tag `vX.Y.Z`, and push the tag — GitHub Actions builds the wheelhouse,
-creates the GitHub Release, and publishes to PyPI via Trusted Publishing.
+are tag-driven: bump both `version` in `pyproject.toml` and `__version__` in
+`src/mxtop/__init__.py`, move the release notes out of Unreleased and add the
+comparison link in `CHANGELOG.md`, then tag `vX.Y.Z` and push the tag.
+
+Before tagging, run:
+
+```bash
+python scripts/check_release_version.py vX.Y.Z
+```
+
+GitHub Actions runs the same guard before building or publishing, then builds
+the wheelhouse, creates the GitHub Release, and publishes to PyPI via Trusted
+Publishing. A mismatched tag/package/changelog fails before any release asset
+is published.
