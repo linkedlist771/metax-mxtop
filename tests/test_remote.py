@@ -271,6 +271,11 @@ def test_web_server_serves_snapshot_and_index():
         with urllib.request.urlopen(f"http://{host}:{port}/", timeout=5) as resp:
             html = resp.read()
             assert resp.headers.get_content_type() == "text/html"
+            assert resp.headers["X-Frame-Options"] == "DENY"
+            assert resp.headers["Referrer-Policy"] == "no-referrer"
+            csp = resp.headers["Content-Security-Policy"]
+            assert "script-src 'self'" in csp
+            assert "frame-ancestors 'none'" in csp
         assert b"mxtop" in html
         assert b'data-route="overview"' in html
         with urllib.request.urlopen(
@@ -285,6 +290,12 @@ def test_web_server_serves_snapshot_and_index():
             javascript = resp.read()
             assert resp.headers.get_content_type() == "text/javascript"
         assert b"renderOverview" in javascript
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/assets/theme.js", timeout=5
+        ) as resp:
+            theme = resp.read()
+            assert resp.headers.get_content_type() == "text/javascript"
+        assert b"searchParams.delete" in theme
         request = urllib.request.Request(f"http://{host}:{port}/favicon.ico")
         with urllib.request.urlopen(request, timeout=5) as resp:
             assert resp.status == 204
@@ -299,7 +310,7 @@ def test_dashboard_assets_have_views_and_responsive_guards():
         for name, payload in load_dashboard_assets().items()
     }
 
-    assert set(assets) == {"index.html", "dashboard.css", "dashboard.js"}
+    assert set(assets) == {"index.html", "dashboard.css", "dashboard.js", "theme.js"}
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in assets["index.html"]
     assert all(
         f'data-route="{route}"' in assets["index.html"]
@@ -310,8 +321,11 @@ def test_dashboard_assets_have_views_and_responsive_guards():
     assert 'data-theme="light"' in assets["dashboard.css"]
     assert '<meta name="color-scheme" content="dark light">' in assets["index.html"]
     assert 'id="theme-toggle"' in assets["index.html"]
-    assert "prefers-color-scheme" in assets["index.html"]
-    assert "mxtop-theme" in assets["dashboard.js"]
+    assert 'src="/assets/theme.js"' in assets["index.html"]
+    assert "prefers-color-scheme" in assets["theme.js"]
+    assert "mxtop-theme" in assets["theme.js"]
+    assert 'searchParams.delete("token")' in assets["theme.js"]
+    assert "<script>" not in assets["index.html"]
     assert 'id="download-snapshot"' in assets["index.html"]
     assert "download-snapshot" in assets["dashboard.js"]
     assert 'navigate("overview")' in assets["dashboard.js"]
@@ -352,6 +366,9 @@ def test_web_server_enforces_auth_token():
             cookie = resp.headers.get("Set-Cookie", "")
             assert "mxtop_token=s3cret" in cookie
             assert "HttpOnly" in cookie
+            assert "SameSite=Strict" in cookie
+            assert "Max-Age=86400" in cookie
+            assert resp.headers["Cache-Control"] == "no-store"
 
         cookie_request = urllib.request.Request(
             f"{base}/api/snapshot",

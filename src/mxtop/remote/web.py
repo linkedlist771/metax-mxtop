@@ -20,6 +20,19 @@ _ASSET_TYPES = {
     "index.html": "text/html; charset=utf-8",
     "dashboard.css": "text/css; charset=utf-8",
     "dashboard.js": "text/javascript; charset=utf-8",
+    "theme.js": "text/javascript; charset=utf-8",
+}
+
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+        # The dashboard sets layout custom properties and bar widths at runtime.
+        "style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; "
+        "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    ),
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
 
 _TOKEN_COOKIE = "mxtop_token"
@@ -91,6 +104,8 @@ def _make_handler(
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
+            for name, value in _SECURITY_HEADERS.items():
+                self.send_header(name, value)
             for name, value in (extra_headers or {}).items():
                 self.send_header(name, value)
             self.end_headers()
@@ -136,8 +151,10 @@ def _make_handler(
             if auth_token is not None and parse_qs(split.query).get("token"):
                 cookie_headers = {
                     "Set-Cookie": (
-                        f"{_TOKEN_COOKIE}={auth_token}; HttpOnly; SameSite=Strict; Path=/"
-                    )
+                        f"{_TOKEN_COOKIE}={auth_token}; HttpOnly; "
+                        "SameSite=Strict; Path=/; Max-Age=86400"
+                    ),
+                    "Cache-Control": "no-store",
                 }
             if path in ("/", "/index.html"):
                 self._send(
@@ -158,6 +175,8 @@ def _make_handler(
                     _ASSET_TYPES["dashboard.js"],
                     assets["dashboard.js"],
                 )
+            elif path == "/assets/theme.js":
+                self._send(200, _ASSET_TYPES["theme.js"], assets["theme.js"])
             elif path == "/favicon.ico":
                 self._send(204, "image/x-icon", b"")
             elif path == "/api/snapshot":
