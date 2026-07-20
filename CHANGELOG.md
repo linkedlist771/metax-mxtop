@@ -82,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release jobs now reject `v*` tags that disagree with `pyproject.toml`,
   `mxtop.__version__`, or the CHANGELOG release heading/comparison link;
   verify downloaded SHA256SUMS, derive tagged release notes from CHANGELOG,
-  and run Twine metadata validation before PyPI publication.
+  and run Twine metadata validation before PyPI publication. All third-party
+  Actions are pinned to immutable commit SHAs, with Dependabot tracking updates.
 
 ### Changed
 

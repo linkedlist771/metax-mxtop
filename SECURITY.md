@@ -62,6 +62,11 @@ The server sets a restrictive Content Security Policy, denies framing, sends
 limits concurrent SSE clients. These are defense-in-depth measures, not a
 replacement for TLS and network access control.
 
+The release workflow pins every third-party GitHub Action to an immutable
+40-character commit SHA. Dependabot monitors the GitHub Actions ecosystem for
+updates so these pins remain reviewable rather than silently following mutable
+tags.
+
 ## Out of scope
 
 Reports that require an attacker who already has arbitrary local root access,
