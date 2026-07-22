@@ -404,7 +404,7 @@ pip install metax-mxtop
 mxtop --version
 ```
 
-Branch and pull-request workflows run tests and build the offline wheelhouse. A push to `main` also creates a commit-addressed prerelease; versioned GitHub and PyPI publication is tag-driven:
+Branch and pull-request runs execute the Python compatibility matrix and build and test the offline wheelhouse. Release publication is gated on the Python 3.9 wheelhouse checks, the full Python 3.10-3.13 test matrix, and lint. A push to `main` creates a commit-addressed prerelease; versioned GitHub and PyPI publication is limited to `v*` tags:
 
 1. Bump `pyproject.toml`, `src/mxtop/__init__.py`, and the local package entry in `uv.lock`.
 2. Regenerate the preview, gallery, and showcase assets and run their `--check` commands.
@@ -413,7 +413,7 @@ Branch and pull-request workflows run tests and build the offline wheelhouse. A 
 5. Create a new semver tag, for example `v0.1.22`.
 6. Push the commit and that tag.
 
-GitHub Actions then builds the wheelhouse, creates or updates the versioned GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
+GitHub Actions builds and Twine-validates the wheel and source distribution once, bundles them with the offline wheelhouse and a shared `SHA256SUMS.txt`, and makes both publishers download and verify that same workflow artifact. Automation refuses to overwrite an existing tagged GitHub Release. The minimal PyPI job performs no checkout or rebuild; it publishes the prebuilt distributions through OIDC Trusted Publishing.
 
 ## More previews
 

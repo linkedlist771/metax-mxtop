@@ -88,8 +88,17 @@ Before tagging, run:
 python scripts/check_release_version.py vX.Y.Z
 ```
 
-GitHub Actions runs the same guard before building or publishing, verifies the
-downloaded wheelhouse checksums, derives the tagged GitHub Release notes from
-the matching CHANGELOG section, validates wheel/sdist metadata with Twine, and
-publishes to PyPI via Trusted Publishing. A mismatch, corrupt artifact, stale
-release note, or invalid distribution fails before publication.
+GitHub Actions runs the same version and CHANGELOG guard in the single
+distribution-build job. Publication waits for that job's Python 3.9 tests,
+lint, and offline-install check, plus the complete Python 3.10-3.13 test
+matrix. The build job creates and Twine-validates the wheel and sdist once,
+assembles the offline wheelhouse, and uploads one checksum-protected release
+artifact.
+
+The GitHub Release and PyPI jobs both download and verify that exact artifact;
+neither rebuilds the package. Tagged GitHub Releases are create-only, so an
+existing release fails instead of having its assets replaced. The PyPI job
+contains only download, checksum-verification, and Trusted Publishing steps,
+and it is the only job granted `id-token: write`. A metadata mismatch, corrupt
+artifact, stale release note, or invalid distribution fails before
+publication.

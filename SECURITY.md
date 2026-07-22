@@ -62,12 +62,21 @@ The server sets a restrictive Content Security Policy, denies framing, sends
 limits concurrent SSE clients. These are defense-in-depth measures, not a
 replacement for TLS and network access control.
 
-The release workflow pins every third-party GitHub Action to an immutable
+Release publication is gated on all configured test and lint jobs. The wheel
+and source distribution are built and validated once, and both GitHub Releases
+and PyPI verify the same checksum-protected workflow artifact before consuming
+it. Automation refuses to replace an existing tagged GitHub Release. OIDC
+permission is confined to the minimal PyPI job, which downloads, verifies, and
+publishes the prebuilt distributions without checking out source or rebuilding
+packages.
+
+The CI workflows pin every third-party GitHub Action to an immutable
 40-character commit SHA. Dependabot monitors both the GitHub Actions and Python
 package ecosystems monthly, so action pins and dependencies remain reviewable
 rather than silently following mutable tags or going stale. CodeQL runs
 `security-extended` queries over both the Python package and the dashboard's
-JavaScript on every push/PR and on a weekly schedule.
+JavaScript on every push, on eligible same-repository pull requests, and on a
+weekly schedule.
 
 ## Out of scope
 

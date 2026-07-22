@@ -88,13 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SDK-wheel, missing-tool, special-path, remote-extra, and ANSI output cases.
 - CI now enforces at least 75% project-wide branch coverage on Python 3.13
   (current baseline about 77%) and the README exposes the workflow status.
-- Release jobs now reject `v*` tags that disagree with `pyproject.toml`,
-  `mxtop.__version__`, or the CHANGELOG release heading/comparison link;
-  verify downloaded SHA256SUMS, derive tagged release notes from CHANGELOG,
-  and run Twine metadata validation before PyPI publication. All third-party
-  Actions are pinned to immutable commit SHAs, with Dependabot tracking Action
-  and Python dependency updates. A `dev` extra centralizes CI/local tooling,
-  and CodeQL runs extended Python/JavaScript security analysis.
+- Closed the release artifact trust-chain gap: publication now depends on the
+  complete test matrix and lint; the wheel and sdist are built and
+  Twine-validated once; and GitHub Releases and PyPI verify and consume the
+  same checksum-protected workflow artifact. Tagged GitHub Releases are
+  create-only rather than overwritten, and `id-token: write` is isolated to
+  the minimal PyPI download/verify/publish job. Tag, package-version,
+  CHANGELOG, and generated-release-note guards remain enforced.
+- All third-party GitHub Actions are pinned to immutable commit SHAs, with
+  Dependabot tracking Action and Python dependency updates. A `dev` extra
+  centralizes CI and local tooling, and CodeQL runs extended Python/JavaScript
+  security analysis.
 
 ### Changed
 

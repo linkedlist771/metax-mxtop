@@ -1,11 +1,11 @@
-name: Build and release wheels
+name: Test, build, and release
 
 on:
   push:
     branches:
       - "**"
     tags:
-      - "**"
+      - "v*"
   pull_request:
   workflow_dispatch:
 
@@ -87,8 +87,11 @@ jobs:
       - name: Run lint
         run: ruff check .
 
-      - name: Build project wheel
-        run: python -m build --wheel
+      - name: Build project distributions
+        run: python -m build
+
+      - name: Validate project distributions
+        run: python -m twine check dist/*.whl dist/*.tar.gz
 
       - name: Build Linux x86_64 offline wheelhouse
         run: |
@@ -117,40 +120,48 @@ jobs:
           PYTHONPATH=offline-test python -m mxtop.cli --version
 
       - name: Generate checksums
-        run: sha256sum dist/*.whl metax-mxtop-linux-x86_64-wheelhouse.tar.gz > SHA256SUMS.txt
+        run: sha256sum dist/*.whl dist/*.tar.gz metax-mxtop-linux-x86_64-wheelhouse.tar.gz > SHA256SUMS.txt
+
+      - name: Generate release notes
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            python scripts/extract_release_notes.py "${GITHUB_REF_NAME}" --output release-notes.md
+          else
+            printf 'Automated Linux x86_64 wheel build for commit %s.\n' "${GITHUB_SHA}" > release-notes.md
+          fi
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: metax-mxtop-linux-x86_64-wheels
+          name: metax-mxtop-release-artifacts
           path: |
             dist/*.whl
+            dist/*.tar.gz
             metax-mxtop-linux-x86_64-wheelhouse.tar.gz
             SHA256SUMS.txt
+            release-notes.md
+          if-no-files-found: error
 
   github-release:
     name: Publish GitHub Release
-    needs: linux-x86_64-wheelhouse
+    needs: [test-matrix, linux-x86_64-wheelhouse]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: write
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Download wheel artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
-          name: metax-mxtop-linux-x86_64-wheels
+          name: metax-mxtop-release-artifacts
           path: release-assets
 
       - name: Verify downloaded artifact checksums
         working-directory: release-assets
         run: sha256sum --check SHA256SUMS.txt
 
-      - name: Create or update GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -158,64 +169,61 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
             title="${GITHUB_REF_NAME}"
-            python scripts/extract_release_notes.py "${tag}" --output /tmp/release-notes.md
             create_args=(--verify-tag)
           else
             short_sha="${GITHUB_SHA::7}"
-            tag="build-${short_sha}"
+            tag="build-${GITHUB_SHA}"
             title="Build ${short_sha}"
-            printf 'Automated Linux x86_64 wheel build for commit %s.\n' "${GITHUB_SHA}" > /tmp/release-notes.md
             create_args=(--target "${GITHUB_SHA}" --prerelease)
           fi
 
           mapfile -t assets < <(find release-assets -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name 'SHA256SUMS.txt' \) | sort)
 
           if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${assets[@]}" --clobber
-            gh release edit "${tag}" --title "${title}" --notes-file /tmp/release-notes.md
-          else
-            gh release create "${tag}" \
-              "${assets[@]}" \
-              --title "${title}" \
-              --notes-file /tmp/release-notes.md \
-              "${create_args[@]}"
+            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+              echo "::error title=Release already exists::Refusing to replace assets for ${tag}."
+              exit 1
+            fi
+
+            if ! diff -u \
+              <(printf '%s\n' "${assets[@]##*/}" | sort) \
+              <(gh release view "${tag}" --json assets --jq '.assets[].name' | sort); then
+              echo "::error title=Incomplete existing prerelease::${tag} exists with a different asset set; refusing to mutate it."
+              exit 1
+            fi
+            echo "${tag} already contains the complete release asset set; leaving it unchanged."
+            exit 0
           fi
+
+          gh release create "${tag}" \
+            "${assets[@]}" \
+            --title "${title}" \
+            --notes-file release-assets/release-notes.md \
+            "${create_args[@]}"
 
   pypi-release:
     name: Publish PyPI package
-    needs: linux-x86_64-wheelhouse
+    needs: [test-matrix, linux-x86_64-wheelhouse]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:
       name: pypi
       url: https://pypi.org/p/metax-mxtop
     permissions:
-      contents: read
       id-token: write
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
-          python-version: "3.11"
-          cache: pip
+          name: metax-mxtop-release-artifacts
+          path: release-assets
 
-      - name: Install build tooling
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install '.[dev]'
-
-      - name: Verify release tag matches package metadata
-        run: python scripts/check_release_version.py "${GITHUB_REF_NAME}"
-
-      - name: Build PyPI distributions
-        run: python -m build
-
-      - name: Validate PyPI distributions
-        run: python -m twine check dist/*
+      - name: Verify downloaded artifact checksums
+        working-directory: release-assets
+        run: sha256sum --check SHA256SUMS.txt
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # release/v1
+        with:
+          packages-dir: release-assets/dist
