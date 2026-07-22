@@ -9,6 +9,9 @@ const refreshState = document.getElementById("refresh-state");
 const appStatus = document.getElementById("app-status");
 const pauseButton = document.getElementById("pause-updates");
 const pauseCount = document.getElementById("pause-count");
+const clearHistoryButton = document.getElementById("clear-history");
+const clearHistoryDialog = document.getElementById("clear-history-dialog");
+const historyStorage = window.mxtopHistoryStorage || null;
 const navButtons = [...document.querySelectorAll("[data-route]")];
 
 const state = {
@@ -38,14 +41,33 @@ const PROCESS_HISTORY_RETENTION = HISTORY_LIMIT;
 const PROCESS_RUNTIME_ROLLBACK_TOLERANCE = 1;
 const PROCESS_CREATE_TIME_TOLERANCE = 0.01;
 const PROCESS_IDENTITY_FIELDS = ["command", "user", "name", "process_type"];
-const history = {
-  sequence: 0,
-  lastTimestamp: null,
-  timestamps: [],
-  cluster: { util: [], memory: [], hostCpu: [] },
-  nodes: new Map(),
-  processes: new Map(),
-};
+const PERSISTED_HISTORY_VERSION = 1;
+const PERSISTED_PROCESS_LIMIT = 256;
+const PERSISTED_STRING_LIMIT = 16_384;
+const HISTORY_HYDRATION_TIMEOUT_MS = 750;
+const HISTORY_SAVE_DELAY_MS = 500;
+
+function emptyHistory() {
+  return {
+    sequence: 0,
+    lastTimestamp: null,
+    timestamps: [],
+    cluster: { util: [], memory: [], hostCpu: [] },
+    nodes: new Map(),
+    processes: new Map(),
+  };
+}
+
+const history = emptyHistory();
+
+function replaceHistory(target, source) {
+  target.sequence = source.sequence;
+  target.lastTimestamp = source.lastTimestamp;
+  target.timestamps = source.timestamps;
+  target.cluster = source.cluster;
+  target.nodes = source.nodes;
+  target.processes = source.processes;
+}
 
 function cloneHistory(source) {
   return {
@@ -79,6 +101,523 @@ function cloneHistory(source) {
 
 function historyForRender() {
   return state.paused && state.pausedHistory ? state.pausedHistory : history;
+}
+
+const PROCESS_SNAPSHOT_FIELDS = [
+  "gpu_index",
+  "pid",
+  "name",
+  "gpu_memory_bytes",
+  "user",
+  "command",
+  "cpu_percent",
+  "host_memory_bytes",
+  "runtime_seconds",
+  "process_type",
+  "gpu_util_percent",
+  "gpu_memory_bandwidth_util_percent",
+  "memory_util_percent",
+  "identity",
+  "create_time",
+];
+const PROCESS_SNAPSHOT_STRING_FIELDS = new Set([
+  "name",
+  "user",
+  "command",
+  "process_type",
+  "identity",
+]);
+
+function serializeProcessEntry(key, entry, sequence) {
+  const strings = [
+    entry.host,
+    entry.generationReason,
+    entry.explicitIdentity,
+    ...PROCESS_IDENTITY_FIELDS.map((field) => entry.identity[field]),
+    ...[...PROCESS_SNAPSHOT_STRING_FIELDS].map((field) => entry.latest[field]),
+  ];
+  if (strings.some((value) => value !== null && value !== undefined
+      && (typeof value !== "string" || value.length > PERSISTED_STRING_LIMIT))) {
+    return null;
+  }
+  const serialized = {
+    host: entry.host,
+    gpuIndex: entry.gpuIndex,
+    pid: entry.pid,
+    generation: entry.generation,
+    generationReason: entry.generationReason,
+    generationStartedAt: entry.generationStartedAt,
+    identity: Object.fromEntries(PROCESS_IDENTITY_FIELDS.map((field) => [
+      field,
+      entry.identity[field],
+    ])),
+    explicitIdentity: entry.explicitIdentity,
+    createTime: entry.createTime,
+    latest: Object.fromEntries(PROCESS_SNAPSHOT_FIELDS.map((field) => {
+      const value = entry.latest[field];
+      return [field, value === undefined ? null : value];
+    })),
+    reported: entry.reported,
+    ended: entry.ended,
+    nodeReachable: entry.nodeReachable,
+    lastRuntimeSeconds: entry.lastRuntimeSeconds,
+    lastSeenSequence: entry.lastSeenSequence,
+    lastSeenTimestamp: entry.lastSeenTimestamp,
+    timestamps: [...entry.timestamps],
+    cpu: [...entry.cpu],
+    hostMemory: [...entry.hostMemory],
+    gpuMemory: [...entry.gpuMemory],
+    gpuUtil: [...entry.gpuUtil],
+  };
+  return restoreProcessEntry(key, serialized, sequence) ? serialized : null;
+}
+
+function serializeHistory(source) {
+  const protectedKey = currentProcessHistoryKey();
+  const rankedProcesses = [...source.processes.entries()]
+    .sort((left, right) => Number(right[0] === protectedKey) - Number(left[0] === protectedKey)
+      || Number(right[1].reported) - Number(left[1].reported)
+      || right[1].lastSeenSequence - left[1].lastSeenSequence);
+  const processEntries = [];
+  for (const [key, entry] of rankedProcesses) {
+    const serialized = serializeProcessEntry(key, entry, source.sequence);
+    if (serialized) processEntries.push([key, serialized]);
+    if (processEntries.length >= PERSISTED_PROCESS_LIMIT) break;
+  }
+  return {
+    version: PERSISTED_HISTORY_VERSION,
+    sequence: source.sequence,
+    lastTimestamp: source.lastTimestamp,
+    timestamps: [...source.timestamps],
+    cluster: {
+      util: [...source.cluster.util],
+      memory: [...source.cluster.memory],
+      hostCpu: [...source.cluster.hostCpu],
+    },
+    nodes: [...source.nodes]
+      .slice(0, PROCESS_HISTORY_LIMIT)
+      .map(([hostname, series]) => [hostname, {
+        util: [...series.util],
+        memory: [...series.memory],
+      }]),
+    processes: processEntries,
+  };
+}
+
+function storedObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function storedString(value, { empty = true } = {}) {
+  return typeof value === "string"
+    && value.length <= PERSISTED_STRING_LIMIT
+    && (empty || value.length > 0);
+}
+
+function storedNumber(value, { integer = false, nullable = true } = {}) {
+  if (value === null && nullable) return true;
+  return finite(value) && (!integer || Number.isSafeInteger(value));
+}
+
+function restoreSeries(value, { monotonic = false } = {}) {
+  if (!Array.isArray(value) || value.length > HISTORY_LIMIT) return null;
+  let previous = null;
+  const restored = [];
+  for (const item of value) {
+    if (item !== null && !finite(item)) return null;
+    if (monotonic && finite(item) && finite(previous) && item < previous) return null;
+    restored.push(item);
+    if (finite(item)) previous = item;
+  }
+  return restored;
+}
+
+function restoreLatestProcess(value, gpuIndex, pid) {
+  if (!storedObject(value)) return null;
+  const restored = {};
+  for (const field of PROCESS_SNAPSHOT_FIELDS) {
+    const item = value[field];
+    if (PROCESS_SNAPSHOT_STRING_FIELDS.has(field)) {
+      if (item !== null && item !== undefined && !storedString(item)) return null;
+      restored[field] = item === undefined ? null : item;
+    } else {
+      const integer = field === "gpu_index" || field === "pid";
+      if (!storedNumber(item === undefined ? null : item, { integer })) return null;
+      restored[field] = item === undefined ? null : item;
+    }
+  }
+  if (restored.gpu_index !== gpuIndex || restored.pid !== pid) return null;
+  return restored;
+}
+
+function restoreProcessEntry(key, value, sequence) {
+  if (!storedString(key, { empty: false }) || !storedObject(value)) return null;
+  const integerFields = ["gpuIndex", "pid", "generation", "lastSeenSequence"];
+  if (!storedString(value.host, { empty: false })
+      || !integerFields.every((field) => storedNumber(value[field], {
+        integer: true,
+        nullable: false,
+      }))) return null;
+  if (value.gpuIndex < 0 || value.pid < 0 || value.generation < 1
+      || value.lastSeenSequence < 0 || value.lastSeenSequence > sequence
+      || key !== processKey(value.host, value.gpuIndex, value.pid)) return null;
+  if (!storedString(value.generationReason)
+      || !storedString(value.explicitIdentity)
+      || !storedObject(value.identity)
+      || !PROCESS_IDENTITY_FIELDS.every((field) => storedString(value.identity[field]))) {
+    return null;
+  }
+  const nullableNumbers = [
+    "generationStartedAt",
+    "createTime",
+    "lastRuntimeSeconds",
+    "lastSeenTimestamp",
+  ];
+  if (!nullableNumbers.every((field) => storedNumber(value[field]))) return null;
+  if (!["reported", "ended", "nodeReachable"].every((field) => {
+    return typeof value[field] === "boolean";
+  })) return null;
+  const timestamps = restoreSeries(value.timestamps, { monotonic: true });
+  const cpu = restoreSeries(value.cpu);
+  const hostMemory = restoreSeries(value.hostMemory);
+  const gpuMemory = restoreSeries(value.gpuMemory);
+  const gpuUtil = restoreSeries(value.gpuUtil);
+  if (!timestamps || !cpu || !hostMemory || !gpuMemory || !gpuUtil
+      || ![cpu, hostMemory, gpuMemory, gpuUtil].every((series) => {
+        return series.length === timestamps.length;
+      })) return null;
+  const latest = restoreLatestProcess(value.latest, value.gpuIndex, value.pid);
+  if (!latest) return null;
+  return {
+    host: value.host,
+    gpuIndex: value.gpuIndex,
+    pid: value.pid,
+    generation: value.generation,
+    generationReason: value.generationReason,
+    generationStartedAt: value.generationStartedAt,
+    identity: Object.fromEntries(PROCESS_IDENTITY_FIELDS.map((field) => {
+      return [field, value.identity[field]];
+    })),
+    explicitIdentity: value.explicitIdentity,
+    createTime: value.createTime,
+    latest,
+    reported: value.reported,
+    ended: value.ended,
+    nodeReachable: value.nodeReachable,
+    lastRuntimeSeconds: value.lastRuntimeSeconds,
+    lastSeenSequence: value.lastSeenSequence,
+    lastSeenTimestamp: value.lastSeenTimestamp,
+    timestamps,
+    cpu,
+    hostMemory,
+    gpuMemory,
+    gpuUtil,
+  };
+}
+
+function restoreHistory(value, currentTimestamp, storedTimestamp) {
+  if (!storedObject(value)
+      || value.version !== PERSISTED_HISTORY_VERSION
+      || !storedNumber(value.sequence, { integer: true, nullable: false })
+      || value.sequence < 0
+      || !storedNumber(value.lastTimestamp)
+      || !finite(storedTimestamp)
+      || value.lastTimestamp !== storedTimestamp
+      || (finite(value.lastTimestamp) && finite(currentTimestamp)
+        && value.lastTimestamp > currentTimestamp)
+      || !storedObject(value.cluster)) return null;
+  const timestamps = restoreSeries(value.timestamps, { monotonic: true });
+  const util = restoreSeries(value.cluster.util);
+  const memory = restoreSeries(value.cluster.memory);
+  const hostCpu = restoreSeries(value.cluster.hostCpu);
+  if (!timestamps || !util || !memory || !hostCpu
+      || ![util, memory, hostCpu].every((series) => {
+        return series.length === timestamps.length;
+      })) return null;
+  if (!Array.isArray(value.nodes) || value.nodes.length > PROCESS_HISTORY_LIMIT
+      || !Array.isArray(value.processes)
+      || value.processes.length > PERSISTED_PROCESS_LIMIT) return null;
+  const nodes = new Map();
+  for (const candidate of value.nodes) {
+    if (!Array.isArray(candidate) || candidate.length !== 2
+        || !storedString(candidate[0], { empty: false })
+        || nodes.has(candidate[0]) || !storedObject(candidate[1])) return null;
+    const nodeUtil = restoreSeries(candidate[1].util);
+    const nodeMemory = restoreSeries(candidate[1].memory);
+    if (!nodeUtil || !nodeMemory || nodeUtil.length !== nodeMemory.length
+        || nodeUtil.length > timestamps.length) return null;
+    nodes.set(candidate[0], { util: nodeUtil, memory: nodeMemory });
+  }
+  const processes = new Map();
+  for (const candidate of value.processes) {
+    if (!Array.isArray(candidate) || candidate.length !== 2 || processes.has(candidate[0])) {
+      return null;
+    }
+    const entry = restoreProcessEntry(candidate[0], candidate[1], value.sequence);
+    if (!entry) return null;
+    processes.set(candidate[0], entry);
+  }
+  return {
+    sequence: value.sequence,
+    lastTimestamp: value.lastTimestamp,
+    timestamps,
+    cluster: { util, memory, hostCpu },
+    nodes,
+    processes,
+  };
+}
+
+const historyPersistence = {
+  signature: null,
+  ready: false,
+  hydrationEpoch: 0,
+  saveEpoch: 0,
+  pending: [],
+  saveTimer: null,
+  failureAnnounced: false,
+  clearing: false,
+  storageBlocked: false,
+};
+
+function clusterHistorySignature(cluster) {
+  if (!cluster || !Array.isArray(cluster.nodes)) return null;
+  const hosts = [];
+  for (const node of cluster.nodes) {
+    if (!node || typeof node.hostname !== "string") return null;
+    const hostname = node.hostname.normalize("NFC");
+    if (!hostname || hostname.length > 1024) return null;
+    hosts.push(hostname);
+  }
+  return JSON.stringify([...new Set(hosts)].sort());
+}
+
+function queueHistoryCluster(cluster) {
+  const timestamp = cluster.timestamp;
+  const existing = historyPersistence.pending.findIndex((candidate) => {
+    return finite(timestamp) && candidate.timestamp === timestamp;
+  });
+  if (existing >= 0) historyPersistence.pending[existing] = cluster;
+  else historyPersistence.pending.push(cluster);
+  if (historyPersistence.pending.length > HISTORY_LIMIT) {
+    historyPersistence.pending.shift();
+  }
+}
+
+function pendingHistoryTimestamp() {
+  const timestamps = historyPersistence.pending.map((cluster) => cluster.timestamp)
+    .filter(finite);
+  return timestamps.length ? Math.max(...timestamps) : null;
+}
+
+function stopScheduledHistorySave() {
+  historyPersistence.saveEpoch += 1;
+  if (historyPersistence.saveTimer !== null) {
+    clearTimeout(historyPersistence.saveTimer);
+    historyPersistence.saveTimer = null;
+  }
+}
+
+function historyLoadWithDeadline(cluster) {
+  if (!historyStorage) {
+    return Promise.resolve({ ok: false, status: "unavailable", payload: null });
+  }
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      resolve({
+        ok: false,
+        status: "timeout",
+        payload: null,
+      });
+    }, HISTORY_HYDRATION_TIMEOUT_MS);
+    historyStorage.load(cluster).then((loadResult) => {
+      clearTimeout(timeout);
+      resolve(loadResult);
+    }, () => {
+      clearTimeout(timeout);
+      resolve({ ok: false, status: "unavailable", payload: null });
+    });
+  });
+}
+
+function showHistoryLoading() {
+  app.setAttribute("aria-busy", "true");
+  if (appStatus) {
+    appStatus.textContent = "Loading saved incident history for the current cluster.";
+  }
+  const loading = element("div", "loading-state");
+  append(loading, element("span", "loading-line"), element("span", "", "Loading current cluster"));
+  app.replaceChildren(loading);
+}
+
+function resetForHistoryScope(signature) {
+  stopScheduledHistorySave();
+  historyPersistence.signature = signature;
+  historyPersistence.ready = false;
+  historyPersistence.pending = [];
+  historyPersistence.failureAnnounced = false;
+  historyPersistence.clearing = false;
+  historyPersistence.storageBlocked = false;
+  replaceHistory(history, emptyHistory());
+  state.cluster = null;
+  state.latestCluster = null;
+  state.paused = false;
+  state.bufferedUpdates = 0;
+  state.pausedHistory = null;
+  state.renderedRouteKey = null;
+  state.announcedProcess = null;
+  clearHistoryButton.disabled = true;
+  showHistoryLoading();
+  updateShell();
+}
+
+async function hydrateHistoryScope(cluster, signature, epoch) {
+  const loadResult = await historyLoadWithDeadline(cluster);
+  if (epoch !== historyPersistence.hydrationEpoch
+      || signature !== historyPersistence.signature) return;
+  const currentTimestamp = pendingHistoryTimestamp();
+  let restored = null;
+  let invalidSavedHistory = loadResult.status === "invalid";
+  if (loadResult.status === "timeout") historyPersistence.storageBlocked = true;
+  if (loadResult.ok && loadResult.status === "loaded") {
+    restored = restoreHistory(
+      loadResult.payload,
+      currentTimestamp,
+      loadResult.lastTimestamp,
+    );
+    if (!restored) {
+      invalidSavedHistory = true;
+      if (historyStorage) await historyStorage.clear(cluster);
+    }
+  }
+  if (epoch !== historyPersistence.hydrationEpoch
+      || signature !== historyPersistence.signature) return;
+  replaceHistory(history, restored || emptyHistory());
+  historyPersistence.ready = true;
+  const pending = historyPersistence.pending.splice(0)
+    .sort((left, right) => {
+      if (!finite(left.timestamp)) return finite(right.timestamp) ? 1 : 0;
+      if (!finite(right.timestamp)) return -1;
+      return left.timestamp - right.timestamp;
+    });
+  for (const pendingCluster of pending) applyCluster(pendingCluster);
+  app.setAttribute("aria-busy", "false");
+  render();
+  scheduleHistorySave();
+  if (appStatus && restored) {
+    const samples = restored.timestamps.length;
+    appStatus.textContent = `Restored ${samples} incident history sample${samples === 1 ? "" : "s"} from this browser session.`;
+  } else if (appStatus && invalidSavedHistory) {
+    appStatus.textContent = "Saved incident history was invalid and was not restored.";
+  } else if (appStatus && loadResult.status === "timeout") {
+    appStatus.textContent = "Saved incident history did not load in time. New history remains in memory for this page.";
+  } else if (appStatus && loadResult.status === "unavailable") {
+    appStatus.textContent = "Encrypted reload recovery is unavailable in this browser context. Incident history remains in memory.";
+  } else if (appStatus && loadResult.status === "expired") {
+    appStatus.textContent = "Saved incident history expired. Showing the current sample.";
+  } else if (appStatus) {
+    appStatus.textContent = "Current cluster loaded. No saved incident history was found.";
+  }
+}
+
+function beginHistoryScope(cluster, signature) {
+  if (historyPersistence.signature !== null && historyPersistence.ready) {
+    void persistHistoryNow();
+  }
+  resetForHistoryScope(signature);
+  queueHistoryCluster(cluster);
+  historyPersistence.hydrationEpoch += 1;
+  const epoch = historyPersistence.hydrationEpoch;
+  void hydrateHistoryScope(cluster, signature, epoch);
+}
+
+function receiveCluster(cluster) {
+  const signature = clusterHistorySignature(cluster);
+  if (!signature) return false;
+  if (signature !== historyPersistence.signature) {
+    beginHistoryScope(cluster, signature);
+    return true;
+  }
+  if (!historyPersistence.ready) {
+    queueHistoryCluster(cluster);
+    return true;
+  }
+  if (!applyCluster(cluster)) return false;
+  if (state.paused) updateShell();
+  else render();
+  return true;
+}
+
+async function persistHistoryNow(epoch = historyPersistence.saveEpoch) {
+  if (!historyStorage || !historyPersistence.ready || !state.latestCluster
+      || historyPersistence.clearing || historyPersistence.storageBlocked
+      || !finite(history.lastTimestamp)
+      || epoch !== historyPersistence.saveEpoch) {
+    return null;
+  }
+  if (historyPersistence.saveTimer !== null) {
+    clearTimeout(historyPersistence.saveTimer);
+    historyPersistence.saveTimer = null;
+  }
+  const result = await historyStorage.save(
+    state.latestCluster,
+    serializeHistory(history),
+    history.lastTimestamp,
+  );
+  if (epoch !== historyPersistence.saveEpoch) return result;
+  if (!result.ok && !historyPersistence.failureAnnounced && appStatus) {
+    historyPersistence.failureAnnounced = true;
+    appStatus.textContent = "Incident history remains in memory because browser storage is unavailable.";
+  }
+  return result;
+}
+
+function scheduleHistorySave() {
+  if (!historyPersistence.ready || !state.latestCluster || historyPersistence.clearing
+      || historyPersistence.storageBlocked) {
+    return;
+  }
+  if (historyPersistence.saveTimer !== null) clearTimeout(historyPersistence.saveTimer);
+  const epoch = historyPersistence.saveEpoch;
+  historyPersistence.saveTimer = setTimeout(() => {
+    void persistHistoryNow(epoch);
+  }, HISTORY_SAVE_DELAY_MS);
+}
+
+function historySeed(cluster) {
+  const seeded = emptyHistory();
+  if (cluster && Array.isArray(cluster.nodes)) {
+    recordHistory(cluster, seeded);
+    seeded.lastTimestamp = finite(cluster.timestamp) ? cluster.timestamp : null;
+  }
+  return seeded;
+}
+
+async function clearIncidentHistory() {
+  if (!historyPersistence.ready) return;
+  const signature = historyPersistence.signature;
+  historyPersistence.clearing = true;
+  stopScheduledHistorySave();
+  clearHistoryButton.disabled = true;
+  app.setAttribute("aria-busy", "true");
+  if (appStatus) appStatus.textContent = "Clearing saved incident history.";
+  let clearResult = { ok: false, status: "unavailable" };
+  try {
+    if (historyStorage) clearResult = await historyStorage.clear();
+  } catch (_) {}
+  if (signature !== historyPersistence.signature) return;
+  if (clearResult.ok) historyPersistence.storageBlocked = false;
+  replaceHistory(history, historySeed(state.latestCluster || state.cluster));
+  if (state.paused) state.pausedHistory = historySeed(state.cluster);
+  historyPersistence.clearing = false;
+  app.setAttribute("aria-busy", "false");
+  state.announcedProcess = null;
+  render();
+  scheduleHistorySave();
+  if (appStatus) {
+    appStatus.textContent = clearResult.ok
+      ? "Incident history cleared. The current sample remains."
+      : "Incident history cleared from memory. Browser storage was unavailable.";
+  }
 }
 
 function pushBounded(series, value) {
@@ -196,26 +735,26 @@ function currentProcessHistoryKey() {
     : null;
 }
 
-function pruneProcessHistory() {
+function pruneProcessHistory(targetHistory = history) {
   const protectedKey = currentProcessHistoryKey();
-  for (const [key, entry] of history.processes) {
-    const age = history.sequence - entry.lastSeenSequence;
+  for (const [key, entry] of targetHistory.processes) {
+    const age = targetHistory.sequence - entry.lastSeenSequence;
     if (key !== protectedKey && !entry.reported && age > PROCESS_HISTORY_RETENTION) {
-      history.processes.delete(key);
+      targetHistory.processes.delete(key);
     }
   }
-  if (history.processes.size <= PROCESS_HISTORY_LIMIT) return;
-  const candidates = [...history.processes.entries()]
+  if (targetHistory.processes.size <= PROCESS_HISTORY_LIMIT) return;
+  const candidates = [...targetHistory.processes.entries()]
     .filter(([key]) => key !== protectedKey)
     .sort((left, right) => Number(left[1].reported) - Number(right[1].reported)
       || left[1].lastSeenSequence - right[1].lastSeenSequence);
-  while (history.processes.size > PROCESS_HISTORY_LIMIT && candidates.length) {
-    history.processes.delete(candidates.shift()[0]);
+  while (targetHistory.processes.size > PROCESS_HISTORY_LIMIT && candidates.length) {
+    targetHistory.processes.delete(candidates.shift()[0]);
   }
 }
 
-function recordProcessHistory(stats, timestamp) {
-  history.sequence += 1;
+function recordProcessHistory(stats, timestamp, targetHistory = history) {
+  targetHistory.sequence += 1;
   const seen = new Set();
   const nodeByHost = new Map(stats.nodes.map((node) => [node.hostname, node]));
   for (const node of stats.nodes) {
@@ -224,50 +763,57 @@ function recordProcessHistory(stats, timestamp) {
       const key = processKey(node.hostname, process.gpu_index, process.pid);
       if (seen.has(key)) continue;
       seen.add(key);
-      let entry = history.processes.get(key);
+      let entry = targetHistory.processes.get(key);
       const resetReason = entry
         ? processGenerationChangeReason(entry, process)
         : "First observed";
       if (!entry || resetReason) {
-        entry = newProcessHistory(node, process, entry, resetReason, timestamp);
-        history.processes.set(key, entry);
+        entry = newProcessHistory(
+          node,
+          process,
+          entry,
+          resetReason,
+          timestamp,
+          targetHistory,
+        );
+        targetHistory.processes.set(key, entry);
       }
-      appendProcessSample(entry, node, process, timestamp);
+      appendProcessSample(entry, node, process, timestamp, targetHistory);
     }
   }
-  for (const [key, entry] of history.processes) {
+  for (const [key, entry] of targetHistory.processes) {
     if (seen.has(key)) continue;
     const node = nodeByHost.get(entry.host);
     entry.reported = false;
     entry.nodeReachable = Boolean(node && node.reachable);
     if (node && node.reachable) entry.ended = true;
   }
-  pruneProcessHistory();
+  pruneProcessHistory(targetHistory);
 }
 
-function recordHistory(cluster) {
+function recordHistory(cluster, targetHistory = history) {
   const stats = clusterStats(cluster);
   const timestamp = cluster.timestamp;
-  recordProcessHistory(stats, timestamp);
+  recordProcessHistory(stats, timestamp, targetHistory);
   if (!stats.nodeCount) return;
-  pushBounded(history.timestamps, timestamp);
-  pushBounded(history.cluster.util, stats.avgUtil);
-  pushBounded(history.cluster.memory, stats.memory);
-  pushBounded(history.cluster.hostCpu, stats.hostCpu);
+  pushBounded(targetHistory.timestamps, timestamp);
+  pushBounded(targetHistory.cluster.util, stats.avgUtil);
+  pushBounded(targetHistory.cluster.memory, stats.memory);
+  pushBounded(targetHistory.cluster.hostCpu, stats.hostCpu);
   const seen = new Set();
   for (const node of stats.nodes) {
     seen.add(node.hostname);
-    let series = history.nodes.get(node.hostname);
+    let series = targetHistory.nodes.get(node.hostname);
     if (!series) {
       series = { util: [], memory: [] };
-      history.nodes.set(node.hostname, series);
+      targetHistory.nodes.set(node.hostname, series);
     }
     const nodeData = nodeStats(node);
     pushBounded(series.util, node.reachable ? nodeData.util : null);
     pushBounded(series.memory, node.reachable ? nodeData.memory : null);
   }
-  for (const hostname of history.nodes.keys()) {
-    if (!seen.has(hostname)) history.nodes.delete(hostname);
+  for (const hostname of targetHistory.nodes.keys()) {
+    if (!seen.has(hostname)) targetHistory.nodes.delete(hostname);
   }
 }
 
@@ -283,6 +829,7 @@ function applyCluster(cluster) {
   if (!replay) {
     recordHistory(cluster);
     history.lastTimestamp = finite(timestamp) ? timestamp : null;
+    scheduleHistorySave();
     if (state.paused) {
       state.bufferedUpdates += 1;
       if (state.bufferedUpdates === 1 && appStatus) {
@@ -1868,6 +2415,9 @@ function updateShell() {
     ? `${transportState} | Paused${state.bufferedUpdates ? ` | ${state.bufferedUpdates} buffered` : ""}`
     : transportState;
   pauseButton.disabled = !state.cluster;
+  clearHistoryButton.disabled = !state.cluster || !historyPersistence.ready
+    || historyPersistence.clearing;
+  downloadButton.disabled = !state.cluster;
   pauseButton.setAttribute("aria-pressed", state.paused ? "true" : "false");
   pauseButton.title = state.paused
     ? "Resume dashboard updates (P)"
@@ -1977,6 +2527,18 @@ for (const button of navButtons) {
 
 pauseButton.addEventListener("click", togglePaused);
 
+clearHistoryButton.addEventListener("click", () => {
+  if (!clearHistoryDialog || clearHistoryButton.disabled) return;
+  clearHistoryDialog.returnValue = "";
+  clearHistoryButton.setAttribute("aria-expanded", "true");
+  clearHistoryDialog.showModal();
+});
+
+clearHistoryDialog.addEventListener("close", () => {
+  clearHistoryButton.setAttribute("aria-expanded", "false");
+  if (clearHistoryDialog.returnValue === "clear") void clearIncidentHistory();
+});
+
 const themeToggle = document.getElementById("theme-toggle");
 
 function syncThemeToggle() {
@@ -2022,6 +2584,7 @@ function _isTypingTarget(target) {
 
 document.addEventListener("keydown", (event) => {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (clearHistoryDialog.open) return;
   if (_isTypingTarget(event.target)) {
     if (event.key === "Escape") event.target.blur();
     return;
@@ -2051,8 +2614,9 @@ if (!window.location.hash) {
 fetch("/api/snapshot")
   .then((response) => response.ok ? response.json() : null)
   .then((cluster) => {
-    if (cluster && Array.isArray(cluster.nodes) && !state.latestCluster) {
-      if (applyCluster(cluster)) render();
+    if (cluster && Array.isArray(cluster.nodes)
+        && !state.latestCluster && historyPersistence.pending.length === 0) {
+      receiveCluster(cluster);
     }
   })
   .catch(() => {});
@@ -2065,10 +2629,9 @@ stream.onopen = () => {
 stream.onmessage = (event) => {
   try {
     const cluster = JSON.parse(event.data);
-    if (applyCluster(cluster)) {
+    if (cluster && Array.isArray(cluster.nodes)) {
       state.connected = true;
-      if (state.paused) updateShell();
-      else render();
+      receiveCluster(cluster);
     }
   } catch (_) {
     refreshState.textContent = "Invalid sample";
@@ -2087,5 +2650,10 @@ window.addEventListener("online", () => {
   state.connected = stream.readyState === EventSource.OPEN;
   updateShell();
 });
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") void persistHistoryNow();
+});
+window.addEventListener("pagehide", () => { void persistHistoryNow(); });
 
 render();

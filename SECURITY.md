@@ -57,6 +57,21 @@ The dashboard and exporter use plain HTTP. `--auth-token` protects access but
    PIDs, process command lines, GPU UUIDs/BDFs, resource usage, and cluster
    topology.
 
+In a secure browser context, the dashboard keeps its bounded incident history
+available across reloads in the same browser tab for up to one hour. The
+IndexedDB record is encrypted with AES-GCM and partitioned by a hash of the
+monitored host set; its random key lives only in `sessionStorage`, is never
+derived from the dashboard token, and is rotated on a new `?token=` bootstrap.
+When the browser discards that tab session, old ciphertext becomes
+undecryptable even if the browser has not yet removed it. Use Clear history in
+the footer to remove the current tab session's retained trends and process
+records; the current live sample remains visible.
+
+Web Crypto is available only in secure browser contexts. Loopback origins are
+normally browser-trusted; non-loopback clients should access the dashboard
+through an HTTPS reverse proxy. On plain LAN HTTP, the dashboard keeps incident
+history only in memory for the open page and cannot recover it after a reload.
+
 The server sets a restrictive Content Security Policy, denies framing, sends
 `Referrer-Policy: no-referrer`, disables unnecessary browser permissions, and
 limits concurrent SSE clients. These are defense-in-depth measures, not a

@@ -14,6 +14,9 @@
   // it is not left in the address bar, copied URLs, or subsequent history.
   const url = new URL(window.location.href);
   if (url.searchParams.has("token")) {
+    // A new authorization bootstrap must not unlock history from an earlier
+    // browser session. The token itself is never read or stored here.
+    try { sessionStorage.removeItem("mxtop-history-session-v1"); } catch (_) {}
     url.searchParams.delete("token");
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }

@@ -345,13 +345,19 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   unavailable values stay last. The header pause control or `p`/`Z` freezes the
   exact displayed snapshot across navigation, search, sorting, and JSON export;
   SSE ingestion and bounded history continue, buffered sample count remains
-  visible, and resume applies the newest frame atomically. Remote process rows
-  are enriched with one batched `ps` query per node; missing Linux host fields
-  degrade to unavailable values without taking the node offline. View state is
-  encoded in the URL hash, so browser back/forward navigation works without
-  reconnecting to the nodes. Dark and light themes follow the browser's
-  `prefers-color-scheme` and can be switched with the header toggle; the choice
-  persists in the browser.
+  visible, and resume applies the newest frame atomically. Bounded incident
+  history also survives same-tab reloads for up to one hour when the dashboard
+  runs in a secure browser context (HTTPS or browser-trusted loopback): it is
+  stored as AES-GCM ciphertext partitioned by the monitored host set, while the
+  key lives only in `sessionStorage` and is rotated on a new token bootstrap.
+  On plain LAN HTTP, history remains in memory for the open page. Clear history
+  removes the current tab session's retained trends and process records while
+  preserving the current sample. Remote process rows are enriched with one
+  batched `ps` query per node; missing Linux host fields degrade to unavailable
+  values without taking the node offline. View state is encoded in the URL hash,
+  so browser back/forward navigation works without reconnecting to the nodes.
+  Dark and light themes follow the browser's `prefers-color-scheme` and can be
+  switched with the header toggle; the choice persists in the browser.
 - Each node runs the same `mx-smi` queries as the local backend; override the
   remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
 

@@ -356,6 +356,13 @@ def test_web_server_serves_snapshot_and_index():
             theme = resp.read()
             assert resp.headers.get_content_type() == "text/javascript"
         assert b"searchParams.delete" in theme
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/assets/history-storage.js", timeout=5
+        ) as resp:
+            history_storage = resp.read()
+            assert resp.headers.get_content_type() == "text/javascript"
+        assert b"mxtopHistoryStorage" in history_storage
+        assert b"AES-GCM" in history_storage
         request = urllib.request.Request(f"http://{host}:{port}/favicon.ico")
         with urllib.request.urlopen(request, timeout=5) as resp:
             assert resp.status == 204
@@ -370,7 +377,13 @@ def test_dashboard_assets_have_views_and_responsive_guards():
         for name, payload in load_dashboard_assets().items()
     }
 
-    assert set(assets) == {"index.html", "dashboard.css", "dashboard.js", "theme.js"}
+    assert set(assets) == {
+        "index.html",
+        "dashboard.css",
+        "dashboard.js",
+        "history-storage.js",
+        "theme.js",
+    }
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in assets["index.html"]
     assert all(
         f'data-route="{route}"' in assets["index.html"]
@@ -382,9 +395,25 @@ def test_dashboard_assets_have_views_and_responsive_guards():
     assert '<meta name="color-scheme" content="dark light">' in assets["index.html"]
     assert 'id="theme-toggle"' in assets["index.html"]
     assert 'src="/assets/theme.js"' in assets["index.html"]
+    assert 'src="/assets/history-storage.js"' in assets["index.html"]
+    assert assets["index.html"].index('src="/assets/theme.js"') < assets[
+        "index.html"
+    ].index('src="/assets/history-storage.js"') < assets["index.html"].index(
+        'src="/assets/dashboard.js"'
+    )
     assert "prefers-color-scheme" in assets["theme.js"]
     assert "mxtop-theme" in assets["theme.js"]
     assert 'searchParams.delete("token")' in assets["theme.js"]
+    rotation = 'sessionStorage.removeItem("mxtop-history-session-v1")'
+    assert rotation in assets["theme.js"]
+    assert assets["theme.js"].index(rotation) < assets["theme.js"].index(
+        'searchParams.delete("token")'
+    )
+    assert "mxtopHistoryStorage" in assets["history-storage.js"]
+    assert 'DB_NAME = "mxtop-dashboard-history"' in assets["history-storage.js"]
+    assert 'name: "AES-GCM"' in assets["history-storage.js"]
+    assert "additionalData" in assets["history-storage.js"]
+    assert "token" not in assets["history-storage.js"].lower()
     assert "<script>" not in assets["index.html"]
     assert 'id="download-snapshot"' in assets["index.html"]
     assert "download-snapshot" in assets["dashboard.js"]

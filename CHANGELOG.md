@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Encrypted same-tab reload recovery for the remote dashboard's bounded
+  incident history when the page runs in a secure browser context. AES-GCM
+  ciphertext is partitioned by the monitored host set, expires after one hour,
+  uses a `sessionStorage`-only key, and can be removed with the new Clear history
+  action without losing the current sample.
 - A true pause mode for the remote dashboard: the header control or `p`/`Z`
   freezes the displayed snapshot across navigation, filtering, sorting, and
   JSON download while SSE ingestion and bounded history continue. The UI

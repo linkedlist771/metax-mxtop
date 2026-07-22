@@ -22,6 +22,7 @@ _ASSET_TYPES = {
     "index.html": "text/html; charset=utf-8",
     "dashboard.css": "text/css; charset=utf-8",
     "dashboard.js": "text/javascript; charset=utf-8",
+    "history-storage.js": "text/javascript; charset=utf-8",
     "theme.js": "text/javascript; charset=utf-8",
 }
 
@@ -216,6 +217,12 @@ def _make_handler(
                     200,
                     _ASSET_TYPES["dashboard.js"],
                     assets["dashboard.js"],
+                )
+            elif path == "/assets/history-storage.js":
+                self._send(
+                    200,
+                    _ASSET_TYPES["history-storage.js"],
+                    assets["history-storage.js"],
                 )
             elif path == "/assets/theme.js":
                 self._send(200, _ASSET_TYPES["theme.js"], assets["theme.js"])

@@ -7,6 +7,7 @@
   <title>mxtop cluster</title>
   <link rel="stylesheet" href="/assets/dashboard.css">
   <script src="/assets/theme.js"></script>
+  <script src="/assets/history-storage.js" defer></script>
   <script src="/assets/dashboard.js" defer></script>
 </head>
 <body>
@@ -37,7 +38,7 @@
     </div>
   </header>
   <div id="app-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
-  <main id="app" tabindex="-1">
+  <main id="app" tabindex="-1" aria-busy="true">
     <div class="loading-state">
       <span class="loading-line"></span>
       <span>Waiting for first sample</span>
@@ -47,9 +48,24 @@
     <span id="sample-time">No sample yet</span>
     <span class="footer-hints" aria-hidden="true">1/2/3: views &nbsp; /: search &nbsp; Esc: blur</span>
     <span class="footer-right">
-      <button type="button" id="download-snapshot" class="footer-button">Download JSON</button>
+      <span class="footer-actions">
+        <button type="button" id="clear-history" class="footer-button"
+                aria-haspopup="dialog" aria-controls="clear-history-dialog"
+                aria-expanded="false" disabled>Clear history</button>
+        <button type="button" id="download-snapshot" class="footer-button" disabled>Download JSON</button>
+      </span>
       <span id="refresh-state">SSE</span>
     </span>
   </footer>
+  <dialog id="clear-history-dialog" class="history-dialog" aria-labelledby="clear-history-title" aria-describedby="clear-history-description">
+    <form method="dialog" class="history-dialog-form">
+      <h2 id="clear-history-title">Clear incident history?</h2>
+      <p id="clear-history-description">The current live sample will remain visible. Retained trends and process history will be removed.</p>
+      <div class="history-dialog-actions">
+        <button value="cancel" class="history-dialog-button" autofocus>Cancel</button>
+        <button value="clear" id="confirm-clear-history" class="history-dialog-button danger">Clear</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

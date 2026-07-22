@@ -1096,6 +1096,13 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
+.footer-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .footer-button {
   flex: 0 0 auto;
   padding: 3px 8px;
@@ -1108,14 +1115,119 @@ tbody tr:last-child td {
   cursor: pointer;
 }
 
-.footer-button:hover {
+.footer-button:not(:disabled):hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.footer-button:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.history-dialog {
+  width: min(380px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
+}
+
+.history-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.58);
+}
+
+.history-dialog-form {
+  padding: 18px;
+}
+
+.history-dialog h2 {
+  margin: 0;
+  color: var(--title-text);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.history-dialog p {
+  margin: 8px 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.history-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.history-dialog-button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-strong);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.history-dialog-button:hover {
+  border-color: var(--input-hover-line);
+  background: var(--surface-hover);
+}
+
+.history-dialog-button.danger {
+  border-color: var(--critical);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.history-dialog-button.danger:hover {
+  border-color: var(--error-text);
+  background: var(--error-bg);
 }
 
 @media (max-width: 760px) {
   .footer-hints {
     display: none;
+  }
+
+  .app-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    row-gap: 5px;
+    padding-inline: 12px;
+  }
+
+  #sample-time {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .footer-right {
+    display: grid;
+    width: 100%;
+    max-width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    justify-self: stretch;
+    row-gap: 5px;
+    white-space: normal;
+  }
+
+  .footer-actions,
+  #refresh-state {
+    min-width: 0;
+    justify-self: end;
+  }
+
+  #refresh-state {
+    overflow-wrap: anywhere;
+    text-align: right;
   }
 }
 
@@ -1260,29 +1372,20 @@ tbody tr:last-child td {
     display: none;
   }
 
-  .app-footer {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: center;
-    row-gap: 5px;
-    padding-inline: 12px;
+  .history-dialog {
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: 80vh;
+    margin: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 6px 6px 0 0;
   }
 
-  #sample-time {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .footer-right {
-    max-width: 100%;
-    justify-self: end;
-    white-space: normal;
-  }
-
-  #refresh-state {
-    min-width: 0;
-    overflow-wrap: anywhere;
-    text-align: right;
+  .history-dialog-form {
+    padding: 18px 16px calc(16px + env(safe-area-inset-bottom));
   }
 }
 
@@ -1297,6 +1400,11 @@ tbody tr:last-child td {
   .theme-toggle {
     width: 44px;
     height: 44px;
+  }
+
+  .footer-button,
+  .history-dialog-button {
+    min-height: 44px;
   }
 
   .sort-button {

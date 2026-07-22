@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
+from dataclasses import dataclass
+import json
 import sys
 import threading
 
@@ -23,9 +26,75 @@ TRAINING_PID = 423_901
 REMOTE_PROCESS_IDENTITY = "0:423901"
 
 
+@dataclass(frozen=True)
+class FixtureProfile:
+    primary_host: str
+    secondary_host: str
+    uuid_prefix: str
+    primary_identity: str
+    training_command: str
+    training_user: str
+    reused_command: str
+    reused_user: str
+    evaluator_identity: str
+    evaluator_command: str
+    evaluator_user: str
+    render_identity: str
+    render_command: str
+    render_user: str
+
+
+FIXTURE_PROFILES = {
+    "alpha": FixtureProfile(
+        primary_host="atlas-01",
+        secondary_host="borealis-02",
+        uuid_prefix="MX-FIXTURE",
+        primary_identity=REMOTE_PROCESS_IDENTITY,
+        training_command="python train.py --config configs/llama3-70b.yaml --bf16",
+        training_user="alice",
+        reused_command=(
+            "python -m inference.server --model /models/mx-70b --port 9000"
+        ),
+        reused_user="service",
+        evaluator_identity="fixture:evaluator:424250",
+        evaluator_command="python evaluate.py --suite reasoning-v2",
+        evaluator_user="bob",
+        render_identity="fixture:render:781044",
+        render_command="python render_batch.py --queue production",
+        render_user="carol",
+    ),
+    "beta": FixtureProfile(
+        primary_host="cygnus-11",
+        secondary_host="draco-12",
+        uuid_prefix="MX-BETA",
+        primary_identity="beta:0:423901",
+        training_command="python beta_train.py --config configs/mixtral-8x22b.yaml",
+        training_user="diana",
+        reused_command=(
+            "python -m beta_inference.server --model /models/beta-65b --port 9100"
+        ),
+        reused_user="beta-service",
+        evaluator_identity="beta:evaluator:424250",
+        evaluator_command="python beta_evaluate.py --suite code-v3",
+        evaluator_user="erin",
+        render_identity="beta:render:781044",
+        render_command="python beta_render_batch.py --queue staging",
+        render_user="frank",
+    ),
+}
+
+
+def _fixture_profile(name: str) -> FixtureProfile:
+    try:
+        return FIXTURE_PROFILES[name]
+    except KeyError:
+        raise ValueError(f"unknown fixture profile: {name!r}") from None
+
+
 def _device(
     index: int,
     *,
+    uuid_prefix: str,
     gpu_util: float,
     memory_percent: float,
     temperature: float,
@@ -36,7 +105,7 @@ def _device(
     return DeviceSnapshot(
         index=index,
         name="MetaX C500",
-        uuid=f"MX-FIXTURE-{index:02d}",
+        uuid=f"{uuid_prefix}-{index:02d}",
         bdf=f"0000:{0x21 + index * 0x17:02x}:00.0",
         temperature_c=temperature,
         power_w=power,
@@ -88,17 +157,17 @@ def _process(
     )
 
 
-def _primary_process(step: int) -> ProcessSnapshot | None:
+def _primary_process(step: int, profile: FixtureProfile) -> ProcessSnapshot | None:
     training_util = (58.0, 67.0, 79.0, 91.0, 84.0, 72.0)
     if step < len(training_util):
         return _process(
             0,
             TRAINING_PID,
-            identity=REMOTE_PROCESS_IDENTITY,
+            identity=profile.primary_identity,
             create_time=None,
             runtime=15_840.0 + step * 2.0,
-            command="python train.py --config configs/llama3-70b.yaml --bf16",
-            user="alice",
+            command=profile.training_command,
+            user=profile.training_user,
             gpu_memory_mib=48_640.0 + step * 192.0,
             gpu_util=training_util[step],
             cpu=248.0 + step * 14.0,
@@ -110,11 +179,11 @@ def _primary_process(step: int) -> ProcessSnapshot | None:
     return _process(
         0,
         TRAINING_PID,
-        identity=REMOTE_PROCESS_IDENTITY,
+        identity=profile.primary_identity,
         create_time=None,
         runtime=2.0 + generation_step * 2.0,
-        command="python -m inference.server --model /models/mx-70b --port 9000",
-        user="service",
+        command=profile.reused_command,
+        user=profile.reused_user,
         gpu_memory_mib=min(42_000.0, 20_480.0 + generation_step * 64.0),
         gpu_util=min(88.0, 34.0 + generation_step * 7.0),
         cpu=96.0 + generation_step * 5.0,
@@ -122,26 +191,27 @@ def _primary_process(step: int) -> ProcessSnapshot | None:
     )
 
 
-def fixture_cluster(step: int) -> ClusterSnapshot:
+def fixture_cluster(step: int, profile: str = "alpha") -> ClusterSnapshot:
     """Return sample ``step`` from the active -> exited -> PID-reused sequence."""
 
     step = max(0, int(step))
-    primary = _primary_process(step)
+    profile_data = _fixture_profile(profile)
+    primary = _primary_process(step, profile_data)
     primary_util = primary.gpu_util_percent if primary is not None else 2.0
     primary_memory = (
         primary.gpu_memory_bytes / (64 * GIB) * 100.0
         if primary is not None and primary.gpu_memory_bytes is not None
         else 3.0
     )
-    atlas_processes = [
+    primary_processes = [
         _process(
             1,
             424_250,
-            identity="fixture:evaluator:424250",
+            identity=profile_data.evaluator_identity,
             create_time=FIXED_TIMESTAMP - 5_400.0,
             runtime=5_400.0 + step * 2.0,
-            command="python evaluate.py --suite reasoning-v2",
-            user="bob",
+            command=profile_data.evaluator_command,
+            user=profile_data.evaluator_user,
             gpu_memory_mib=8_192.0,
             gpu_util=24.0 + step % 4 * 3.0,
             cpu=68.0,
@@ -149,10 +219,10 @@ def fixture_cluster(step: int) -> ClusterSnapshot:
         )
     ]
     if primary is not None:
-        atlas_processes.insert(0, primary)
+        primary_processes.insert(0, primary)
 
     timestamp = FIXED_TIMESTAMP + step * 2.0
-    atlas_host = HostSnapshot(
+    primary_host_snapshot = HostSnapshot(
         cpu_percent=46.0 + step % 5 * 2.5,
         memory_used_bytes=92 * GIB,
         memory_total_bytes=256 * GIB,
@@ -162,43 +232,63 @@ def fixture_cluster(step: int) -> ClusterSnapshot:
         load_average_15m=3.86,
         uptime_seconds=1_064_800.0 + step * 2.0,
     )
-    atlas_frame = FrameSnapshot(
+    primary_frame = FrameSnapshot(
         devices=[
             _device(
                 0,
+                uuid_prefix=profile_data.uuid_prefix,
                 gpu_util=primary_util or 0.0,
                 memory_percent=primary_memory,
                 temperature=66.0,
                 power=238.0,
             ),
             _device(
-                1, gpu_util=29.0, memory_percent=22.0, temperature=54.0, power=166.0
+                1,
+                uuid_prefix=profile_data.uuid_prefix,
+                gpu_util=29.0,
+                memory_percent=22.0,
+                temperature=54.0,
+                power=166.0,
             ),
-            _device(2, gpu_util=3.0, memory_percent=5.0, temperature=42.0, power=82.0),
-            _device(3, gpu_util=0.0, memory_percent=2.0, temperature=40.0, power=76.0),
+            _device(
+                2,
+                uuid_prefix=profile_data.uuid_prefix,
+                gpu_util=3.0,
+                memory_percent=5.0,
+                temperature=42.0,
+                power=82.0,
+            ),
+            _device(
+                3,
+                uuid_prefix=profile_data.uuid_prefix,
+                gpu_util=0.0,
+                memory_percent=2.0,
+                temperature=40.0,
+                power=76.0,
+            ),
         ],
-        processes=atlas_processes,
-        backend="fixture@atlas-01",
+        processes=primary_processes,
+        backend=f"fixture@{profile_data.primary_host}",
         timestamp=timestamp,
     )
-    atlas = (
+    primary_node = (
         NodeSnapshot(
-            hostname="atlas-01",
+            hostname=profile_data.primary_host,
             reachable=False,
             error="SSH keepalive timed out",
             latency_ms=1_002.0,
         )
         if step == 6
         else NodeSnapshot(
-            hostname="atlas-01",
+            hostname=profile_data.primary_host,
             reachable=True,
             latency_ms=18.4,
-            host=atlas_host,
-            frame=atlas_frame,
+            host=primary_host_snapshot,
+            frame=primary_frame,
         )
     )
-    borealis = NodeSnapshot(
-        hostname="borealis-02",
+    secondary_node = NodeSnapshot(
+        hostname=profile_data.secondary_host,
         reachable=True,
         latency_ms=27.1,
         host=HostSnapshot(
@@ -214,32 +304,42 @@ def fixture_cluster(step: int) -> ClusterSnapshot:
         frame=FrameSnapshot(
             devices=[
                 _device(
-                    0, gpu_util=63.0, memory_percent=68.0, temperature=61.0, power=221.0
+                    0,
+                    uuid_prefix=profile_data.uuid_prefix,
+                    gpu_util=63.0,
+                    memory_percent=68.0,
+                    temperature=61.0,
+                    power=221.0,
                 ),
                 _device(
-                    1, gpu_util=47.0, memory_percent=51.0, temperature=58.0, power=194.0
+                    1,
+                    uuid_prefix=profile_data.uuid_prefix,
+                    gpu_util=47.0,
+                    memory_percent=51.0,
+                    temperature=58.0,
+                    power=194.0,
                 ),
             ],
             processes=[
                 _process(
                     0,
                     781_044,
-                    identity="fixture:render:781044",
+                    identity=profile_data.render_identity,
                     create_time=FIXED_TIMESTAMP - 2_100.0,
                     runtime=2_100.0 + step * 2.0,
-                    command="python render_batch.py --queue production",
-                    user="carol",
+                    command=profile_data.render_command,
+                    user=profile_data.render_user,
                     gpu_memory_mib=32_768.0,
                     gpu_util=61.0,
                     cpu=188.0,
                     host_memory_gib=17.8,
                 )
             ],
-            backend="fixture@borealis-02",
+            backend=f"fixture@{profile_data.secondary_host}",
             timestamp=timestamp,
         ),
     )
-    return ClusterSnapshot(nodes=[atlas, borealis], timestamp=timestamp)
+    return ClusterSnapshot(nodes=[primary_node, secondary_node], timestamp=timestamp)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -247,6 +347,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--interval", type=float, default=0.75)
+    parser.add_argument(
+        "--profile",
+        choices=tuple(FIXTURE_PROFILES),
+        default="alpha",
+        help="fixture cluster profile (default: alpha)",
+    )
     parser.add_argument(
         "--step",
         type=int,
@@ -264,6 +370,55 @@ def build_parser() -> argparse.ArgumentParser:
         help="publish a step whenever its number is read from standard input",
     )
     return parser
+
+
+def _parse_control_line(line: str, current_profile: str) -> tuple[str, int]:
+    stripped = line.strip()
+    try:
+        step = int(stripped)
+    except ValueError:
+        pass
+    else:
+        if step < 0:
+            raise ValueError("step must be non-negative")
+        _fixture_profile(current_profile)
+        return current_profile, step
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise ValueError("expected an integer step or JSON control object") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("JSON control must be an object")
+    if set(payload) != {"profile", "step"}:
+        raise ValueError("JSON control requires exactly 'profile' and 'step'")
+    profile = payload["profile"]
+    step = payload["step"]
+    if not isinstance(profile, str):
+        raise ValueError("profile must be a string")
+    _fixture_profile(profile)
+    if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+        raise ValueError("step must be a non-negative integer")
+    return profile, step
+
+
+def _publish_control_updates(
+    holder: SnapshotHolder,
+    lines: Iterable[str],
+    initial_profile: str,
+) -> None:
+    current_profile = initial_profile
+    for line in lines:
+        try:
+            current_profile, step = _parse_control_line(line, current_profile)
+        except ValueError as exc:
+            print(
+                f"Ignoring invalid dashboard fixture control: {line.strip()!r} ({exc})",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        holder.update(fixture_cluster(step, current_profile))
 
 
 def _next_step(current: int, stop_step: int | None) -> int | None:
@@ -289,30 +444,15 @@ def main(argv: list[str] | None = None) -> int:
 
     holder = SnapshotHolder()
     initial_step = args.step if args.step is not None else args.start_step
-    holder.update(fixture_cluster(initial_step))
+    holder.update(fixture_cluster(initial_step, args.profile))
     server = make_server(holder, bind=args.bind, port=args.port)
     stop = threading.Event()
     poller = None
 
     if args.control_stdin:
-
-        def control() -> None:
-            for line in sys.stdin:
-                try:
-                    step = int(line.strip())
-                    if step < 0:
-                        raise ValueError
-                except ValueError:
-                    print(
-                        f"Ignoring invalid dashboard fixture step: {line.strip()!r}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    continue
-                holder.update(fixture_cluster(step))
-
         poller = threading.Thread(
-            target=control,
+            target=_publish_control_updates,
+            args=(holder, sys.stdin, args.profile),
             name="mxtop-dashboard-fixture-control",
             daemon=True,
         )
@@ -326,7 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                 if next_step is None:
                     continue
                 step = next_step
-                holder.update(fixture_cluster(step))
+                holder.update(fixture_cluster(step, args.profile))
 
         poller = threading.Thread(
             target=advance, name="mxtop-dashboard-fixture", daemon=True
