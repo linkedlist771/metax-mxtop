@@ -459,6 +459,7 @@ def test_cli_remote_mode_is_mutually_exclusive_with_local_modes(mode, capsys):
         ("--port", "9000", "--once"),
         ("--bind", "0.0.0.0", "--once"),
         ("--remote-mxsmi-path", "/opt/mx-smi", "--once"),
+        ("--remote-command-timeout", "3", "--once"),
         ("--open", "--once"),
     ),
 )
@@ -498,6 +499,22 @@ def test_cli_rejects_invalid_remote_ports(port, capsys):
 
     assert exc_info.value.code == 2
     assert "port must be between 1 and 65535" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1", "0.01", "nan", "inf"))
+def test_cli_rejects_invalid_remote_command_timeouts(timeout, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                f"--remote-command-timeout={timeout}",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "remote command timeout must be at least 0.1s" in capsys.readouterr().err
 
 
 def test_cli_reports_remote_inventory_errors_without_traceback(tmp_path, capsys):
@@ -557,7 +574,32 @@ def test_cli_remote_mode_discovers_hosts_when_nodes_are_omitted(monkeypatch, cap
     assert observed["results"] == results
     assert observed["hosts"] == ["node-a"]
     assert observed["kwargs"]["mxsmi_path"] == "mx-smi"
+    assert observed["kwargs"]["command_timeout"] == 10.0
     assert capsys.readouterr().err == ""
+
+
+def test_cli_passes_remote_command_timeout_to_monitor(monkeypatch):
+    from mxtop.remote import app as remote_app
+
+    observed = {}
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda _hosts, **kwargs: observed.update(kwargs) or 0,
+    )
+
+    rc = main(
+        [
+            "--remote-mode",
+            "--nodes",
+            "node-a",
+            "--remote-command-timeout",
+            "2.5",
+        ]
+    )
+
+    assert rc == 0
+    assert observed["command_timeout"] == 2.5
 
 
 def test_cli_discover_merges_explicit_and_configured_hosts(monkeypatch):

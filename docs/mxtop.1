@@ -180,6 +180,11 @@ environment variable.
 .B \-\-remote\-mxsmi\-path \fIPATH\fR
 Path to mx-smi on the remote hosts.
 .TP
+.B \-\-remote\-command\-timeout \fISEC\fR
+Maximum time for each remote telemetry command (default: 10 seconds,
+minimum: 0.1). A timed-out command marks that node down for the sample and
+reconnects it on the next poll instead of blocking the whole cluster.
+.TP
 .B \-\-open
 Open the dashboard in a browser.
 .SH INTERACTIVE KEYS
@@ -261,6 +266,7 @@ table with
 .BR port ,
 .BR auth-token ,
 .BR mxsmi-path ,
+.BR command-timeout ,
 .BR open .
 .SH ENVIRONMENT
 .TP

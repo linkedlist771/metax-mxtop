@@ -65,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remote cluster polling now bounds every SSH telemetry command with a
+  configurable timeout (`--remote-command-timeout` / `[remote]
+  command-timeout`). A hung `mx-smi`, host, or process query marks only that
+  node down and reconnects it on the next sample instead of freezing updates
+  for the entire fleet.
 - Process-table header detection (click-to-sort and header coloring) no
   longer breaks when the active sort indicator (`▲`/`▼`) replaces the
   space after the GPU, PID, or USER column label.

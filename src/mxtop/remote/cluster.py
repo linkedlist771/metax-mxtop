@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import shlex
 import time
 from typing import Any
 
 from mxtop.backends.mxsmi import (
+    DEFAULT_MXSMI_TIMEOUT,
     DMON_SNAPSHOT_ARGS,
     LIST_ARGS_VARIANTS,
     PROCESS_ARGS,
@@ -30,6 +32,9 @@ from mxtop.remote.processes import (
 from mxtop.remote import ssh
 
 
+DEFAULT_REMOTE_COMMAND_TIMEOUT = DEFAULT_MXSMI_TIMEOUT
+
+
 def _command(mxsmi_path: str, args: list[str]) -> str:
     return " ".join(shlex.quote(token) for token in [mxsmi_path, *args])
 
@@ -44,11 +49,16 @@ class ClusterMonitor:
         interval: float = 2.0,
         mxsmi_path: str = "mx-smi",
         connect_timeout: float = 10.0,
+        command_timeout: float = DEFAULT_REMOTE_COMMAND_TIMEOUT,
     ) -> None:
+        command_timeout = float(command_timeout)
+        if not math.isfinite(command_timeout) or command_timeout <= 0:
+            raise ValueError("command_timeout must be positive and finite")
         self.hosts = list(hosts)
         self.interval = max(0.5, interval)
         self.mxsmi_path = mxsmi_path
         self.connect_timeout = connect_timeout
+        self.command_timeout = command_timeout
         self._conns: dict[str, Any] = {}
         self._versions: dict[str, tuple[str | None, str | None]] = {}
         self._host_cpu_samples: dict[str, HostCpuSample] = {}
@@ -61,7 +71,11 @@ class ClusterMonitor:
         return conn
 
     async def _run_command(self, conn: Any, command: str) -> tuple[int, str]:
-        result = await conn.run(command, check=False)
+        result = await conn.run(
+            command,
+            check=False,
+            timeout=self.command_timeout,
+        )
         return (result.exit_status or 0), (result.stdout or "")
 
     async def _run(self, conn: Any, args: list[str]) -> tuple[int, str]:

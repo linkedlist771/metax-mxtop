@@ -9,6 +9,7 @@ import urllib.request
 from mxtop.backends.mxsmi import build_frame_from_outputs
 from mxtop.models import ClusterSnapshot, DeviceSnapshot, FrameSnapshot, NodeSnapshot
 from mxtop.remote import discovery, ssh
+from mxtop.remote import app as remote_app
 from mxtop.remote.app import _is_loopback, report_discovery
 from mxtop.remote.discovery import discover_configured_hosts
 from mxtop.remote.nodes import load_hosts, merge_hosts
@@ -219,6 +220,63 @@ def test_report_discovery_prints_inventory_and_failure(capsys):
     assert "checked 2 SSH config host(s)" in output
     assert "+ node-a: 8 GPU(s), 10ms" in output
     assert "- node-b: offline, 21ms" in output
+
+
+def test_run_remote_passes_command_timeout_to_cluster_monitor(monkeypatch, capsys):
+    observed = {}
+
+    class FakeMonitor:
+        interval = 2.0
+
+        def __init__(self, hosts, **kwargs):
+            observed.update(hosts=hosts, kwargs=kwargs)
+
+    class FakeThread:
+        def __init__(self, *, target, name, daemon):
+            observed.update(target=target, thread_name=name, daemon=daemon)
+
+        def start(self):
+            observed["started"] = True
+
+        def join(self, *, timeout):
+            observed["join_timeout"] = timeout
+
+    class InstantServer:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def shutdown(self):
+            observed["shutdown"] = True
+
+        def server_close(self):
+            observed["closed"] = True
+
+    monkeypatch.setattr(ssh, "import_asyncssh", lambda: object())
+    monkeypatch.setattr(remote_app, "ClusterMonitor", FakeMonitor)
+    monkeypatch.setattr(remote_app.threading, "Thread", FakeThread)
+    monkeypatch.setattr(remote_app, "make_server", lambda *_args, **_kwargs: InstantServer())
+
+    rc = remote_app.run_remote(
+        ["node-a"],
+        interval=1.5,
+        mxsmi_path="/opt/mx-smi",
+        command_timeout=2.5,
+    )
+
+    assert rc == 0
+    assert observed["hosts"] == ["node-a"]
+    assert observed["kwargs"] == {
+        "interval": 1.5,
+        "mxsmi_path": "/opt/mx-smi",
+        "command_timeout": 2.5,
+    }
+    assert observed["thread_name"] == "mxtop-cluster"
+    assert observed["daemon"] is True
+    assert observed["started"] is True
+    assert observed["shutdown"] is True
+    assert observed["closed"] is True
+    assert observed["join_timeout"] == 2.0
+    assert "mxtop remote dashboard" in capsys.readouterr().out
 
 
 def test_sanitize_replaces_non_finite_floats():

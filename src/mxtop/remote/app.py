@@ -7,7 +7,7 @@ import ipaddress
 import threading
 import webbrowser
 
-from mxtop.remote.cluster import ClusterMonitor
+from mxtop.remote.cluster import DEFAULT_REMOTE_COMMAND_TIMEOUT, ClusterMonitor
 from mxtop.remote.discovery import HostDiscovery
 from mxtop.remote.web import (
     SnapshotHolder,
@@ -58,6 +58,7 @@ def run_remote(
     port: int = 8080,
     interval: float = 2.0,
     mxsmi_path: str = "mx-smi",
+    command_timeout: float = DEFAULT_REMOTE_COMMAND_TIMEOUT,
     open_browser: bool = False,
     auth_token: str | None = None,
 ) -> int:
@@ -66,7 +67,12 @@ def run_remote(
     ssh.import_asyncssh()
 
     holder = SnapshotHolder()
-    monitor = ClusterMonitor(hosts, interval=interval, mxsmi_path=mxsmi_path)
+    monitor = ClusterMonitor(
+        hosts,
+        interval=interval,
+        mxsmi_path=mxsmi_path,
+        command_timeout=command_timeout,
+    )
     stop = threading.Event()
 
     def _worker() -> None:

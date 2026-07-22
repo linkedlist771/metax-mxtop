@@ -14,6 +14,7 @@ import time
 from mxtop import __version__
 from mxtop._compat import DATACLASS_SLOTS
 from mxtop.backends import TelemetryBackend, create_backend
+from mxtop.backends.mxsmi import DEFAULT_MXSMI_TIMEOUT
 from mxtop.config import load_config
 from mxtop.filters import (
     apply_filters,
@@ -38,6 +39,8 @@ from mxtop.ui.text import to_ascii
 from mxtop.ui.state import LayoutMode
 
 MIN_INTERVAL = 0.25
+MIN_REMOTE_COMMAND_TIMEOUT = 0.1
+DEFAULT_REMOTE_COMMAND_TIMEOUT = DEFAULT_MXSMI_TIMEOUT
 MXTOP_GPU_THRESHOLDS_ENV = "MXTOP_GPU_UTILIZATION_THRESHOLDS"
 MXTOP_MEM_THRESHOLDS_ENV = "MXTOP_MEMORY_UTILIZATION_THRESHOLDS"
 MXTOP_MONITOR_MODE_ENV = "MXTOP_MONITOR_MODE"
@@ -76,6 +79,15 @@ def _port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return port
+
+
+def _remote_command_timeout(value: str) -> float:
+    timeout = float(value)
+    if not math.isfinite(timeout) or timeout < MIN_REMOTE_COMMAND_TIMEOUT:
+        raise argparse.ArgumentTypeError(
+            f"remote command timeout must be at least {MIN_REMOTE_COMMAND_TIMEOUT}s"
+        )
+    return timeout
 
 
 def _count(value: str) -> int:
@@ -421,6 +433,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="mx-smi path on remote hosts",
     )
     _ = remote.add_argument(
+        "--remote-command-timeout",
+        type=_remote_command_timeout,
+        default=argparse.SUPPRESS,
+        metavar="SEC",
+        help=(
+            "maximum time for each remote telemetry command in seconds "
+            f"(default: {DEFAULT_REMOTE_COMMAND_TIMEOUT:g})"
+        ),
+    )
+    _ = remote.add_argument(
         "--auth-token",
         default=argparse.SUPPRESS,
         metavar="TOKEN",
@@ -505,6 +527,7 @@ REMOTE_ARGUMENTS = (
     "port",
     "bind",
     "remote_mxsmi_path",
+    "remote_command_timeout",
     "auth_token",
     "open",
 )
@@ -594,6 +617,7 @@ def _apply_config_defaults(
             ("remote_port", "port"),
             ("remote_auth_token", "auth_token"),
             ("remote_mxsmi_path", "remote_mxsmi_path"),
+            ("remote_command_timeout", "remote_command_timeout"),
             ("remote_open", "open"),
         ):
             if config_key == "remote_auth_token" and os.environ.get(
@@ -741,6 +765,11 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
                 port=getattr(args, "port", 8080),
                 interval=args.interval,
                 mxsmi_path=mxsmi_path,
+                command_timeout=getattr(
+                    args,
+                    "remote_command_timeout",
+                    DEFAULT_REMOTE_COMMAND_TIMEOUT,
+                ),
                 open_browser=getattr(args, "open", False),
                 auth_token=(
                     getattr(args, "auth_token", None)

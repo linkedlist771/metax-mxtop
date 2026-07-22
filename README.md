@@ -212,6 +212,7 @@ Useful CLI flags:
 | `--json` | Print one JSON snapshot and exit. |
 | `--json-lines`, `--ndjson` | Print snapshots as one compact JSON object per line (NDJSON). |
 | `--export-metrics` | Serve local telemetry as a Prometheus `/metrics` endpoint (default port `9532`); honors `--bind`, `--port`, `--auth-token`, and `--interval`. |
+| `--remote-command-timeout SEC` | Bound each remote dashboard SSH command (default `10.0`, minimum `0.1`). |
 | `--no-color` | Disable ANSI colors in text output. |
 | `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
 | `--colorful` | Use spectrum-like gradient colors for bar charts. On terminals advertising truecolor (`COLORTERM=truecolor`), the gradient uses a smooth 16-step 24-bit ramp; otherwise the 256-color palette. |
@@ -265,6 +266,7 @@ bind = "127.0.0.1"
 port = 8080
 auth-token = "change-me"
 mxsmi-path = "mx-smi"
+command-timeout = 10.0   # maximum seconds for each remote command
 open = false
 ```
 
@@ -300,8 +302,10 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   serves on `127.0.0.1` by default (`--bind` to change), and streams live
   updates over Server-Sent Events. Wildcard binds (`0.0.0.0` / `::`) print a
   usable localhost access URL separately from the all-interfaces listener;
-  IPv6 access URLs are bracketed correctly. Unreachable nodes are shown as down
-  instead of breaking the page.
+  IPv6 access URLs are bracketed correctly. Every SSH telemetry command has a
+  finite deadline (`--remote-command-timeout`, default 10s), so a hung command
+  marks only that node down and reconnects it on the next sample instead of
+  freezing updates for the whole fleet.
 - Dashboard access can be protected with a shared token via `--auth-token`
   or the `MXTOP_AUTH_TOKEN` environment variable. Requests must then carry
   `Authorization: Bearer <token>`, or visit `http://host:port/?token=<token>`

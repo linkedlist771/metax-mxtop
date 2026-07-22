@@ -48,6 +48,7 @@ bind = "0.0.0.0"
 port = 9000
 auth-token = "s3cret"
 mxsmi-path = "/opt/bin/mx-smi"
+command-timeout = 4.5
 open = true
 """
     )
@@ -65,6 +66,7 @@ open = true
         "remote_port": 9000,
         "remote_auth_token": "s3cret",
         "remote_mxsmi_path": "/opt/bin/mx-smi",
+        "remote_command_timeout": 4.5,
         "remote_open": True,
     }
 
@@ -79,6 +81,7 @@ monitor = "huge"
 gpu-util-thresh = [5]
 [remote]
 timeout = 3
+command-timeout = 0
 """
     )
     config = load_config(path)
@@ -89,6 +92,7 @@ timeout = 3
     assert "monitor should be one of" in err
     assert "gpu-util-thresh should be a list of two integers" in err
     assert "unknown key remote.timeout" in err
+    assert "remote.command-timeout must be at least 0.1" in err
 
 
 def test_load_config_warns_on_parse_error(tmp_path, capsys):
@@ -139,3 +143,31 @@ def test_cli_flag_overrides_config_interval(config_file, monkeypatch, capsys):
     assert rc == 0
     assert sleeps == [0.25]
     capsys.readouterr()
+
+
+def test_remote_command_timeout_config_and_cli_precedence(config_file, monkeypatch):
+    from mxtop.remote import app as remote_app
+
+    config_file.write_text("[remote]\ncommand-timeout = 4.5\n")
+    observed: list[float] = []
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda _hosts, **kwargs: observed.append(kwargs["command_timeout"]) or 0,
+    )
+
+    assert main(["--remote-mode", "--nodes", "node-a"]) == 0
+    assert (
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                "--remote-command-timeout",
+                "2.25",
+            ]
+        )
+        == 0
+    )
+
+    assert observed == [4.5, 2.25]

@@ -13,6 +13,7 @@ than silently ignored, so typos are discoverable.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -41,6 +42,7 @@ REMOTE_KEYS = {
     "port": int,
     "auth-token": str,
     "mxsmi-path": str,
+    "command-timeout": float,
     "open": bool,
 }
 
@@ -118,8 +120,14 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
                     _warn(f"unknown key remote.{remote_key}")
                     continue
                 coerced = _coerce("remote.", remote_key, remote_value, expected)
-                if coerced is not None:
-                    config[f"remote_{remote_key.replace('-', '_')}"] = coerced
+                if coerced is None:
+                    continue
+                if remote_key == "command-timeout" and (
+                    not math.isfinite(coerced) or coerced < 0.1
+                ):
+                    _warn("remote.command-timeout must be at least 0.1")
+                    continue
+                config[f"remote_{remote_key.replace('-', '_')}"] = coerced
             continue
         expected = TOP_LEVEL_KEYS.get(key)
         if expected is None:
