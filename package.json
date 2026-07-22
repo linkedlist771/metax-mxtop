@@ -1,0 +1,14 @@
+{
+  "name": "metax-mxtop-dashboard-tests",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test:dashboard": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}

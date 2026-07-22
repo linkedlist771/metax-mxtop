@@ -114,12 +114,13 @@ def test_third_party_actions_are_pinned_to_full_commit_shas():
     assert not mutable, "mutable action references:\n" + "\n".join(mutable)
 
 
-def test_dependabot_tracks_action_and_python_dependency_updates():
+def test_dependabot_tracks_action_python_and_browser_dependency_updates():
     config = (ROOT / ".github" / "dependabot.yml").read_text()
     assert "package-ecosystem: github-actions" in config
     assert "package-ecosystem: pip" in config
+    assert "package-ecosystem: npm" in config
     assert "development-tooling:" in config
-    assert config.count("interval: monthly") == 2
+    assert config.count("interval: monthly") == 3
 
 
 def test_codeql_scans_python_and_javascript_with_extended_queries():
@@ -166,6 +167,30 @@ def test_release_publishers_require_tests_and_the_single_distribution_build():
     assert "SHA256SUMS.txt" in upload_step
     assert "release-notes.md" in upload_step
     assert "if-no-files-found: error" in upload_step
+
+
+def test_dashboard_browser_suite_gates_the_distribution_build():
+    workflow = WHEELS_WORKFLOW.read_text()
+    build_job = _job_block(workflow, "linux-x86_64-wheelhouse")
+    setup_node = _action_step(build_job, "actions/setup-node")
+
+    assert _yaml_scalar(_yaml_block(setup_node, "with"), "node-version") == "22"
+    assert "cache: npm" in setup_node
+    assert "npm ci" in build_job
+    assert "npx playwright install --with-deps --only-shell chromium" in build_job
+    assert "npm run test:dashboard" in build_job
+    assert build_job.index("npm run test:dashboard") < build_job.index(
+        "python -m build"
+    )
+    diagnostics = build_job.split(
+        "- name: Upload dashboard browser diagnostics", 1
+    )[1]
+    assert build_job.index("- name: Upload workflow artifact") < build_job.index(
+        "- name: Upload dashboard browser diagnostics"
+    )
+    assert "if: failure()" in diagnostics
+    assert "path: test-results/" in diagnostics
+    assert "if-no-files-found: ignore" in diagnostics
 
 
 def test_pypi_publishes_the_verified_build_artifact_without_rebuilding():

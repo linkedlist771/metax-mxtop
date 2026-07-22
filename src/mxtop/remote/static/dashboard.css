@@ -116,9 +116,22 @@ button {
 
 button:focus-visible,
 input:focus-visible,
+a:focus-visible,
 [tabindex="0"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 
 .app-header {
@@ -299,6 +312,10 @@ input:focus-visible,
   color: var(--title-text);
   font-size: 18px;
   line-height: 1.25;
+}
+
+.page-title:focus {
+  outline: none;
 }
 
 .page-meta {
@@ -610,6 +627,8 @@ tbody tr:last-child td {
   border: 0;
   background: transparent;
   cursor: pointer;
+  font: inherit;
+  text-decoration: none;
 }
 
 .link-button:hover {
@@ -775,6 +794,160 @@ tbody tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.process-detail {
+  min-width: 0;
+}
+
+.process-title-row {
+  align-items: flex-start;
+}
+
+.process-title-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.process-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.process-state::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.process-state.live {
+  color: var(--good);
+}
+
+.process-state.ended {
+  color: var(--warn);
+}
+
+.process-state.node-down {
+  color: var(--critical);
+}
+
+.process-state-band {
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border-left: 3px solid var(--warn);
+  background: var(--surface-strong);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.process-state-band.node-down {
+  border-color: var(--critical);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.process-generation {
+  margin: -3px 0 14px;
+  overflow-wrap: anywhere;
+}
+
+.process-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin-bottom: 18px;
+  border-color: var(--line);
+  background: var(--line-soft);
+  overflow: visible;
+}
+
+.process-summary .process-summary-item {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 0;
+  background: var(--bg);
+}
+
+.process-summary .process-summary-item:first-child {
+  padding-left: 12px;
+}
+
+.process-summary .kpi-value {
+  min-height: 20px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.process-command {
+  display: block;
+  min-height: 43px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--line);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: pre-wrap;
+}
+
+.process-copy {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.process-copy:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.process-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.process-metric {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px 8px;
+  background: var(--bg);
+}
+
+.process-metric figcaption {
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.process-metric .sparkline {
+  height: 96px;
+  margin-top: 8px;
+}
+
+.sparkline-point {
+  vector-effect: non-scaling-stroke;
+}
+
 .app-footer {
   display: flex;
   min-height: 31px;
@@ -822,6 +995,10 @@ tbody tr:last-child td {
   .kpi-strip {
     grid-template-columns: repeat(var(--kpi-count, 7), minmax(126px, 1fr));
   }
+
+  .process-summary {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -851,6 +1028,24 @@ tbody tr:last-child td {
   .kpi-strip {
     margin-inline: -12px;
     padding-inline: 12px;
+  }
+
+  .process-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .process-metrics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .process-title-row .page-actions {
+    align-items: flex-start;
+    overflow: visible;
+  }
+
+  .process-title-actions {
+    justify-content: flex-start;
   }
 
   .page-head,

@@ -22,13 +22,14 @@
     </nav>
     <div class="header-status">
       <span id="cluster-summary">waiting for data</span>
-      <span class="connection-state" id="connection-state">
-        <span class="status-dot"></span>
+      <span class="connection-state" id="connection-state" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
         <span id="connection-label">Connecting</span>
       </span>
       <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" title="Toggle color theme"></button>
     </div>
   </header>
+  <div id="app-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
   <main id="app" tabindex="-1">
     <div class="loading-state">
       <span class="loading-line"></span>

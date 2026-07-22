@@ -334,9 +334,14 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   trend sparklines (cluster GPU utilization, HBM, and host CPU; per-node
   GPU/HBM on the detail page), a searchable node inventory, cluster-wide
   host CPU/RAM/load telemetry, a process table, and per-node GPU, host, and
-  process detail. Remote process
-  rows are enriched with one batched `ps` query per node; missing Linux host
-  fields degrade to unavailable values without taking the node offline. View
+  process detail. Click a PID or command to open an investigation page with
+  current values and rolling CPU, GPU-utilization, GPU-memory, and host-memory
+  history. An exited process or unreachable node keeps its last sample visible;
+  creation time or backend identity defines generations when available, with
+  ended-state, command, and runtime-reset reconciliation covering remote PID
+  reuse. A new generation never inherits the previous process's charts. Remote
+  process rows are enriched with one batched `ps` query per node; missing Linux
+  host fields degrade to unavailable values without taking the node offline. View
   state is encoded in the URL hash, so browser back/forward navigation works
   without reconnecting to the nodes. Dark and light themes follow the
   browser's `prefers-color-scheme` and can be switched with the header
@@ -404,7 +409,7 @@ pip install metax-mxtop
 mxtop --version
 ```
 
-Branch and pull-request runs execute the Python compatibility matrix and build and test the offline wheelhouse. Release publication is gated on the Python 3.9 wheelhouse checks, the full Python 3.10-3.13 test matrix, and lint. A push to `main` creates a commit-addressed prerelease; versioned GitHub and PyPI publication is limited to `v*` tags:
+Branch and pull-request runs execute the Python compatibility matrix and build and test the offline wheelhouse. Release publication is gated on the Python 3.9 wheelhouse checks, the full Python 3.10-3.13 test matrix, lint, and the Chromium dashboard suite. A push to `main` creates a commit-addressed prerelease; versioned GitHub and PyPI publication is limited to `v*` tags:
 
 1. Bump `pyproject.toml`, `src/mxtop/__init__.py`, and the local package entry in `uv.lock`.
 2. Regenerate the preview, gallery, and showcase assets and run their `--check` commands.
@@ -431,6 +436,8 @@ docs-sync tests and help-screen colorization rules. Run tests and lint locally:
 ```bash
 uv run --locked --with pytest --with psutil --with pillow==11.3.0 pytest -q
 uv run --locked --with ruff ruff check .
+npm ci && npx playwright install --only-shell chromium
+npm run test:dashboard
 uv run --locked --with build python -m build
 ```
 

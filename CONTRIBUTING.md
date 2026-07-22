@@ -13,7 +13,8 @@ pip install -e '.[remote,dev]'    # or: uv pip install -e '.[remote,dev]'
 
 The `remote` extra pulls in `asyncssh` so the `--remote-mode` tests run
 instead of skipping. The `dev` extra is the single source of truth for CI and
-local test/build/release tools; Dependabot groups its routine updates monthly.
+local Python test/build/release tools; the root npm lockfile pins dashboard
+browser tooling. Dependabot groups routine Python and npm updates monthly.
 No MetaX hardware is needed for development: the test suite and all preview
 assets use deterministic synthetic fixtures.
 
@@ -31,12 +32,29 @@ uv run --with pytest --with pytest-cov --extra remote \
 
 # Lint
 ruff check .
+
+# Browser regression suite (Node.js 20+; Chromium is a one-time install)
+npm ci
+npx playwright install --only-shell chromium
+npm run test:dashboard
 ```
 
 CI runs the suite on Python 3.9 through 3.13; the 3.13 leg enforces branch
 coverage while the other compatibility legs stay fast. CodeQL separately scans
-Python and dashboard JavaScript with extended security queries. `uv run
---python 3.9 ...` reproduces the floor version locally.
+Python and dashboard JavaScript with extended security queries. The release
+artifact job runs the Playwright suite once under Node.js 22 before it builds
+any distribution. `uv run --python 3.9 ...` reproduces the Python floor
+version locally.
+
+To inspect the browser UI against the same lifecycle used in tests, run:
+
+```bash
+python scripts/serve_dashboard_fixture.py
+```
+
+The fixture prints its local URL and advances through a live training process,
+a node outage, a clean process exit, and reuse of the same PID by a new process.
+Pass `--step 5` for a fixed live sample or `--help` for sequence controls.
 
 ## Things the test suite enforces
 
@@ -90,10 +108,10 @@ python scripts/check_release_version.py vX.Y.Z
 
 GitHub Actions runs the same version and CHANGELOG guard in the single
 distribution-build job. Publication waits for that job's Python 3.9 tests,
-lint, and offline-install check, plus the complete Python 3.10-3.13 test
-matrix. The build job creates and Twine-validates the wheel and sdist once,
-assembles the offline wheelhouse, and uploads one checksum-protected release
-artifact.
+lint, Chromium dashboard suite, and offline-install check, plus the complete
+Python 3.10-3.13 test matrix. The build job creates and Twine-validates the
+wheel and sdist once, assembles the offline wheelhouse, and uploads one
+checksum-protected release artifact.
 
 The GitHub Release and PyPI jobs both download and verify that exact artifact;
 neither rebuilds the package. Tagged GitHub Releases are create-only, so an

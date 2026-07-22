@@ -9,4 +9,7 @@ build/
 .coverage
 coverage.xml
 htmlcov/
+node_modules/
+playwright-report/
+test-results/
 .omc

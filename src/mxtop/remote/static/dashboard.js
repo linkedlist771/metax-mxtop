@@ -6,6 +6,7 @@ const connectionState = document.getElementById("connection-state");
 const connectionLabel = document.getElementById("connection-label");
 const sampleTime = document.getElementById("sample-time");
 const refreshState = document.getElementById("refresh-state");
+const appStatus = document.getElementById("app-status");
 const navButtons = [...document.querySelectorAll("[data-route]")];
 
 const state = {
@@ -14,15 +15,26 @@ const state = {
   heatMetric: "util",
   searches: { nodes: "", processes: "" },
   selectedGpu: {},
+  processReturnRoute: "processes",
+  renderedRouteKey: null,
+  announcedProcess: null,
 };
 
 // Rolling client-side history for sparklines: one sample per SSE message,
 // bounded so an always-open tab cannot grow without limit.
 const HISTORY_LIMIT = 240;
+const PROCESS_HISTORY_LIMIT = 1024;
+const PROCESS_HISTORY_RETENTION = HISTORY_LIMIT;
+const PROCESS_RUNTIME_ROLLBACK_TOLERANCE = 1;
+const PROCESS_CREATE_TIME_TOLERANCE = 0.01;
+const PROCESS_IDENTITY_FIELDS = ["command", "user", "name", "process_type"];
 const history = {
+  sequence: 0,
+  lastTimestamp: null,
   timestamps: [],
   cluster: { util: [], memory: [], hostCpu: [] },
   nodes: new Map(),
+  processes: new Map(),
 };
 
 function pushBounded(series, value) {
@@ -30,8 +42,168 @@ function pushBounded(series, value) {
   if (series.length > HISTORY_LIMIT) series.shift();
 }
 
+function processKey(host, gpuIndex, pid) {
+  return JSON.stringify([String(host), Number(gpuIndex), Number(pid)]);
+}
+
+function processIdentity(process) {
+  return Object.fromEntries(PROCESS_IDENTITY_FIELDS.map((field) => {
+    const value = process[field];
+    return [field, value === null || value === undefined ? "" : String(value)];
+  }));
+}
+
+function processGenerationChangeReason(entry, process) {
+  const createTime = process.create_time;
+  const hasCreateTimes = finite(entry.createTime) && finite(createTime);
+  if (hasCreateTimes
+      && Math.abs(entry.createTime - createTime) > PROCESS_CREATE_TIME_TOLERANCE) {
+    return "Process creation time changed";
+  }
+  const explicitIdentity = process.identity === null || process.identity === undefined
+    ? ""
+    : String(process.identity);
+  if (entry.explicitIdentity && explicitIdentity
+      && entry.explicitIdentity !== explicitIdentity) {
+    return "Process identity changed";
+  }
+  if (hasCreateTimes) return null;
+  if (entry.ended) return "PID returned after ending";
+  const identity = processIdentity(process);
+  const changedField = PROCESS_IDENTITY_FIELDS.find((field) => {
+    return entry.identity[field] && identity[field]
+      && entry.identity[field] !== identity[field];
+  });
+  if (changedField) {
+    const label = changedField === "process_type" ? "Context" : changedField;
+    return `${label[0].toUpperCase()}${label.slice(1)} changed`;
+  }
+  const runtime = process.runtime_seconds;
+  const runtimeRolledBack = finite(entry.lastRuntimeSeconds)
+    && finite(runtime)
+    && runtime + PROCESS_RUNTIME_ROLLBACK_TOLERANCE < entry.lastRuntimeSeconds;
+  return runtimeRolledBack ? "Runtime restarted" : null;
+}
+
+function newProcessHistory(
+  node,
+  process,
+  previous = null,
+  reason = "First observed",
+  timestamp = null,
+) {
+  return {
+    host: node.hostname,
+    gpuIndex: Number(process.gpu_index),
+    pid: Number(process.pid),
+    generation: previous ? previous.generation + 1 : 1,
+    generationReason: reason,
+    generationStartedAt: finite(timestamp) ? timestamp : null,
+    identity: processIdentity(process),
+    explicitIdentity: process.identity === null || process.identity === undefined
+      ? ""
+      : String(process.identity),
+    createTime: finite(process.create_time) ? process.create_time : null,
+    latest: { ...process },
+    reported: true,
+    ended: false,
+    nodeReachable: Boolean(node.reachable),
+    lastRuntimeSeconds: finite(process.runtime_seconds) ? process.runtime_seconds : null,
+    lastSeenSequence: history.sequence,
+    lastSeenTimestamp: null,
+    timestamps: [],
+    cpu: [],
+    hostMemory: [],
+    gpuMemory: [],
+    gpuUtil: [],
+  };
+}
+
+function appendProcessSample(entry, node, process, timestamp) {
+  const identity = processIdentity(process);
+  for (const field of PROCESS_IDENTITY_FIELDS) {
+    if (identity[field]) entry.identity[field] = identity[field];
+  }
+  entry.latest = { ...process };
+  entry.reported = true;
+  entry.ended = false;
+  entry.nodeReachable = Boolean(node.reachable);
+  entry.lastSeenSequence = history.sequence;
+  entry.lastSeenTimestamp = finite(timestamp) ? timestamp : entry.lastSeenTimestamp;
+  if (!entry.explicitIdentity && process.identity !== null && process.identity !== undefined) {
+    entry.explicitIdentity = String(process.identity);
+  }
+  if (!finite(entry.createTime) && finite(process.create_time)) {
+    entry.createTime = process.create_time;
+  }
+  if (finite(process.runtime_seconds)) entry.lastRuntimeSeconds = process.runtime_seconds;
+  pushBounded(entry.timestamps, timestamp);
+  pushBounded(entry.cpu, process.cpu_percent);
+  pushBounded(entry.hostMemory, process.host_memory_bytes);
+  pushBounded(entry.gpuMemory, process.gpu_memory_bytes);
+  pushBounded(entry.gpuUtil, process.gpu_util_percent);
+}
+
+function currentProcessHistoryKey() {
+  const route = currentRoute();
+  return route.name === "process"
+    ? processKey(route.host, route.gpuIndex, route.pid)
+    : null;
+}
+
+function pruneProcessHistory() {
+  const protectedKey = currentProcessHistoryKey();
+  for (const [key, entry] of history.processes) {
+    const age = history.sequence - entry.lastSeenSequence;
+    if (key !== protectedKey && !entry.reported && age > PROCESS_HISTORY_RETENTION) {
+      history.processes.delete(key);
+    }
+  }
+  if (history.processes.size <= PROCESS_HISTORY_LIMIT) return;
+  const candidates = [...history.processes.entries()]
+    .filter(([key]) => key !== protectedKey)
+    .sort((left, right) => Number(left[1].reported) - Number(right[1].reported)
+      || left[1].lastSeenSequence - right[1].lastSeenSequence);
+  while (history.processes.size > PROCESS_HISTORY_LIMIT && candidates.length) {
+    history.processes.delete(candidates.shift()[0]);
+  }
+}
+
+function recordProcessHistory(stats) {
+  history.sequence += 1;
+  const seen = new Set();
+  const timestamp = state.cluster.timestamp;
+  const nodeByHost = new Map(stats.nodes.map((node) => [node.hostname, node]));
+  for (const node of stats.nodes) {
+    if (!node.reachable) continue;
+    for (const process of processesFor(node)) {
+      const key = processKey(node.hostname, process.gpu_index, process.pid);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let entry = history.processes.get(key);
+      const resetReason = entry
+        ? processGenerationChangeReason(entry, process)
+        : "First observed";
+      if (!entry || resetReason) {
+        entry = newProcessHistory(node, process, entry, resetReason, timestamp);
+        history.processes.set(key, entry);
+      }
+      appendProcessSample(entry, node, process, timestamp);
+    }
+  }
+  for (const [key, entry] of history.processes) {
+    if (seen.has(key)) continue;
+    const node = nodeByHost.get(entry.host);
+    entry.reported = false;
+    entry.nodeReachable = Boolean(node && node.reachable);
+    if (node && node.reachable) entry.ended = true;
+  }
+  pruneProcessHistory();
+}
+
 function recordHistory() {
   const stats = clusterStats();
+  recordProcessHistory(stats);
   if (!stats.nodeCount) return;
   pushBounded(history.timestamps, state.cluster.timestamp);
   pushBounded(history.cluster.util, stats.avgUtil);
@@ -57,7 +229,12 @@ function recordHistory() {
 function applyCluster(cluster) {
   if (!cluster || !Array.isArray(cluster.nodes)) return false;
   state.cluster = cluster;
-  recordHistory();
+  const timestamp = cluster.timestamp;
+  const replay = finite(timestamp) && timestamp === history.lastTimestamp;
+  if (!replay) {
+    recordHistory();
+    history.lastTimestamp = finite(timestamp) ? timestamp : null;
+  }
   return true;
 }
 
@@ -153,6 +330,12 @@ function formatDuration(seconds) {
   if (days) return `${days}d ${hours}h`;
   if (hours) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function formatTimestamp(timestamp) {
+  return finite(timestamp)
+    ? new Date(timestamp * 1000).toLocaleTimeString()
+    : "an earlier sample";
 }
 
 function formatLoad(value) {
@@ -262,6 +445,20 @@ function currentRoute() {
     ? window.location.hash.slice(2)
     : "overview";
   const parts = raw.split("/");
+  if (parts[0] === "process" && parts.length === 4) {
+    try {
+      const host = decodeURIComponent(parts[1]);
+      const gpuIndex = Number(decodeURIComponent(parts[2]));
+      const pid = Number(decodeURIComponent(parts[3]));
+      if (host && Number.isInteger(gpuIndex) && gpuIndex >= 0
+          && Number.isInteger(pid) && pid >= 0) {
+        return { name: "process", host, gpuIndex, pid };
+      }
+    } catch (_) {
+      return { name: "processes" };
+    }
+    return { name: "processes" };
+  }
   if (parts[0] === "node" && parts.length > 1) {
     try {
       return { name: "node", host: decodeURIComponent(parts.slice(1).join("/")) };
@@ -274,6 +471,10 @@ function currentRoute() {
     : { name: "overview" };
 }
 
+function routeKey(route = currentRoute()) {
+  return JSON.stringify(route);
+}
+
 function navigate(route) {
   window.location.hash = `#/${route}`;
 }
@@ -283,15 +484,54 @@ function navigateNode(host, gpuIndex = null) {
   navigate(`node/${encodeURIComponent(host)}`);
 }
 
+function rememberProcessReturnRoute() {
+  const source = currentRoute();
+  if (source.name === "node") {
+    state.processReturnRoute = `node/${encodeURIComponent(source.host)}`;
+  } else if (source.name !== "process") {
+    state.processReturnRoute = "processes";
+  }
+}
+
+function processRoute(host, gpuIndex, pid) {
+  return [
+    "process",
+    encodeURIComponent(host),
+    encodeURIComponent(String(gpuIndex)),
+    encodeURIComponent(String(pid)),
+  ].join("/");
+}
+
+function processHref(host, gpuIndex, pid) {
+  return `#/${processRoute(host, gpuIndex, pid)}`;
+}
+
+function navigateProcess(host, gpuIndex, pid) {
+  rememberProcessReturnRoute();
+  navigate(processRoute(host, gpuIndex, pid));
+}
+
+function stableFocusKey(...parts) {
+  return JSON.stringify(parts.map((part) => String(part)));
+}
+
+function keepFocus(node, ...parts) {
+  node.dataset.focusKey = stableFocusKey(...parts);
+  return node;
+}
+
 function captureTransientState() {
   const active = document.activeElement;
-  const focus = active instanceof HTMLInputElement && active.dataset.focusKey
-    ? {
+  let focus = null;
+  if (active instanceof HTMLElement && active.dataset.focusKey) {
+    const textControl = active instanceof HTMLInputElement
+      || active instanceof HTMLTextAreaElement;
+    focus = {
       key: active.dataset.focusKey,
-      start: active.selectionStart,
-      end: active.selectionEnd,
-    }
-    : null;
+      start: textControl ? active.selectionStart : null,
+      end: textControl ? active.selectionEnd : null,
+    };
+  }
   const scroll = {};
   document.querySelectorAll("[data-scroll-key]").forEach((node) => {
     scroll[node.dataset.scrollKey] = node.scrollLeft;
@@ -301,15 +541,19 @@ function captureTransientState() {
 
 function restoreTransientState(transient) {
   for (const [key, left] of Object.entries(transient.scroll)) {
-    const node = document.querySelector(`[data-scroll-key="${key}"]`);
+    const node = [...document.querySelectorAll("[data-scroll-key]")]
+      .find((candidate) => candidate.dataset.scrollKey === key);
     if (node) node.scrollLeft = left;
   }
   if (!transient.focus) return;
-  const input = document.querySelector(`[data-focus-key="${transient.focus.key}"]`);
-  if (!(input instanceof HTMLInputElement)) return;
-  input.focus();
-  if (transient.focus.start !== null && transient.focus.end !== null) {
-    input.setSelectionRange(transient.focus.start, transient.focus.end);
+  const target = [...document.querySelectorAll("[data-focus-key]")]
+    .find((node) => node.dataset.focusKey === transient.focus.key);
+  if (!(target instanceof HTMLElement)) return;
+  target.focus({ preventScroll: true });
+  const textControl = target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement;
+  if (textControl && transient.focus.start !== null && transient.focus.end !== null) {
+    target.setSelectionRange(transient.focus.start, transient.focus.end);
   }
 }
 
@@ -317,15 +561,22 @@ function pageHead(title, meta = "", actions = null, back = false) {
   const head = element("div", "page-head");
   const titleWrap = element("div", back ? "title-with-back" : "page-title-wrap");
   if (back) {
+    const backOptions = back === true
+      ? { route: "nodes", label: "Back to nodes" }
+      : back;
     const button = element("button", "back-button");
     button.type = "button";
-    button.title = "Back to nodes";
-    button.setAttribute("aria-label", "Back to nodes");
-    button.addEventListener("click", () => navigate("nodes"));
+    button.title = backOptions.label;
+    button.setAttribute("aria-label", backOptions.label);
+    keepFocus(button, "back", backOptions.route);
+    button.addEventListener("click", () => navigate(backOptions.route));
     titleWrap.append(button);
   }
   const labels = element("div", "page-title-wrap");
-  append(labels, element("h1", "page-title", title));
+  const heading = element("h1", "page-title", title);
+  heading.tabIndex = -1;
+  keepFocus(heading, "page-title");
+  append(labels, heading);
   if (meta) append(labels, element("div", "page-meta", meta));
   titleWrap.append(labels);
   head.append(titleWrap);
@@ -366,6 +617,7 @@ function segmented(options, selected, onSelect, label) {
   for (const option of options) {
     const button = element("button", option.value === selected ? "active" : "", option.label);
     button.type = "button";
+    keepFocus(button, "segmented", label, option.value);
     button.setAttribute("aria-pressed", option.value === selected ? "true" : "false");
     button.addEventListener("click", () => onSelect(option.value));
     control.append(button);
@@ -417,6 +669,7 @@ function nodeState(node) {
 function makeClickableRow(row, host) {
   row.classList.add("clickable");
   row.tabIndex = 0;
+  keepFocus(row, "node-row", host);
   row.setAttribute("role", "link");
   row.setAttribute("aria-label", `Open ${host}`);
   row.addEventListener("click", () => navigateNode(host));
@@ -477,6 +730,7 @@ function renderHeatmap(stats) {
     const label = element("button", "heatmap-label", node.hostname);
     label.type = "button";
     label.title = `Open ${node.hostname}`;
+    keepFocus(label, "heatmap-node", node.hostname);
     if (!node.reachable) label.classList.add("critical");
     label.addEventListener("click", () => navigateNode(node.hostname));
     row.append(label);
@@ -490,6 +744,7 @@ function renderHeatmap(stats) {
         heatLabel(value, state.heatMetric),
       );
       button.type = "button";
+      keepFocus(button, "heatmap-gpu", node.hostname, index);
       button.title = device
         ? `${node.hostname} GPU ${index}: ${state.heatMetric} ${heatLabel(value, state.heatMetric)}`
         : `${node.hostname} GPU ${index}: unavailable`;
@@ -574,6 +829,12 @@ function renderHotspots(stats) {
       item.down ? item.node.hostname : `${item.node.hostname} / GPU ${item.device.index}`,
     );
     target.type = "button";
+    keepFocus(
+      target,
+      "hotspot",
+      item.node.hostname,
+      item.device ? item.device.index : "node",
+    );
     target.addEventListener("click", () => navigateNode(item.node.hostname, item.device ? item.device.index : null));
     if (item.down) {
       const down = element("span", "hotspot-metric critical", "DOWN");
@@ -607,9 +868,21 @@ function sparkline(values, options = {}) {
   if (options.label) svg.setAttribute("aria-label", options.label);
   svg.setAttribute("role", "img");
   const points = values.length;
+  const y = (value) => height - 1 - Math.max(0, Math.min(1, value / max)) * (height - 2);
+  if (points === 1) {
+    if (finite(values[0])) {
+      const point = document.createElementNS(SVG_NS, "circle");
+      point.setAttribute("cx", String(width / 2));
+      point.setAttribute("cy", y(values[0]).toFixed(1));
+      point.setAttribute("r", "2.5");
+      point.setAttribute("fill", "var(--accent)");
+      point.classList.add("sparkline-point");
+      svg.append(point);
+    }
+    return svg;
+  }
   if (points < 2) return svg;
   const step = width / (points - 1);
-  const y = (value) => height - 1 - Math.max(0, Math.min(1, value / max)) * (height - 2);
   let linePath = "";
   let areaPath = "";
   let open = false;
@@ -652,6 +925,27 @@ function trendCard(title, values, formatValue, options = {}) {
   );
   append(card, head, sparkline(values, { ...options, label: `${title} history` }));
   return card;
+}
+
+function processMetric(title, values, formatValue, options = {}) {
+  const metric = element("figure", "process-metric");
+  const usable = values.filter(finite);
+  const latest = [...usable].reverse()[0];
+  const peak = usable.length ? Math.max(...usable) : null;
+  const caption = element("figcaption", "trend-head");
+  append(
+    caption,
+    element("span", "trend-title", title),
+    element(
+      "span",
+      "trend-value",
+      finite(latest)
+        ? `${formatValue(latest)} now | ${formatValue(peak)} peak`
+        : "-",
+    ),
+  );
+  append(metric, caption, sparkline(values, { ...options, label: `${title} history` }));
+  return metric;
 }
 
 function renderTrends() {
@@ -746,6 +1040,224 @@ function allProcessRows() {
   return rows;
 }
 
+function findCurrentProcess(host, gpuIndex, pid) {
+  const node = clusterStats().nodes.find((candidate) => candidate.hostname === host);
+  const process = node && node.reachable
+    ? processesFor(node).find((candidate) => {
+      return Number(candidate.gpu_index) === gpuIndex && Number(candidate.pid) === pid;
+    })
+    : null;
+  return { node, process };
+}
+
+function processHistoryFor(host, gpuIndex, pid) {
+  const key = processKey(host, gpuIndex, pid);
+  let entry = history.processes.get(key);
+  const current = findCurrentProcess(host, gpuIndex, pid);
+  const resetReason = entry && current.process
+    ? processGenerationChangeReason(entry, current.process)
+    : null;
+  if (current.process && (!entry || resetReason)) {
+    entry = newProcessHistory(
+      current.node,
+      current.process,
+      entry,
+      resetReason || "First observed",
+      state.cluster.timestamp,
+    );
+    appendProcessSample(entry, current.node, current.process, state.cluster.timestamp);
+    history.processes.set(key, entry);
+    pruneProcessHistory();
+  }
+  return { entry, ...current };
+}
+
+function processStatus(entry, node) {
+  const lastSeen = formatTimestamp(entry.lastSeenTimestamp);
+  if (node && !node.reachable) {
+    return {
+      label: "Node down",
+      tone: "critical",
+      className: "node-down",
+      notice: `Node unreachable. Showing the last process sample from ${lastSeen}.`,
+    };
+  }
+  if (!node) {
+    return {
+      label: "Not reported",
+      tone: "warn",
+      className: "ended",
+      notice: `Process is not currently reported. Last seen at ${lastSeen}.`,
+    };
+  }
+  if (entry.reported) {
+    return {
+      label: "Live",
+      tone: "good",
+      className: "live",
+      notice: "",
+    };
+  }
+  if (entry.ended) {
+    return {
+      label: "Ended",
+      tone: "warn",
+      className: "ended",
+      notice: `Process no longer reported. Last seen at ${lastSeen}.`,
+    };
+  }
+  return { label: "Not reported", tone: "warn", className: "ended", notice: "" };
+}
+
+function announceProcessTransition(entry, status) {
+  const key = processKey(entry.host, entry.gpuIndex, entry.pid);
+  const previous = state.announcedProcess;
+  state.announcedProcess = {
+    key,
+    status: status.className,
+    generation: entry.generation,
+  };
+  if (!appStatus || !previous || previous.key !== key) return;
+  if (previous.generation !== entry.generation) {
+    appStatus.textContent = `Process ${entry.pid} started a new generation.`;
+  } else if (previous.status !== status.className) {
+    appStatus.textContent = `Process ${entry.pid} status changed to ${status.label}.`;
+  }
+}
+
+function renderProcessDetail(host, gpuIndex, pid) {
+  const detail = element("article", "process-detail");
+  const { entry, node } = processHistoryFor(host, gpuIndex, pid);
+  const nodeButton = element("button", "link-button", `${host} / GPU ${gpuIndex}`);
+  nodeButton.type = "button";
+  nodeButton.setAttribute("aria-label", `Open ${host} GPU ${gpuIndex}`);
+  keepFocus(nodeButton, "process-detail-node", host, gpuIndex, pid);
+  nodeButton.addEventListener("click", () => navigateNode(host, gpuIndex));
+  const back = {
+    route: state.processReturnRoute || "processes",
+    label: state.processReturnRoute.startsWith("node/")
+      ? "Back to node"
+      : "Back to processes",
+  };
+
+  if (!entry) {
+    append(
+      detail,
+      pageHead(
+        "Process not found",
+        `${host} | GPU ${gpuIndex} | PID ${pid}`,
+        nodeButton,
+        back,
+      ),
+      element(
+        "div",
+        "empty-state",
+        `No matching process or retained history is available for ${host} / GPU ${gpuIndex} / PID ${pid}.`,
+      ),
+    );
+    return detail;
+  }
+
+  const process = entry.latest;
+  const status = processStatus(entry, node);
+  const name = process.name || entry.identity.name || "GPU process";
+  const command = process.command || entry.identity.command || name;
+  const meta = [
+    name,
+    host,
+    `GPU ${gpuIndex}`,
+    process.process_type || entry.identity.process_type || "type unavailable",
+  ].join(" | ");
+  const titleActions = element("div", "process-title-actions");
+  append(
+    titleActions,
+    element(
+      "span",
+      `process-state ${status.className}`,
+      status.label,
+    ),
+    nodeButton,
+  );
+  const title = pageHead(`PID ${pid}`, meta, titleActions, back);
+  title.classList.add("process-title-row");
+  append(detail, title);
+  if (status.notice) {
+    detail.append(element(
+      "div",
+      `process-state-band ${status.className}`,
+      status.notice,
+    ));
+  }
+  const generationStarted = formatTimestamp(entry.generationStartedAt);
+  detail.append(element(
+    "div",
+    "process-generation page-meta",
+    entry.generation > 1
+      ? `${entry.generationReason}. History restarted at ${generationStarted}.`
+      : `Generation 1 first observed at ${generationStarted}.`,
+  ));
+  announceProcessTransition(entry, status);
+  const summary = kpiStrip([
+    { label: "State", value: status.label, tone: status.tone },
+    {
+      label: "Generation",
+      value: entry.generation,
+      title: `${entry.generationReason} at ${generationStarted}`,
+    },
+    { label: "User", value: process.user || entry.identity.user || "-" },
+    { label: "Context", value: process.process_type || entry.identity.process_type || "-" },
+    { label: "Runtime", value: formatDuration(process.runtime_seconds) },
+    { label: "GPU util", value: formatPercent(process.gpu_util_percent) },
+    {
+      label: "Mem BW",
+      value: formatPercent(process.gpu_memory_bandwidth_util_percent),
+    },
+    { label: "GPU memory", value: formatBytes(process.gpu_memory_bytes) },
+    { label: "CPU", value: formatPercent(process.cpu_percent) },
+    { label: "Host memory", value: formatBytes(process.host_memory_bytes) },
+  ]);
+  summary.classList.add("process-summary");
+  summary.querySelectorAll(".kpi").forEach((item) => {
+    item.classList.add("process-summary-item");
+  });
+  detail.append(summary);
+
+  const commandBlock = element("code", "process-command page-meta", command);
+  const copyButton = element("button", "link-button process-copy", "Copy");
+  copyButton.type = "button";
+  copyButton.title = "Copy full command";
+  copyButton.setAttribute("aria-label", "Copy full process command");
+  keepFocus(copyButton, "copy-process-command", host, gpuIndex, pid);
+  copyButton.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      if (appStatus) appStatus.textContent = `Copied command for process ${pid}.`;
+    } catch (_) {
+      if (appStatus) appStatus.textContent = "Could not copy process command.";
+    }
+  });
+  detail.append(section("Full command", commandBlock, copyButton));
+
+  const trends = element("div", "process-metrics-grid");
+  append(
+    trends,
+    processMetric("CPU", entry.cpu, formatPercent),
+    processMetric("GPU util", entry.gpuUtil, formatPercent, { max: 100 }),
+    processMetric("GPU memory", entry.gpuMemory, formatBytes),
+    processMetric("Host memory", entry.hostMemory, formatBytes),
+  );
+  detail.append(section(
+    "Process trends",
+    trends,
+    element(
+      "span",
+      "section-count",
+      `${entry.timestamps.length} sample${entry.timestamps.length === 1 ? "" : "s"}`,
+    ),
+  ));
+  return detail;
+}
+
 function renderProcessTable(rows, scrollKey) {
   const shell = tableShell([
     { label: "Node", left: true },
@@ -764,10 +1276,19 @@ function renderProcessTable(rows, scrollKey) {
     const row = document.createElement("tr");
     const hostButton = element("button", "link-button", node.hostname);
     hostButton.type = "button";
+    keepFocus(hostButton, "process-host", node.hostname, process.gpu_index, process.pid);
     hostButton.addEventListener("click", () => navigateNode(node.hostname, process.gpu_index));
     cell(row, hostButton, "left");
     cell(row, process.gpu_index);
-    cell(row, process.pid);
+    const pidLink = element("a", "link-button", process.pid);
+    pidLink.href = processHref(node.hostname, process.gpu_index, process.pid);
+    pidLink.setAttribute(
+      "aria-label",
+      `Open process ${process.pid} on ${node.hostname} GPU ${process.gpu_index}`,
+    );
+    keepFocus(pidLink, "process-pid", node.hostname, process.gpu_index, process.pid);
+    pidLink.addEventListener("click", rememberProcessReturnRoute);
+    cell(row, pidLink);
     cell(row, process.process_type || "-", "left");
     cell(row, process.user || "-", "left");
     cell(row, formatBytes(process.gpu_memory_bytes));
@@ -776,7 +1297,22 @@ function renderProcessTable(rows, scrollKey) {
     cell(row, formatBytes(process.host_memory_bytes));
     cell(row, formatDuration(process.runtime_seconds));
     const command = process.command || process.name || "-";
-    const commandCell = cell(row, command, "left command-cell");
+    const commandLink = element("a", "link-button", command);
+    commandLink.href = processHref(node.hostname, process.gpu_index, process.pid);
+    commandLink.setAttribute(
+      "aria-label",
+      `Open process ${process.pid}: ${command}`,
+    );
+    commandLink.title = command;
+    keepFocus(
+      commandLink,
+      "process-command",
+      node.hostname,
+      process.gpu_index,
+      process.pid,
+    );
+    commandLink.addEventListener("click", rememberProcessReturnRoute);
+    const commandCell = cell(row, commandLink, "left command-cell");
     commandCell.title = command;
     shell.tbody.append(row);
   }
@@ -834,6 +1370,7 @@ function renderGpuTable(node, selectedGpu) {
     const row = document.createElement("tr");
     row.className = "clickable";
     row.tabIndex = 0;
+    keepFocus(row, "node-gpu", node.hostname, device.index);
     if (device.index === selectedGpu) row.classList.add("selected");
     const select = () => {
       state.selectedGpu[node.hostname] = device.index;
@@ -876,6 +1413,7 @@ function gpuFilter(node, selectedGpu) {
     const active = option.index === selectedGpu;
     const button = element("button", active ? "active" : "", option.label);
     button.type = "button";
+    keepFocus(button, "gpu-filter", node.hostname, option.index === null ? "all" : option.index);
     button.setAttribute("aria-pressed", active ? "true" : "false");
     button.addEventListener("click", () => {
       state.selectedGpu[node.hostname] = option.index;
@@ -959,7 +1497,9 @@ function updateShell() {
     ? `Updated ${new Date(state.cluster.timestamp * 1000).toLocaleTimeString()}`
     : "No sample yet";
   const route = currentRoute();
-  const activeRoute = route.name === "node" ? "nodes" : route.name;
+  const activeRoute = route.name === "node"
+    ? "nodes"
+    : route.name === "process" ? "processes" : route.name;
   for (const button of navButtons) {
     const active = button.dataset.route === activeRoute;
     button.classList.toggle("active", active);
@@ -969,19 +1509,33 @@ function updateShell() {
 
 function render() {
   const transient = captureTransientState();
+  const route = currentRoute();
+  const nextRouteKey = routeKey(route);
+  const routeChanged = state.renderedRouteKey !== nextRouteKey;
   updateShell();
   if (!state.cluster || !Array.isArray(state.cluster.nodes)) {
     restoreTransientState(transient);
     return;
   }
-  const route = currentRoute();
   let content;
   if (route.name === "nodes") content = renderNodes();
   else if (route.name === "processes") content = renderProcesses();
   else if (route.name === "node") content = renderNodeDetail(route.host);
+  else if (route.name === "process") {
+    content = renderProcessDetail(route.host, route.gpuIndex, route.pid);
+  }
   else content = renderOverview();
   app.replaceChildren(content);
-  restoreTransientState(transient);
+  state.renderedRouteKey = nextRouteKey;
+  if (routeChanged) {
+    const title = app.querySelector(".page-title");
+    if (title instanceof HTMLElement) {
+      title.tabIndex = -1;
+      title.focus({ preventScroll: true });
+    }
+  } else {
+    restoreTransientState(transient);
+  }
 }
 
 for (const button of navButtons) {
@@ -1058,12 +1612,8 @@ if (!window.location.hash) {
 fetch("/api/snapshot")
   .then((response) => response.ok ? response.json() : null)
   .then((cluster) => {
-    // The SSE stream replays the same snapshot as its first message, so
-    // don't record history here — this fetch only paints the first frame
-    // faster.
     if (cluster && Array.isArray(cluster.nodes) && !state.cluster) {
-      state.cluster = cluster;
-      render();
+      if (applyCluster(cluster)) render();
     }
   })
   .catch(() => {});
