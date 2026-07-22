@@ -7,11 +7,17 @@ const connectionLabel = document.getElementById("connection-label");
 const sampleTime = document.getElementById("sample-time");
 const refreshState = document.getElementById("refresh-state");
 const appStatus = document.getElementById("app-status");
+const pauseButton = document.getElementById("pause-updates");
+const pauseCount = document.getElementById("pause-count");
 const navButtons = [...document.querySelectorAll("[data-route]")];
 
 const state = {
   cluster: null,
+  latestCluster: null,
   connected: false,
+  paused: false,
+  bufferedUpdates: 0,
+  pausedHistory: null,
   heatMetric: "util",
   searches: { nodes: "", processes: "" },
   sorts: {
@@ -40,6 +46,40 @@ const history = {
   nodes: new Map(),
   processes: new Map(),
 };
+
+function cloneHistory(source) {
+  return {
+    sequence: source.sequence,
+    lastTimestamp: source.lastTimestamp,
+    timestamps: [...source.timestamps],
+    cluster: {
+      util: [...source.cluster.util],
+      memory: [...source.cluster.memory],
+      hostCpu: [...source.cluster.hostCpu],
+    },
+    nodes: new Map([...source.nodes].map(([hostname, series]) => [
+      hostname,
+      { util: [...series.util], memory: [...series.memory] },
+    ])),
+    processes: new Map([...source.processes].map(([key, entry]) => [
+      key,
+      {
+        ...entry,
+        identity: { ...entry.identity },
+        latest: { ...entry.latest },
+        timestamps: [...entry.timestamps],
+        cpu: [...entry.cpu],
+        hostMemory: [...entry.hostMemory],
+        gpuMemory: [...entry.gpuMemory],
+        gpuUtil: [...entry.gpuUtil],
+      },
+    ])),
+  };
+}
+
+function historyForRender() {
+  return state.paused && state.pausedHistory ? state.pausedHistory : history;
+}
 
 function pushBounded(series, value) {
   series.push(finite(value) ? value : null);
@@ -95,6 +135,7 @@ function newProcessHistory(
   previous = null,
   reason = "First observed",
   timestamp = null,
+  targetHistory = history,
 ) {
   return {
     host: node.hostname,
@@ -113,7 +154,7 @@ function newProcessHistory(
     ended: false,
     nodeReachable: Boolean(node.reachable),
     lastRuntimeSeconds: finite(process.runtime_seconds) ? process.runtime_seconds : null,
-    lastSeenSequence: history.sequence,
+    lastSeenSequence: targetHistory.sequence,
     lastSeenTimestamp: null,
     timestamps: [],
     cpu: [],
@@ -123,7 +164,7 @@ function newProcessHistory(
   };
 }
 
-function appendProcessSample(entry, node, process, timestamp) {
+function appendProcessSample(entry, node, process, timestamp, targetHistory = history) {
   const identity = processIdentity(process);
   for (const field of PROCESS_IDENTITY_FIELDS) {
     if (identity[field]) entry.identity[field] = identity[field];
@@ -132,7 +173,7 @@ function appendProcessSample(entry, node, process, timestamp) {
   entry.reported = true;
   entry.ended = false;
   entry.nodeReachable = Boolean(node.reachable);
-  entry.lastSeenSequence = history.sequence;
+  entry.lastSeenSequence = targetHistory.sequence;
   entry.lastSeenTimestamp = finite(timestamp) ? timestamp : entry.lastSeenTimestamp;
   if (!entry.explicitIdentity && process.identity !== null && process.identity !== undefined) {
     entry.explicitIdentity = String(process.identity);
@@ -173,10 +214,9 @@ function pruneProcessHistory() {
   }
 }
 
-function recordProcessHistory(stats) {
+function recordProcessHistory(stats, timestamp) {
   history.sequence += 1;
   const seen = new Set();
-  const timestamp = state.cluster.timestamp;
   const nodeByHost = new Map(stats.nodes.map((node) => [node.hostname, node]));
   for (const node of stats.nodes) {
     if (!node.reachable) continue;
@@ -205,11 +245,12 @@ function recordProcessHistory(stats) {
   pruneProcessHistory();
 }
 
-function recordHistory() {
-  const stats = clusterStats();
-  recordProcessHistory(stats);
+function recordHistory(cluster) {
+  const stats = clusterStats(cluster);
+  const timestamp = cluster.timestamp;
+  recordProcessHistory(stats, timestamp);
   if (!stats.nodeCount) return;
-  pushBounded(history.timestamps, state.cluster.timestamp);
+  pushBounded(history.timestamps, timestamp);
   pushBounded(history.cluster.util, stats.avgUtil);
   pushBounded(history.cluster.memory, stats.memory);
   pushBounded(history.cluster.hostCpu, stats.hostCpu);
@@ -232,13 +273,24 @@ function recordHistory() {
 
 function applyCluster(cluster) {
   if (!cluster || !Array.isArray(cluster.nodes)) return false;
-  state.cluster = cluster;
   const timestamp = cluster.timestamp;
+  const stale = finite(timestamp)
+    && finite(history.lastTimestamp)
+    && timestamp < history.lastTimestamp;
+  if (stale) return false;
+  state.latestCluster = cluster;
   const replay = finite(timestamp) && timestamp === history.lastTimestamp;
   if (!replay) {
-    recordHistory();
+    recordHistory(cluster);
     history.lastTimestamp = finite(timestamp) ? timestamp : null;
+    if (state.paused) {
+      state.bufferedUpdates += 1;
+      if (state.bufferedUpdates === 1 && appStatus) {
+        appStatus.textContent = "New data is available while dashboard updates are paused.";
+      }
+    }
   }
+  if (!state.paused) state.cluster = cluster;
   return true;
 }
 
@@ -401,8 +453,8 @@ function nodeStats(node) {
   };
 }
 
-function clusterStats() {
-  const nodes = state.cluster && Array.isArray(state.cluster.nodes) ? state.cluster.nodes : [];
+function clusterStats(cluster = state.cluster) {
+  const nodes = cluster && Array.isArray(cluster.nodes) ? cluster.nodes : [];
   const reachable = nodes.filter((node) => node.reachable);
   const devices = reachable.flatMap(devicesFor);
   const processRows = reachable.flatMap((node) => {
@@ -1262,19 +1314,20 @@ function processMetric(title, values, formatValue, options = {}) {
   return metric;
 }
 
-function renderTrends() {
+function renderTrends(renderHistory) {
   const strip = element("div", "trend-strip");
   append(
     strip,
-    trendCard("Avg GPU util", history.cluster.util, formatPercent, { max: 100 }),
-    trendCard("HBM used", history.cluster.memory, formatPercent, { max: 100 }),
-    trendCard("Host CPU", history.cluster.hostCpu, formatPercent, { max: 100 }),
+    trendCard("Avg GPU util", renderHistory.cluster.util, formatPercent, { max: 100 }),
+    trendCard("HBM used", renderHistory.cluster.memory, formatPercent, { max: 100 }),
+    trendCard("Host CPU", renderHistory.cluster.hostCpu, formatPercent, { max: 100 }),
   );
   return strip;
 }
 
 function renderOverview() {
   const stats = clusterStats();
+  const renderHistory = historyForRender();
   const fragment = document.createDocumentFragment();
   const controls = segmented([
     { value: "util", label: "Util" },
@@ -1289,12 +1342,12 @@ function renderOverview() {
     pageHead("Fleet overview", `${stats.processCount} unique GPU processes`),
     clusterKpis(stats),
   );
-  if (history.timestamps.length >= 2) {
+  if (renderHistory.timestamps.length >= 2) {
     fragment.append(
       section(
         "Trends",
-        renderTrends(),
-        element("span", "section-count", `${history.timestamps.length} samples`),
+        renderTrends(renderHistory),
+        element("span", "section-count", `${renderHistory.timestamps.length} samples`),
       ),
     );
   }
@@ -1364,7 +1417,8 @@ function findCurrentProcess(host, gpuIndex, pid) {
 
 function processHistoryFor(host, gpuIndex, pid) {
   const key = processKey(host, gpuIndex, pid);
-  let entry = history.processes.get(key);
+  const renderHistory = historyForRender();
+  let entry = renderHistory.processes.get(key);
   const current = findCurrentProcess(host, gpuIndex, pid);
   const resetReason = entry && current.process
     ? processGenerationChangeReason(entry, current.process)
@@ -1376,10 +1430,17 @@ function processHistoryFor(host, gpuIndex, pid) {
       entry,
       resetReason || "First observed",
       state.cluster.timestamp,
+      renderHistory,
     );
-    appendProcessSample(entry, current.node, current.process, state.cluster.timestamp);
-    history.processes.set(key, entry);
-    pruneProcessHistory();
+    appendProcessSample(
+      entry,
+      current.node,
+      current.process,
+      state.cluster.timestamp,
+      renderHistory,
+    );
+    renderHistory.processes.set(key, entry);
+    if (renderHistory === history) pruneProcessHistory();
   }
   return { entry, ...current };
 }
@@ -1766,7 +1827,8 @@ function renderNodeDetail(host) {
     { label: "Uptime", value: formatDuration(stats.host.uptime_seconds) },
   ]));
   fragment.append(section("GPU devices", renderGpuTable(node, selectedGpu), element("span", "section-count", `${stats.gpuCount} devices`)));
-  const nodeHistory = history.nodes.get(host);
+  const renderHistory = historyForRender();
+  const nodeHistory = renderHistory.nodes.get(host);
   if (nodeHistory && nodeHistory.util.filter(finite).length >= 2) {
     const strip = element("div", "trend-strip");
     append(
@@ -1778,7 +1840,7 @@ function renderNodeDetail(host) {
       section(
         "Trends",
         strip,
-        element("span", "section-count", `${history.timestamps.length} samples`),
+        element("span", "section-count", `${renderHistory.timestamps.length} samples`),
       ),
     );
   }
@@ -1799,10 +1861,29 @@ function updateShell() {
   connectionState.classList.toggle("live", state.connected);
   connectionState.classList.toggle("offline", !state.connected && Boolean(state.cluster));
   connectionLabel.textContent = state.connected ? "Live" : state.cluster ? "Reconnecting" : "Connecting";
-  refreshState.textContent = state.connected ? "SSE live" : "SSE reconnecting";
-  sampleTime.textContent = state.cluster && finite(state.cluster.timestamp)
-    ? `Updated ${new Date(state.cluster.timestamp * 1000).toLocaleTimeString()}`
-    : "No sample yet";
+  const transportState = state.connected
+    ? "SSE live"
+    : state.cluster ? "SSE reconnecting" : "SSE connecting";
+  refreshState.textContent = state.paused
+    ? `${transportState} | Paused${state.bufferedUpdates ? ` | ${state.bufferedUpdates} buffered` : ""}`
+    : transportState;
+  pauseButton.disabled = !state.cluster;
+  pauseButton.setAttribute("aria-pressed", state.paused ? "true" : "false");
+  pauseButton.title = state.paused
+    ? "Resume dashboard updates (P)"
+    : "Pause dashboard updates (P)";
+  pauseCount.textContent = state.bufferedUpdates
+    ? state.bufferedUpdates > 999 ? "999+" : String(state.bufferedUpdates)
+    : "";
+  pauseCount.hidden = state.bufferedUpdates === 0;
+  if (state.cluster && finite(state.cluster.timestamp)) {
+    const timestamp = new Date(state.cluster.timestamp * 1000).toLocaleTimeString();
+    sampleTime.textContent = state.paused
+      ? `Paused at ${timestamp}`
+      : `Updated ${timestamp}`;
+  } else {
+    sampleTime.textContent = "No sample yet";
+  }
   const route = currentRoute();
   const activeRoute = route.name === "node"
     ? "nodes"
@@ -1846,9 +1927,55 @@ function render() {
   syncTableScrollRegions();
 }
 
+function setPaused(paused) {
+  if (paused === state.paused) return;
+  if (paused) {
+    if (!state.cluster) {
+      if (appStatus) {
+        appStatus.textContent = "Updates can be paused after the first sample arrives.";
+      }
+      return;
+    }
+    state.pausedHistory = cloneHistory(history);
+    state.latestCluster = state.latestCluster || state.cluster;
+    state.paused = true;
+    state.bufferedUpdates = 0;
+    updateShell();
+    if (appStatus) {
+      appStatus.textContent = `Dashboard updates paused. Showing sample from ${formatTimestamp(state.cluster.timestamp)}.`;
+    }
+    return;
+  }
+
+  const bufferedUpdates = state.bufferedUpdates;
+  const statusBeforeRender = appStatus ? appStatus.textContent : "";
+  state.paused = false;
+  if (state.latestCluster) state.cluster = state.latestCluster;
+  state.pausedHistory = null;
+  state.bufferedUpdates = 0;
+  render();
+  if (appStatus) {
+    const resumeMessage = bufferedUpdates
+      ? `Dashboard updates resumed. Showing the latest sample from ${formatTimestamp(state.cluster.timestamp)}.`
+      : "Dashboard updates resumed.";
+    const transitionMessage = appStatus.textContent !== statusBeforeRender
+      ? appStatus.textContent
+      : "";
+    appStatus.textContent = transitionMessage
+      ? `${resumeMessage} ${transitionMessage}`
+      : resumeMessage;
+  }
+}
+
+function togglePaused() {
+  setPaused(!state.paused);
+}
+
 for (const button of navButtons) {
   button.addEventListener("click", () => navigate(button.dataset.route));
 }
+
+pauseButton.addEventListener("click", togglePaused);
 
 const themeToggle = document.getElementById("theme-toggle");
 
@@ -1899,7 +2026,10 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") event.target.blur();
     return;
   }
-  if (event.key === "1") navigate("overview");
+  if (!event.repeat && (event.key === "p" || event.key === "Z")) {
+    event.preventDefault();
+    togglePaused();
+  } else if (event.key === "1") navigate("overview");
   else if (event.key === "2") navigate("nodes");
   else if (event.key === "3") navigate("processes");
   else if (event.key === "/") {
@@ -1921,7 +2051,7 @@ if (!window.location.hash) {
 fetch("/api/snapshot")
   .then((response) => response.ok ? response.json() : null)
   .then((cluster) => {
-    if (cluster && Array.isArray(cluster.nodes) && !state.cluster) {
+    if (cluster && Array.isArray(cluster.nodes) && !state.latestCluster) {
       if (applyCluster(cluster)) render();
     }
   })
@@ -1937,7 +2067,8 @@ stream.onmessage = (event) => {
     const cluster = JSON.parse(event.data);
     if (applyCluster(cluster)) {
       state.connected = true;
-      render();
+      if (state.paused) updateShell();
+      else render();
     }
   } catch (_) {
     refreshState.textContent = "Invalid sample";
@@ -1947,5 +2078,14 @@ stream.onerror = () => {
   state.connected = false;
   updateShell();
 };
+
+window.addEventListener("offline", () => {
+  state.connected = false;
+  updateShell();
+});
+window.addEventListener("online", () => {
+  state.connected = stream.readyState === EventSource.OPEN;
+  updateShell();
+});
 
 render();

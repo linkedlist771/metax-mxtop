@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A true pause mode for the remote dashboard: the header control or `p`/`Z`
+  freezes the displayed snapshot across navigation, filtering, sorting, and
+  JSON download while SSE ingestion and bounded history continue. The UI
+  reports buffered samples and resumes atomically at the newest frame.
 - Accessible sorting for every node and process column in the remote dashboard.
   Headers work with mouse or keyboard, expose the active direction to assistive
   technology, keep unavailable values last, and preserve sort focus and table

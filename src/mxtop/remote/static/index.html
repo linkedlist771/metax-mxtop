@@ -26,6 +26,13 @@
         <span class="status-dot" aria-hidden="true"></span>
         <span id="connection-label">Connecting</span>
       </span>
+      <button type="button" id="pause-updates" class="pause-toggle"
+              aria-label="Pause dashboard updates" aria-describedby="refresh-state"
+              aria-keyshortcuts="p Z" aria-pressed="false" disabled
+              title="Pause dashboard updates (P)">
+        <span class="pause-icon" aria-hidden="true">&#x23f8;&#xfe0e;</span>
+        <span id="pause-count" class="pause-count" hidden></span>
+      </button>
       <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" title="Toggle color theme"></button>
     </div>
   </header>
