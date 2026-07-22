@@ -9,16 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Accessible sorting for every node and process column in the remote dashboard.
+  Headers work with mouse or keyboard, expose the active direction to assistive
+  technology, keep unavailable values last, and preserve sort focus and table
+  scroll position through filtering and live SSE updates.
 - Process investigation pages in the remote dashboard: click a PID or command
   to inspect its current CPU, GPU, and memory telemetry alongside bounded
   per-process history. Last samples remain available when a process exits or
   its node is unreachable, and PID reuse starts a clearly labelled generation
   instead of mixing two processes into one chart.
 - Deterministic dashboard lifecycle fixtures and Playwright coverage for
-  process navigation, SSE focus preservation, node-down/ended/PID-reuse
-  transitions, and the 320px responsive layout. The browser suite now gates
-  the single release-artifact build, with npm dependencies tracked by
-  Dependabot.
+  process navigation, accessible table sorting, SSE focus preservation,
+  node-down/ended/PID-reuse transitions, and the 320px responsive layout. The
+  browser suite now gates the single release-artifact build, with npm
+  dependencies tracked by Dependabot.
 - `--auth-token` / `MXTOP_AUTH_TOKEN` shared-secret protection for the remote
   cluster dashboard: requests need `Authorization: Bearer <token>`, or a
   one-time `?token=` visit that sets an HttpOnly cookie. Binding beyond

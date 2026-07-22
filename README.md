@@ -339,13 +339,15 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   history. An exited process or unreachable node keeps its last sample visible;
   creation time or backend identity defines generations when available, with
   ended-state, command, and runtime-reset reconciliation covering remote PID
-  reuse. A new generation never inherits the previous process's charts. Remote
-  process rows are enriched with one batched `ps` query per node; missing Linux
-  host fields degrade to unavailable values without taking the node offline. View
-  state is encoded in the URL hash, so browser back/forward navigation works
-  without reconnecting to the nodes. Dark and light themes follow the
-  browser's `prefers-color-scheme` and can be switched with the header
-  toggle; the choice persists in the browser.
+  reuse. A new generation never inherits the previous process's charts. Every
+  node and process column is sortable by mouse or keyboard; the active direction
+  remains visible and survives filters, navigation, and live updates, while
+  unavailable values stay last. Remote process rows are enriched with one
+  batched `ps` query per node; missing Linux host fields degrade to unavailable
+  values without taking the node offline. View state is encoded in the URL hash,
+  so browser back/forward navigation works without reconnecting to the nodes.
+  Dark and light themes follow the browser's `prefers-color-scheme` and can be
+  switched with the header toggle; the choice persists in the browser.
 - Each node runs the same `mx-smi` queries as the local backend; override the
   remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
 

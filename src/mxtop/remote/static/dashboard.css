@@ -499,6 +499,10 @@ a:focus-visible,
   scrollbar-color: var(--line) transparent;
 }
 
+.table-wrap[role="region"]:focus-visible {
+  outline-offset: -2px;
+}
+
 .heatmap {
   min-width: 100%;
   padding: 10px 0 2px;
@@ -588,6 +592,63 @@ th {
   font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
+}
+
+th.sortable-header {
+  padding: 0;
+}
+
+.sortable-header[aria-sort="ascending"],
+.sortable-header[aria-sort="descending"] {
+  background: var(--active-bg);
+  color: var(--active-text);
+}
+
+.sort-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 33px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  padding: 6px 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.sortable-header.left .sort-button {
+  justify-content: flex-start;
+}
+
+.sort-button::after {
+  width: 10px;
+  flex: 0 0 10px;
+  color: var(--accent);
+  content: "";
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
+.sort-button[data-sort-direction="ascending"]::after {
+  content: "\2191";
+}
+
+.sort-button[data-sort-direction="descending"]::after {
+  content: "\2193";
+}
+
+.sort-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sort-button:focus-visible {
+  outline-offset: -3px;
 }
 
 th.left,
@@ -1065,6 +1126,32 @@ tbody tr:last-child td {
   .metric-bar {
     width: 48px;
   }
+
+  .table-wrap th:first-child,
+  .table-wrap td:first-child {
+    position: sticky;
+    left: 0;
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  .table-wrap th:first-child {
+    z-index: 2;
+    background: var(--table-header-bg);
+  }
+
+  .table-wrap .sortable-header[aria-sort]:first-child {
+    background: var(--active-bg);
+  }
+
+  .table-wrap td:first-child {
+    z-index: 1;
+    background: var(--bg);
+  }
+
+  .table-wrap tbody tr.clickable:hover td:first-child,
+  .table-wrap tbody tr.selected td:first-child {
+    background: var(--surface-hover);
+  }
 }
 
 @media (max-width: 430px) {
@@ -1105,5 +1192,11 @@ tbody tr:last-child td {
 @media (prefers-reduced-motion: reduce) {
   .loading-line {
     animation: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .sort-button {
+    min-height: 44px;
   }
 }

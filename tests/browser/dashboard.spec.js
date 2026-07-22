@@ -100,6 +100,18 @@ function sampleCount(page) {
     .locator(".section-count");
 }
 
+function sortButton(table, label) {
+  return table.locator("th")
+    .filter({ hasText: new RegExp(`^${label}$`) })
+    .getByRole("button");
+}
+
+async function tableColumn(table, index) {
+  return table.locator("tbody tr").evaluateAll((rows, columnIndex) => {
+    return rows.map((row) => row.cells[columnIndex].textContent.trim());
+  }, index);
+}
+
 test.afterEach(async () => {
   const fixtures = [...runningFixtures];
   runningFixtures.clear();
@@ -194,6 +206,118 @@ test("restarts history when a PID is reused between polls", async ({ page }) => 
   await expect(sampleCount(page)).toHaveText("1 sample");
 });
 
+test("sorts and filters processes with accessible column state", async ({ page }) => {
+  const fixture = await startFixture({ step: 5 });
+  await page.goto(`${fixture.url}/#/processes`);
+  const table = page.getByRole("table", { name: "Processes" });
+  await expect(table).toBeVisible();
+  await expect(page.getByRole("region", { name: /Processes table/ })).toHaveCount(0);
+
+  const gpuMemory = sortButton(table, "GPU memory");
+  await expect(table.locator("th[aria-sort]")).toHaveCount(1);
+  await expect(gpuMemory.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "descending",
+  );
+  expect(await tableColumn(table, 2)).toEqual(["423901", "781044", "424250"]);
+
+  const runtime = sortButton(table, "Runtime");
+  await expect(runtime).toHaveAccessibleName("Runtime, sort descending");
+  await expect(runtime.locator("xpath=ancestor::th")).not.toHaveAttribute("aria-sort");
+  await runtime.click();
+  await expect(runtime).toBeFocused();
+  await expect(runtime).toHaveAccessibleName(
+    "Runtime, sorted descending; sort ascending",
+  );
+  await expect(runtime.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "descending",
+  );
+  await expect.poll(() => runtime.evaluate((button) => {
+    return getComputedStyle(button, "::after").content;
+  })).toContain("\u2193");
+  expect(await tableColumn(table, 2)).toEqual(["423901", "424250", "781044"]);
+
+  await runtime.press(" ");
+  await expect(runtime).toBeFocused();
+  await expect(runtime.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+  await expect(page.locator("#app-status")).toContainText(
+    "Processes sorted by Runtime, ascending",
+  );
+  expect(await tableColumn(table, 2)).toEqual(["781044", "424250", "423901"]);
+
+  await page.getByRole("searchbox", {
+    name: "Search node, GPU, PID, user, or command",
+  }).fill("atlas-01");
+  expect(await tableColumn(table, 2)).toEqual(["424250", "423901"]);
+  await expect(runtime.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+});
+
+test("keeps node sort focus and missing values stable across SSE", async ({ page }) => {
+  const fixture = await startFixture({
+    start_step: 5,
+    control_stdin: true,
+  });
+  await page.goto(`${fixture.url}/#/nodes`);
+  const table = page.getByRole("table", { name: "Nodes" });
+  await expect(table).toBeVisible();
+
+  const stateHeader = sortButton(table, "State");
+  await expect(table.locator("th[aria-sort]")).toHaveCount(1);
+  await expect(stateHeader).toHaveAccessibleName(
+    "State, sorted ascending, Down first; sort descending, Online first",
+  );
+  await expect(stateHeader.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+  const cpu = sortButton(table, "CPU");
+  await cpu.click();
+  await expect(stateHeader).toHaveAccessibleName(
+    "State, sort ascending, Down first",
+  );
+  await expect(cpu).toBeFocused();
+  expect(await tableColumn(table, 0)).toEqual(["atlas-01", "borealis-02"]);
+
+  await cpu.press("Enter");
+  await expect(cpu.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+  expect(await tableColumn(table, 0)).toEqual(["borealis-02", "atlas-01"]);
+
+  publishStep(fixture, 6);
+  await expect(table.locator(".node-state.offline")).toHaveText("Down");
+  expect(await tableColumn(table, 0)).toEqual(["borealis-02", "atlas-01"]);
+  await expect(cpu).toBeFocused();
+  await expect(cpu.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+
+  await cpu.press("Enter");
+  await expect(cpu.locator("xpath=ancestor::th")).toHaveAttribute(
+    "aria-sort",
+    "descending",
+  );
+  expect(await tableColumn(table, 0)).toEqual(["borealis-02", "atlas-01"]);
+
+  await stateHeader.click();
+  await expect(page.locator("#app-status")).toContainText(
+    "Nodes sorted by State, ascending, Down first",
+  );
+  await stateHeader.click();
+  await expect(page.locator("#app-status")).toContainText(
+    "Nodes sorted by State, descending, Online first",
+  );
+});
+
 test.describe("responsive process record", () => {
   test.use({ viewport: { width: 320, height: 568 } });
 
@@ -213,5 +337,51 @@ test.describe("responsive process record", () => {
       return getComputedStyle(summary).gridTemplateColumns.split(" ").length;
     })).toBe(2);
     await expectNoDocumentOverflow(page);
+  });
+
+  test("contains sortable process headers inside the table scroller", async ({ page }) => {
+    const fixture = await startFixture({ step: 5 });
+    await page.goto(`${fixture.url}/#/processes`);
+    const table = page.getByRole("table", { name: "Processes" });
+    const wrap = page.getByRole("region", {
+      name: "Processes table, horizontally scrollable",
+    });
+    const runtime = sortButton(table, "Runtime");
+
+    await expect(wrap).toHaveAttribute("tabindex", "0");
+    await runtime.scrollIntoViewIfNeeded();
+    const scrollBeforeSort = await wrap.evaluate((node) => node.scrollLeft);
+    await runtime.click();
+
+    await expect(runtime.locator("xpath=ancestor::th")).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+    await expect.poll(() => wrap.evaluate((node) => node.scrollWidth > node.clientWidth))
+      .toBe(true);
+    await expect.poll(() => wrap.evaluate((node) => node.scrollLeft))
+      .toBe(scrollBeforeSort);
+    await wrap.evaluate((node) => { node.scrollLeft = node.scrollWidth; });
+    await expect.poll(() => table.locator("th").last().evaluate((header) => {
+      const headerRect = header.getBoundingClientRect();
+      const wrapRect = header.closest(".table-wrap").getBoundingClientRect();
+      const visibleWidth = Math.min(headerRect.right, wrapRect.right)
+        - Math.max(headerRect.left, wrapRect.left);
+      return visibleWidth >= 40 && headerRect.right <= wrapRect.right + 1;
+    })).toBe(true);
+    await expect.poll(() => table.locator("tbody td").first().evaluate((cell) => {
+      return getComputedStyle(cell).position;
+    })).toBe("sticky");
+    await expectNoDocumentOverflow(page);
+
+    const rawWrap = page.locator('[data-scroll-key="process-table"]');
+    await rawWrap.focus();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(rawWrap).toBeFocused();
+    await expect(rawWrap).toHaveAttribute("role", "region");
+    await expect(rawWrap).toHaveAttribute("aria-label", "Processes table");
+    await page.getByRole("button", { name: "Overview" }).focus();
+    await expect(rawWrap).not.toHaveAttribute("role");
+    await expect(rawWrap).toHaveAttribute("tabindex", "-1");
   });
 });

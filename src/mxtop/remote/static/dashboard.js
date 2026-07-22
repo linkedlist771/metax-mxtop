@@ -14,6 +14,10 @@ const state = {
   connected: false,
   heatMetric: "util",
   searches: { nodes: "", processes: "" },
+  sorts: {
+    nodes: { key: "state", direction: "ascending" },
+    processes: { key: "gpuMemory", direction: "descending" },
+  },
   selectedGpu: {},
   processReturnRoute: "processes",
   renderedRouteKey: null,
@@ -635,20 +639,335 @@ function metricBar(value, metric = "util", label = null) {
   return wrapper;
 }
 
-function tableShell(headers, scrollKey) {
+const NODE_TABLE_COLUMNS = [
+  {
+    key: "node",
+    label: "Node",
+    left: true,
+    kind: "text",
+    defaultDirection: "ascending",
+    value: (node) => node.hostname,
+  },
+  {
+    key: "state",
+    label: "State",
+    left: true,
+    kind: "number",
+    defaultDirection: "ascending",
+    value: (node) => Number(Boolean(node.reachable)),
+  },
+  {
+    key: "gpus",
+    label: "GPUs",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).gpuCount,
+  },
+  {
+    key: "active",
+    label: "Active",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).active,
+  },
+  {
+    key: "util",
+    label: "Util",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).util,
+  },
+  {
+    key: "memory",
+    label: "HBM",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).memory,
+  },
+  {
+    key: "temperature",
+    label: "Peak temp",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).maxTemp,
+  },
+  {
+    key: "power",
+    label: "Power",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).power,
+  },
+  {
+    key: "cpu",
+    label: "CPU",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).host.cpu_percent,
+  },
+  {
+    key: "ram",
+    label: "RAM",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).host.memory_percent,
+  },
+  {
+    key: "load",
+    label: "Load",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).host.load_average_1m,
+  },
+  {
+    key: "processes",
+    label: "Procs",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => nodeStats(node).processes.length,
+  },
+  {
+    key: "latency",
+    label: "SSH",
+    kind: "number",
+    defaultDirection: "descending",
+    value: (node) => node.latency_ms,
+  },
+];
+
+const PROCESS_TABLE_COLUMNS = [
+  {
+    key: "node",
+    label: "Node",
+    left: true,
+    kind: "text",
+    defaultDirection: "ascending",
+    value: ({ node }) => node.hostname,
+  },
+  {
+    key: "gpu",
+    label: "GPU",
+    kind: "number",
+    defaultDirection: "ascending",
+    value: ({ process }) => process.gpu_index,
+  },
+  {
+    key: "pid",
+    label: "PID",
+    kind: "number",
+    defaultDirection: "ascending",
+    value: ({ process }) => process.pid,
+  },
+  {
+    key: "type",
+    label: "Type",
+    left: true,
+    kind: "text",
+    defaultDirection: "ascending",
+    value: ({ process }) => process.process_type,
+  },
+  {
+    key: "user",
+    label: "User",
+    left: true,
+    kind: "text",
+    defaultDirection: "ascending",
+    value: ({ process }) => process.user,
+  },
+  {
+    key: "gpuMemory",
+    label: "GPU memory",
+    kind: "number",
+    defaultDirection: "descending",
+    value: ({ process }) => process.gpu_memory_bytes,
+  },
+  {
+    key: "gpuUtil",
+    label: "GPU util",
+    kind: "number",
+    defaultDirection: "descending",
+    value: ({ process }) => process.gpu_util_percent,
+  },
+  {
+    key: "cpu",
+    label: "CPU",
+    kind: "number",
+    defaultDirection: "descending",
+    value: ({ process }) => process.cpu_percent,
+  },
+  {
+    key: "hostMemory",
+    label: "Host memory",
+    kind: "number",
+    defaultDirection: "descending",
+    value: ({ process }) => process.host_memory_bytes,
+  },
+  {
+    key: "runtime",
+    label: "Runtime",
+    kind: "number",
+    defaultDirection: "descending",
+    value: ({ process }) => process.runtime_seconds,
+  },
+  {
+    key: "command",
+    label: "Command",
+    left: true,
+    kind: "text",
+    defaultDirection: "ascending",
+    value: ({ process }) => process.command || process.name,
+  },
+];
+
+function missingSortValue(value, kind) {
+  if (kind === "number") return !finite(value);
+  return value === null || value === undefined || String(value).trim() === "";
+}
+
+function compareText(left, right) {
+  return String(left).localeCompare(String(right), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  }) || String(left).localeCompare(String(right));
+}
+
+function compareSortValues(left, right, column, direction) {
+  const leftMissing = missingSortValue(left, column.kind);
+  const rightMissing = missingSortValue(right, column.kind);
+  if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+  if (leftMissing) return 0;
+  const comparison = column.kind === "number"
+    ? left - right
+    : compareText(left, right);
+  return direction === "descending" ? -comparison : comparison;
+}
+
+function compareIdentityNumber(left, right) {
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  const normalizedLeft = finite(leftNumber) ? leftNumber : Number.MAX_SAFE_INTEGER;
+  const normalizedRight = finite(rightNumber) ? rightNumber : Number.MAX_SAFE_INTEGER;
+  return normalizedLeft - normalizedRight;
+}
+
+function nodeTieBreaker(left, right) {
+  return compareText(left.hostname, right.hostname);
+}
+
+function processTieBreaker(left, right) {
+  return compareText(left.node.hostname, right.node.hostname)
+    || compareIdentityNumber(left.process.gpu_index, right.process.gpu_index)
+    || compareIdentityNumber(left.process.pid, right.process.pid);
+}
+
+function sortedTableRows(scope, rows, columns, tieBreaker) {
+  const sort = state.sorts[scope];
+  const column = columns.find((candidate) => candidate.key === sort.key) || columns[0];
+  const values = new Map(rows.map((row) => [row, column.value(row)]));
+  return [...rows].sort((left, right) => {
+    return compareSortValues(
+      values.get(left),
+      values.get(right),
+      column,
+      sort.direction,
+    ) || tieBreaker(left, right);
+  });
+}
+
+function updateSort(scope, column) {
+  const current = state.sorts[scope];
+  const direction = current.key === column.key
+    ? current.direction === "ascending" ? "descending" : "ascending"
+    : column.defaultDirection;
+  state.sorts[scope] = { key: column.key, direction };
+  if (appStatus) {
+    const semanticOrder = column.key === "state"
+      ? `, ${direction === "ascending" ? "Down first" : "Online first"}`
+      : "";
+    appStatus.textContent = `${scope === "nodes" ? "Nodes" : "Processes"} sorted by ${column.label}, ${direction}${semanticOrder}.`;
+  }
+  render();
+}
+
+function tableShell(
+  headers,
+  scrollKey,
+  { sortScope = null, label = null } = {},
+) {
   const wrap = element("div", "table-wrap");
   wrap.dataset.scrollKey = scrollKey;
   const table = document.createElement("table");
+  if (label) {
+    table.setAttribute("aria-label", label);
+    wrap.dataset.tableLabel = label;
+    wrap.tabIndex = -1;
+    keepFocus(wrap, "table-scroll", scrollKey);
+    wrap.addEventListener("blur", syncTableScrollRegions);
+  }
   const thead = document.createElement("thead");
   const row = document.createElement("tr");
   for (const header of headers) {
-    row.append(element("th", header.left ? "left" : "", header.label));
+    const th = element("th", header.left ? "left" : "");
+    th.scope = "col";
+    if (sortScope && header.key) {
+      const sort = state.sorts[sortScope];
+      const active = sort.key === header.key;
+      const direction = active ? sort.direction : "none";
+      th.classList.add("sortable-header");
+      if (active) th.setAttribute("aria-sort", direction);
+      th.dataset.sortDirection = direction;
+      const button = element("button", "sort-button", header.label);
+      button.type = "button";
+      button.dataset.sortDirection = direction;
+      keepFocus(button, "sort", sortScope, header.key);
+      const nextDirection = active
+        ? direction === "ascending" ? "descending" : "ascending"
+        : header.defaultDirection;
+      const currentOrder = header.key === "state"
+        ? `, ${direction === "ascending" ? "Down first" : "Online first"}`
+        : "";
+      const nextOrder = header.key === "state"
+        ? `, ${nextDirection === "ascending" ? "Down first" : "Online first"}`
+        : "";
+      button.setAttribute(
+        "aria-label",
+        active
+          ? `${header.label}, sorted ${direction}${currentOrder}; sort ${nextDirection}${nextOrder}`
+          : `${header.label}, sort ${nextDirection}${nextOrder}`,
+      );
+      button.addEventListener("click", () => updateSort(sortScope, header));
+      th.append(button);
+    } else {
+      th.textContent = header.label;
+    }
+    row.append(th);
   }
   thead.append(row);
   const tbody = document.createElement("tbody");
   append(table, thead, tbody);
   wrap.append(table);
   return { wrap, table, tbody };
+}
+
+function syncTableScrollRegions() {
+  document.querySelectorAll(".table-wrap[data-table-label]").forEach((wrap) => {
+    const scrollable = wrap.scrollWidth > wrap.clientWidth + 1;
+    const focused = document.activeElement === wrap;
+    if (scrollable || focused) {
+      wrap.tabIndex = 0;
+      wrap.setAttribute("role", "region");
+      wrap.setAttribute(
+        "aria-label",
+        scrollable
+          ? `${wrap.dataset.tableLabel} table, horizontally scrollable`
+          : `${wrap.dataset.tableLabel} table`,
+      );
+    } else {
+      wrap.tabIndex = -1;
+      wrap.removeAttribute("role");
+      wrap.removeAttribute("aria-label");
+    }
+  });
 }
 
 function cell(row, content, className = "") {
@@ -758,22 +1077,17 @@ function renderHeatmap(stats) {
 }
 
 function renderNodeTable(nodes, scrollKey) {
-  const shell = tableShell([
-    { label: "Node", left: true },
-    { label: "State", left: true },
-    { label: "GPUs" },
-    { label: "Active" },
-    { label: "Util" },
-    { label: "HBM" },
-    { label: "Peak temp" },
-    { label: "Power" },
-    { label: "CPU" },
-    { label: "RAM" },
-    { label: "Load" },
-    { label: "Procs" },
-    { label: "SSH" },
-  ], scrollKey);
-  for (const node of nodes) {
+  const shell = tableShell(NODE_TABLE_COLUMNS, scrollKey, {
+    sortScope: "nodes",
+    label: "Nodes",
+  });
+  const sortedNodes = sortedTableRows(
+    "nodes",
+    nodes,
+    NODE_TABLE_COLUMNS,
+    nodeTieBreaker,
+  );
+  for (const node of sortedNodes) {
     const stats = nodeStats(node);
     const row = document.createElement("tr");
     makeClickableRow(row, node.hostname);
@@ -1019,9 +1333,7 @@ function renderNodes() {
       const device = devicesFor(node)[0] || {};
       return !query || [node.hostname, device.name, device.driver_version, device.maca_version]
         .some((value) => String(value || "").toLowerCase().includes(query));
-    })
-    .sort((left, right) => Number(left.reachable) - Number(right.reachable)
-      || left.hostname.localeCompare(right.hostname));
+    });
   const fragment = document.createDocumentFragment();
   append(
     fragment,
@@ -1259,20 +1571,17 @@ function renderProcessDetail(host, gpuIndex, pid) {
 }
 
 function renderProcessTable(rows, scrollKey) {
-  const shell = tableShell([
-    { label: "Node", left: true },
-    { label: "GPU" },
-    { label: "PID" },
-    { label: "Type", left: true },
-    { label: "User", left: true },
-    { label: "GPU memory" },
-    { label: "GPU util" },
-    { label: "CPU" },
-    { label: "Host memory" },
-    { label: "Runtime" },
-    { label: "Command", left: true },
-  ], scrollKey);
-  for (const { node, process } of rows) {
+  const shell = tableShell(PROCESS_TABLE_COLUMNS, scrollKey, {
+    sortScope: "processes",
+    label: "Processes",
+  });
+  const sortedRows = sortedTableRows(
+    "processes",
+    rows,
+    PROCESS_TABLE_COLUMNS,
+    processTieBreaker,
+  );
+  for (const { node, process } of sortedRows) {
     const row = document.createElement("tr");
     const hostButton = element("button", "link-button", node.hostname);
     hostButton.type = "button";
@@ -1338,10 +1647,6 @@ function renderProcesses() {
       process.command,
       process.name,
     ].some((value) => String(value || "").toLowerCase().includes(query));
-  }).sort((left, right) => {
-    return (right.process.gpu_memory_bytes || 0) - (left.process.gpu_memory_bytes || 0)
-      || left.node.hostname.localeCompare(right.node.hostname)
-      || left.process.gpu_index - right.process.gpu_index;
   });
   const fragment = document.createDocumentFragment();
   append(
@@ -1364,7 +1669,9 @@ function renderGpuTable(node, selectedGpu) {
     { label: "Mem BW" },
     { label: "GPU clock" },
     { label: "Mode", left: true },
-  ], `node-${node.hostname}-gpus`);
+  ], `node-${node.hostname}-gpus`, {
+    label: `GPU devices on ${node.hostname}`,
+  });
   shell.wrap.classList.add("node-detail-table");
   for (const device of devicesFor(node)) {
     const row = document.createElement("tr");
@@ -1536,6 +1843,7 @@ function render() {
   } else {
     restoreTransientState(transient);
   }
+  syncTableScrollRegions();
 }
 
 for (const button of navButtons) {
@@ -1604,6 +1912,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("hashchange", render);
+window.addEventListener("resize", syncTableScrollRegions);
 
 if (!window.location.hash) {
   window.history.replaceState(null, "", "#/overview");
