@@ -17,7 +17,12 @@ from mxtop.models import (
     NodeSnapshot,
     ProcessSnapshot,
 )
-from mxtop.remote.web import SnapshotHolder, access_url, make_server
+from mxtop.remote.web import (
+    SnapshotHolder,
+    access_url,
+    create_tls_context,
+    make_server,
+)
 
 GIB = 1024**3
 MIB = 1024**2
@@ -347,6 +352,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--interval", type=float, default=0.75)
+    parser.add_argument("--tls-cert", metavar="CERTFILE")
+    parser.add_argument("--tls-key", metavar="KEYFILE")
+    parser.add_argument("--tls-key-password-file", metavar="FILE")
     parser.add_argument(
         "--profile",
         choices=tuple(FIXTURE_PROFILES),
@@ -428,7 +436,8 @@ def _next_step(current: int, stop_step: int | None) -> int | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         raise SystemExit("port must be between 0 and 65535")
     if args.interval <= 0:
@@ -441,11 +450,29 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("stop-step must not be less than start-step")
     if args.step is not None and args.control_stdin:
         raise SystemExit("step and control-stdin cannot be combined")
+    if (args.tls_cert is None) != (args.tls_key is None):
+        parser.error("--tls-cert and --tls-key must be provided together")
+    if args.tls_key_password_file is not None and args.tls_cert is None:
+        parser.error("--tls-key-password-file requires --tls-cert and --tls-key")
+
+    try:
+        tls_context = create_tls_context(
+            args.tls_cert,
+            args.tls_key,
+            key_password_file=args.tls_key_password_file,
+        )
+    except Exception as exc:
+        raise SystemExit(f"TLS setup failed: {exc}") from exc
 
     holder = SnapshotHolder()
     initial_step = args.step if args.step is not None else args.start_step
     holder.update(fixture_cluster(initial_step, args.profile))
-    server = make_server(holder, bind=args.bind, port=args.port)
+    server = make_server(
+        holder,
+        bind=args.bind,
+        port=args.port,
+        tls_context=tls_context,
+    )
     stop = threading.Event()
     poller = None
 
@@ -474,7 +501,11 @@ def main(argv: list[str] | None = None) -> int:
         poller.start()
 
     port = server.server_address[1]
-    print(f"mxtop dashboard fixture: {access_url(args.bind, port)}", flush=True)
+    print(
+        f"mxtop dashboard fixture: "
+        f"{access_url(args.bind, port, tls=tls_context is not None)}",
+        flush=True,
+    )
     print("Press Ctrl+C to stop.", flush=True)
     try:
         server.serve_forever()

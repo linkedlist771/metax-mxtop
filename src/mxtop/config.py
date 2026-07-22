@@ -41,6 +41,9 @@ REMOTE_KEYS = {
     "bind": str,
     "port": int,
     "auth-token": str,
+    "tls-cert": str,
+    "tls-key": str,
+    "tls-key-password-file": str,
     "mxsmi-path": str,
     "command-timeout": float,
     "open": bool,
@@ -121,6 +124,13 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
                     continue
                 coerced = _coerce("remote.", remote_key, remote_value, expected)
                 if coerced is None:
+                    continue
+                if remote_key in {
+                    "tls-cert",
+                    "tls-key",
+                    "tls-key-password-file",
+                } and not coerced.strip():
+                    _warn(f"remote.{remote_key} must not be empty")
                     continue
                 if remote_key == "command-timeout" and (
                     not math.isfinite(coerced) or coerced < 0.1

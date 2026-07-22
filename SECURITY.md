@@ -30,30 +30,54 @@ agreed with the reporter.
 - Local TUI process signals require confirmation, validate process identity
   against PID reuse, and enforce process ownership unless run as root. Use
   `--readonly` to disable them entirely.
-- Remote mode is telemetry-only and does not expose process signals over HTTP.
+- Remote mode is telemetry-only and does not expose process signals through
+  the HTTP or HTTPS API.
 - Remote SSH connections use configured keys or `ssh-agent`; password
   authentication is not stored or prompted for by mxtop.
 - The web dashboard and local Prometheus exporter bind to `127.0.0.1` by
-  default. Binding to a non-loopback address without a token prints a warning.
+  default. Non-loopback plain HTTP and missing authentication produce separate
+  warnings.
 
-## Secure deployment of HTTP endpoints
+## Secure deployment of web endpoints
 
-The dashboard and exporter use plain HTTP. `--auth-token` protects access but
-**does not encrypt traffic**. For access across an untrusted network:
+The dashboard and exporter use HTTP by default and can terminate TLS directly
+with paired `--tls-cert` and `--tls-key` options. An encrypted private key also
+requires `--tls-key-password-file`; the file must contain one non-empty line.
+The same `tls-cert`, `tls-key`, and optional `tls-key-password-file` names are
+accepted in the `[remote]` config table for dashboard defaults. Direct TLS uses
+TLS 1.2 or newer. For access beyond loopback:
 
-1. Keep mxtop bound to loopback and expose it through a TLS-terminating reverse
-   proxy, VPN, or SSH tunnel; or bind it only to a trusted private interface.
-2. Use a high-entropy token via `--auth-token` or `MXTOP_AUTH_TOKEN`. Prefer an
-   environment variable or protected config file over shell history.
-3. For browser access, visit `?token=...` once. The server sets a 24-hour
-   `HttpOnly; SameSite=Strict` cookie, marks the bootstrap response `no-store`,
-   and the dashboard immediately removes the token from the visible URL and
-   browser history. API and Prometheus clients should send
-   `Authorization: Bearer <token>` instead.
-4. Do not place tokens in committed config files, screenshots, issue reports,
+1. Supply a PEM full chain (server certificate followed by intermediates) and
+   its matching PEM private key, or keep mxtop on loopback behind a trusted
+   TLS-terminating reverse proxy, VPN, or SSH tunnel. The certificate SAN must
+   cover the hostname or IP address clients actually use.
+2. Certificates from a private CA or self-signed certificates must be trusted
+   explicitly by every browser, API client, and Prometheus server. Configure a
+   Prometheus `tls_config.ca_file` and keep verification enabled; do not use
+   `insecure_skip_verify` to hide a name or trust failure.
+3. Restrict the TLS private key and optional password file to the service
+   account (for example, mode `0600`). Store only their paths in config. Never
+   put private-key or password contents in committed files, shell arguments,
+   logs, screenshots, or issue reports.
+4. Use a high-entropy token via `--auth-token` or `MXTOP_AUTH_TOKEN` and enforce
+   host/network firewall policy. TLS encrypts traffic; it does not authorize
+   users or make an intentionally public bind private. A reverse proxy remains
+   useful for ACME renewal, automatic reload, mutual TLS, or centralized access
+   policy.
+5. For browser access, visit `?token=...` once. The server sets a 24-hour
+   `HttpOnly; SameSite=Strict` cookie, adds `Secure` when it terminates TLS
+   directly, marks the bootstrap response `no-store`, and immediately removes
+   the token from the visible URL and browser history. If a reverse proxy
+   terminates TLS, keep the mxtop listener on loopback and configure the proxy
+   to append `Secure` to the upstream cookie. API and Prometheus clients should
+   send `Authorization: Bearer <token>` instead.
+6. Certificate, key, and password files are loaded once. Restart mxtop after a
+   certificate renewal, key rotation, or password-file update. A reverse proxy
+   can own zero-downtime certificate reload when that is operationally required.
+7. Do not place tokens in committed config files, screenshots, issue reports,
    or shared command histories. Restrict config-file permissions when it
    contains `remote.auth-token`.
-5. Treat exported telemetry as sensitive. It can include hostnames, usernames,
+8. Treat exported telemetry as sensitive. It can include hostnames, usernames,
    PIDs, process command lines, GPU UUIDs/BDFs, resource usage, and cluster
    topology.
 
@@ -68,9 +92,9 @@ the footer to remove the current tab session's retained trends and process
 records; the current live sample remains visible.
 
 Web Crypto is available only in secure browser contexts. Loopback origins are
-normally browser-trusted; non-loopback clients should access the dashboard
-through an HTTPS reverse proxy. On plain LAN HTTP, the dashboard keeps incident
-history only in memory for the open page and cannot recover it after a reload.
+normally browser-trusted; non-loopback clients should use direct HTTPS or an
+HTTPS reverse proxy. On plain LAN HTTP, the dashboard keeps incident history
+only in memory for the open page and cannot recover it after a reload.
 
 The server sets a restrictive Content Security Policy, denies framing, sends
 `Referrer-Policy: no-referrer`, disables unnecessary browser permissions, and

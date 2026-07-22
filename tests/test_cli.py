@@ -405,7 +405,9 @@ def test_cli_help_has_stable_program_name_and_groups(capsys):
     assert "coloring:" in output
     assert "device filtering:" in output
     assert "process filtering:" in output
-    assert "remote mode:" in output
+    assert "server and remote mode:" in output
+    assert "--tls-cert CERTFILE" in output
+    assert "--tls-key KEYFILE" in output
 
 
 def test_cli_non_tty_width_uses_nvitop_fallback(monkeypatch):
@@ -460,6 +462,9 @@ def test_cli_remote_mode_is_mutually_exclusive_with_local_modes(mode, capsys):
         ("--bind", "0.0.0.0", "--once"),
         ("--remote-mxsmi-path", "/opt/mx-smi", "--once"),
         ("--remote-command-timeout", "3", "--once"),
+        ("--tls-cert", "cert.pem", "--once"),
+        ("--tls-key", "key.pem", "--once"),
+        ("--tls-key-password-file", "password.txt", "--once"),
         ("--open", "--once"),
     ),
 )
@@ -515,6 +520,123 @@ def test_cli_rejects_invalid_remote_command_timeouts(timeout, capsys):
 
     assert exc_info.value.code == 2
     assert "remote command timeout must be at least 0.1s" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "tls_args",
+    (
+        ("--tls-cert", "cert.pem"),
+        ("--tls-key", "key.pem"),
+        ("--tls-key-password-file", "password.txt"),
+    ),
+)
+def test_cli_requires_complete_tls_configuration(tls_args, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--remote-mode", "--nodes", "node-a", *tls_args])
+
+    assert exc_info.value.code == 2
+    error = capsys.readouterr().err
+    assert "requires" in error or "provided together" in error
+
+
+def test_cli_builds_and_forwards_tls_context(monkeypatch):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import web as remote_web
+
+    observed = {}
+    tls_context = object()
+
+    def fake_tls_context(cert_file, key_file, *, key_password_file=None):
+        observed["tls_files"] = (cert_file, key_file, key_password_file)
+        return tls_context
+
+    monkeypatch.setattr(remote_web, "create_tls_context", fake_tls_context)
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda hosts, **kwargs: observed.update(hosts=hosts, kwargs=kwargs) or 0,
+    )
+
+    assert (
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                "--tls-cert",
+                "cert.pem",
+                "--tls-key",
+                "key.pem",
+                "--tls-key-password-file",
+                "password.txt",
+            ]
+        )
+        == 0
+    )
+    assert observed["tls_files"] == ("cert.pem", "key.pem", "password.txt")
+    assert observed["kwargs"]["tls_context"] is tls_context
+
+
+def test_cli_allows_tls_for_metrics_exporter(monkeypatch):
+    from mxtop import exporter
+    from mxtop.remote import web as remote_web
+
+    observed = {}
+    tls_context = object()
+    monkeypatch.setattr(
+        remote_web,
+        "create_tls_context",
+        lambda *_args, **_kwargs: tls_context,
+    )
+    monkeypatch.setattr(
+        exporter,
+        "run_exporter",
+        lambda _backend, **kwargs: observed.update(kwargs) or 0,
+    )
+
+    assert (
+        main(
+            [
+                "--export-metrics",
+                "--tls-cert",
+                "cert.pem",
+                "--tls-key",
+                "key.pem",
+            ],
+            backend=StaticBackend(),
+        )
+        == 0
+    )
+    assert observed["tls_context"] is tls_context
+
+
+def test_cli_reports_tls_setup_errors_before_remote_start(tmp_path, monkeypatch, capsys):
+    from mxtop.remote import app as remote_app
+
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("remote server should not start")
+        ),
+    )
+    rc = main(
+        [
+            "--remote-mode",
+            "--nodes",
+            "node-a",
+            "--tls-cert",
+            str(tmp_path / "missing-cert.pem"),
+            "--tls-key",
+            str(tmp_path / "missing-key.pem"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert captured.err.startswith("MXTOP ERROR: TLS setup failed: ")
+    assert "Traceback" not in captured.err
 
 
 def test_cli_reports_remote_inventory_errors_without_traceback(tmp_path, capsys):

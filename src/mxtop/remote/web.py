@@ -5,12 +5,15 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+from pathlib import Path
 import socket
+import ssl
+import sys
 import threading
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from mxtop.jsonutil import sanitize_json_value
@@ -43,6 +46,7 @@ _TOKEN_COOKIE = "mxtop_token"
 # ThreadingHTTPServer spawns one thread per connection; SSE clients hold
 # theirs open indefinitely, so cap them to bound thread growth.
 MAX_SSE_CLIENTS = 32
+TLS_HANDSHAKE_TIMEOUT = 5.0
 WILDCARD_BINDS = frozenset({"", "*", "0.0.0.0", "::", "[::]"})
 
 
@@ -59,12 +63,23 @@ def is_wildcard_bind(bind: str) -> bool:
     return bind.strip() in WILDCARD_BINDS
 
 
+def is_loopback_bind(bind: str) -> bool:
+    host = normalized_bind(bind)
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def access_url(
     bind: str,
     port: int,
     *,
     path: str = "/",
     auth_token: str | None = None,
+    tls: bool = False,
 ) -> str:
     """Return a usable browser/client URL for a listening bind address."""
 
@@ -72,10 +87,56 @@ def access_url(
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     path = "/" + path.lstrip("/")
-    url = f"http://{host}:{port}{path}"
+    scheme = "https" if tls else "http"
+    url = f"{scheme}://{host}:{port}{path}"
     if auth_token is not None:
         url += "?" + urlencode({"token": auth_token})
     return url
+
+
+def _missing_tls_key_password() -> str:
+    raise ValueError("encrypted TLS private key requires --tls-key-password-file")
+
+
+def _tls_key_password(password_file: str | None) -> bytes | Callable[[], str]:
+    if password_file is None:
+        return _missing_tls_key_password
+    path = Path(password_file).expanduser()
+    password = path.read_bytes()
+    if password.endswith(b"\r\n"):
+        password = password[:-2]
+    elif password.endswith((b"\r", b"\n")):
+        password = password[:-1]
+    if not password:
+        raise ValueError(f"TLS key password file is empty: {path}")
+    if b"\n" in password or b"\r" in password:
+        raise ValueError(f"TLS key password file must contain one line: {path}")
+    return password
+
+
+def create_tls_context(
+    cert_file: str | None,
+    key_file: str | None,
+    *,
+    key_password_file: str | None = None,
+) -> ssl.SSLContext | None:
+    """Build a server TLS context, or return ``None`` when TLS is disabled."""
+
+    if (cert_file is None) != (key_file is None):
+        raise ValueError("TLS certificate and private key must be configured together")
+    if cert_file is None:
+        if key_password_file is not None:
+            raise ValueError("TLS key password file requires a certificate and private key")
+        return None
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.options |= ssl.OP_NO_COMPRESSION
+    context.load_cert_chain(
+        certfile=str(Path(cert_file).expanduser()),
+        keyfile=str(Path(key_file).expanduser()),
+        password=_tls_key_password(key_password_file),
+    )
+    return context
 
 
 class SnapshotHolder:
@@ -122,6 +183,7 @@ def _make_handler(
     assets: dict[str, bytes],
     auth_token: str | None,
     max_sse_clients: int = MAX_SSE_CLIENTS,
+    secure_cookie: bool = False,
 ) -> type[BaseHTTPRequestHandler]:
     sse_slots = threading.BoundedSemaphore(max_sse_clients)
 
@@ -195,6 +257,8 @@ def _make_handler(
                 morsel["samesite"] = "Strict"
                 morsel["path"] = "/"
                 morsel["max-age"] = 86400
+                if secure_cookie:
+                    morsel["secure"] = True
                 cookie_headers = {
                     "Set-Cookie": morsel.OutputString(),
                     "Cache-Control": "no-store",
@@ -292,6 +356,7 @@ def make_server(
     port: int = 8080,
     auth_token: str | None = None,
     max_sse_clients: int = MAX_SSE_CLIENTS,
+    tls_context: ssl.SSLContext | None = None,
 ) -> ThreadingHTTPServer:
     assets = load_dashboard_assets()
     socket_bind = normalized_bind(bind)
@@ -305,7 +370,56 @@ def make_server(
             address_family = socket.AF_INET6
 
         server_type = IPv6ThreadingHTTPServer
-    return server_type(
+    if tls_context is not None:
+        base_server_type = server_type
+
+        class TLSThreadingHTTPServer(base_server_type):  # type: ignore[valid-type,misc]
+            def get_request(self) -> tuple[socket.socket, Any]:
+                request, client_address = super().get_request()
+                request.settimeout(TLS_HANDSHAKE_TIMEOUT)
+                return request, client_address
+
+            def finish_request(
+                self,
+                request: socket.socket,
+                client_address: Any,
+            ) -> None:
+                if isinstance(request, ssl.SSLSocket):
+                    request.do_handshake()
+                    request.settimeout(None)
+                super().finish_request(request, client_address)
+
+            def handle_error(
+                self,
+                request: socket.socket,
+                client_address: Any,
+            ) -> None:
+                if isinstance(
+                    sys.exc_info()[1],
+                    (ssl.SSLError, socket.timeout, TimeoutError, ConnectionError),
+                ):
+                    return
+                super().handle_error(request, client_address)
+
+        server_type = TLSThreadingHTTPServer
+    server = server_type(
         (socket_bind, port),
-        _make_handler(holder, assets, auth_token, max_sse_clients),
+        _make_handler(
+            holder,
+            assets,
+            auth_token,
+            max_sse_clients,
+            secure_cookie=tls_context is not None,
+        ),
     )
+    if tls_context is not None:
+        try:
+            server.socket = tls_context.wrap_socket(
+                server.socket,
+                server_side=True,
+                do_handshake_on_connect=False,
+            )
+        except Exception:
+            server.server_close()
+            raise
+    return server

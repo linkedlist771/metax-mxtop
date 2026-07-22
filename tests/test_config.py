@@ -47,6 +47,9 @@ mem-util-thresh = [15, 85]
 bind = "0.0.0.0"
 port = 9000
 auth-token = "s3cret"
+tls-cert = "/etc/mxtop/fullchain.pem"
+tls-key = "/etc/mxtop/private-key.pem"
+tls-key-password-file = "/etc/mxtop/key-password"
 mxsmi-path = "/opt/bin/mx-smi"
 command-timeout = 4.5
 open = true
@@ -65,6 +68,9 @@ open = true
         "remote_bind": "0.0.0.0",
         "remote_port": 9000,
         "remote_auth_token": "s3cret",
+        "remote_tls_cert": "/etc/mxtop/fullchain.pem",
+        "remote_tls_key": "/etc/mxtop/private-key.pem",
+        "remote_tls_key_password_file": "/etc/mxtop/key-password",
         "remote_mxsmi_path": "/opt/bin/mx-smi",
         "remote_command_timeout": 4.5,
         "remote_open": True,
@@ -82,6 +88,7 @@ gpu-util-thresh = [5]
 [remote]
 timeout = 3
 command-timeout = 0
+tls-cert = ""
 """
     )
     config = load_config(path)
@@ -93,6 +100,7 @@ command-timeout = 0
     assert "gpu-util-thresh should be a list of two integers" in err
     assert "unknown key remote.timeout" in err
     assert "remote.command-timeout must be at least 0.1" in err
+    assert "remote.tls-cert must not be empty" in err
 
 
 def test_load_config_warns_on_parse_error(tmp_path, capsys):
@@ -171,3 +179,93 @@ def test_remote_command_timeout_config_and_cli_precedence(config_file, monkeypat
     )
 
     assert observed == [4.5, 2.25]
+
+
+def test_remote_tls_config_and_cli_precedence(config_file, monkeypatch):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import web as remote_web
+
+    config_file.write_text(
+        """
+[remote]
+tls-cert = "/config/cert.pem"
+tls-key = "/config/key.pem"
+tls-key-password-file = "/config/password"
+"""
+    )
+    contexts = []
+    sentinel = object()
+
+    def capture_context(cert_file, key_file, *, key_password_file=None):
+        contexts.append((cert_file, key_file, key_password_file))
+        return sentinel
+
+    monkeypatch.setattr(remote_web, "create_tls_context", capture_context)
+    monkeypatch.setattr(remote_app, "run_remote", lambda *_args, **_kwargs: 0)
+
+    assert main(["--remote-mode", "--nodes", "node-a"]) == 0
+    assert (
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                "--tls-cert",
+                "/cli/cert.pem",
+                "--tls-key",
+                "/cli/key.pem",
+                "--tls-key-password-file",
+                "/cli/password",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                "--tls-cert",
+                "/cli/plain-cert.pem",
+                "--tls-key",
+                "/cli/plain-key.pem",
+            ]
+        )
+        == 0
+    )
+    assert contexts == [
+        ("/config/cert.pem", "/config/key.pem", "/config/password"),
+        ("/cli/cert.pem", "/cli/key.pem", "/cli/password"),
+        ("/cli/plain-cert.pem", "/cli/plain-key.pem", None),
+    ]
+
+
+def test_cli_tls_material_does_not_mix_with_config_pair(config_file, capsys):
+    config_file.write_text(
+        '[remote]\ntls-cert = "/config/cert.pem"\ntls-key = "/config/key.pem"\n'
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                "--tls-cert",
+                "/cli/cert.pem",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "must be provided together" in capsys.readouterr().err
+
+
+def test_remote_tls_config_requires_certificate_and_key(config_file, capsys):
+    config_file.write_text('[remote]\ntls-cert = "/config/cert.pem"\n')
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--remote-mode", "--nodes", "node-a"])
+
+    assert exc_info.value.code == 2
+    assert "must be provided together" in capsys.readouterr().err

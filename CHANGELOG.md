@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Direct TLS 1.2+ termination for both the remote dashboard and local
+  Prometheus exporter with paired `--tls-cert` / `--tls-key` options, optional
+  single-line `--tls-key-password-file` support for encrypted private keys,
+  `[remote]` config defaults, HTTPS access URLs, Secure auth cookies, and
+  separate plaintext/authentication exposure warnings. Operator guidance now
+  covers full certificate chains, SANs, private-CA trust, key permissions,
+  Prometheus CA configuration, and restart-after-renewal behavior.
 - Encrypted same-tab reload recovery for the remote dashboard's bounded
   incident history when the page runs in a secure browser context. AES-GCM
   ciphertext is partitioned by the monitored host set, expires after one hour,

@@ -19,6 +19,17 @@ class _Option:
     help: str
     choices: tuple[str, ...]
     takes_value: bool
+    completes_files: bool
+
+
+_FILE_VALUE_DESTS = frozenset(
+    {
+        "nodes_file",
+        "tls_cert",
+        "tls_key",
+        "tls_key_password_file",
+    }
+)
 
 
 def _collect_options(parser: argparse.ArgumentParser) -> list[_Option]:
@@ -47,6 +58,7 @@ def _collect_options(parser: argparse.ArgumentParser) -> list[_Option]:
                 help=first_help_line.replace("'", "'\\''"),
                 choices=choices,
                 takes_value=takes_value,
+                completes_files=action.dest in _FILE_VALUE_DESTS,
             )
         )
     return options
@@ -56,12 +68,16 @@ def _bash(options: list[_Option]) -> str:
     all_flags = " ".join(flag for option in options for flag in option.strings)
     value_cases = []
     for option in options:
-        if option.choices:
+        if option.choices or option.completes_files:
             pattern = "|".join(option.strings)
-            words = " ".join(option.choices)
+            completion = (
+                f'COMPREPLY=( $(compgen -W "{" ".join(option.choices)}" -- "$cur") )'
+                if option.choices
+                else 'COMPREPLY=( $(compgen -f -- "$cur") )'
+            )
             value_cases.append(
                 f'        {pattern})\n'
-                f'            COMPREPLY=( $(compgen -W "{words}" -- "$cur") )\n'
+                f"            {completion}\n"
                 f"            return 0\n"
                 f"            ;;"
             )
@@ -89,7 +105,12 @@ def _zsh(options: list[_Option]) -> str:
     for option in options:
         value = ""
         if option.takes_value:
-            value = f":value:({' '.join(option.choices)})" if option.choices else ":value:"
+            if option.choices:
+                value = f":value:({' '.join(option.choices)})"
+            elif option.completes_files:
+                value = ":file:_files"
+            else:
+                value = ":value:"
         for flag in option.strings:
             specs.append(f"        '{flag}[{option.help}]{value}'")
     body = " \\\n".join(specs)
@@ -118,6 +139,8 @@ def _fish(options: list[_Option]) -> str:
             parts.append(f"-x -a '{' '.join(option.choices)}'")
         elif option.takes_value:
             parts.append("-r")
+            if option.completes_files:
+                parts.append("-F")
         if option.help:
             parts.append(f"-d '{option.help}'")
         lines.append(" ".join(parts))

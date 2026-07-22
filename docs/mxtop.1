@@ -18,6 +18,10 @@ mxtop \- an nvitop-like interactive terminal monitor for MetaX GPUs
 .IR HOST .\|.\|.]
 .RB [ \-\-auth\-token
 .IR TOKEN ]
+.RB [ \-\-tls\-cert
+.I CERTFILE
+.B \-\-tls\-key
+.IR KEYFILE ]
 .SH DESCRIPTION
 .B mxtop
 displays live telemetry for MetaX GPUs: per-device temperature, power,
@@ -79,6 +83,7 @@ endpoint (default port 9532) without SSH. Honors
 .BR \-\-bind ,
 .BR \-\-port ,
 .BR \-\-auth\-token ,
+the direct TLS options,
 and samples at
 .BR \-\-interval .
 .SH OPTIONS
@@ -160,22 +165,58 @@ It serves a live web dashboard with a fleet overview, GPU heatmap, trend
 sparklines, node inventory, process table, and per-node detail.
 .TP
 .B \-\-port \fIPORT\fR
-Dashboard port (default: 8080).
+Dashboard port (default: 8080), or exporter port (default: 9532).
 .TP
 .B \-\-bind \fIADDR\fR
-Bind address (default: 127.0.0.1). Binding beyond localhost without
-.B \-\-auth\-token
-prints a warning: cluster telemetry would be readable by anyone who can
-reach the port.
+Bind address (default: 127.0.0.1). Binding beyond localhost prints a transport
+warning without TLS and a separate access warning without
+.BR \-\-auth\-token .
 .TP
 .B \-\-auth\-token \fITOKEN\fR
-Require this shared token for dashboard access, via
+Require this shared token for dashboard or exporter access. API and Prometheus
+clients use
 .B Authorization: Bearer
-or a one-time
+while a browser can make a one-time
 .B ?token=
 visit that sets an HttpOnly cookie. Defaults to the
 .B MXTOP_AUTH_TOKEN
 environment variable.
+.TP
+.B \-\-tls\-cert \fICERTFILE\fR
+PEM certificate chain for direct HTTPS. The file must contain the server
+certificate followed by any intermediate certificates. Requires
+.BR \-\-tls\-key .
+Supported by both
+.B \-\-remote\-mode
+and
+.BR \-\-export\-metrics .
+.TP
+.B \-\-tls\-key \fIKEYFILE\fR
+PEM private key matching
+.BR \-\-tls\-cert .
+The certificate and key options must be supplied together.
+.TP
+.B \-\-tls\-key\-password\-file \fIFILE\fR
+Read an encrypted TLS private key's password from one non-empty line in
+.IR FILE .
+Requires both certificate and key options. Protect this file and the private
+key so only the mxtop service account can read them.
+.PP
+The certificate Subject Alternative Name must cover every hostname or IP
+address used by browsers and scrapers. A wildcard bind is advertised locally as
+.BR localhost ;
+include that name in the SAN for
+.B \-\-open
+or open the certificate's actual DNS name manually. Install a self-signed or private CA in
+each client trust store; for Prometheus, set
+.B scheme: https
+and
+.B tls_config.ca_file
+instead of disabling verification. TLS encrypts traffic but does not replace
+.BR \-\-auth\-token ,
+firewall rules, a narrow bind address, or an HTTPS reverse proxy where one is
+operationally appropriate. TLS files are loaded once; restart mxtop after
+certificate renewal, key rotation, or password-file changes.
 .TP
 .B \-\-remote\-mxsmi\-path \fIPATH\fR
 Path to mx-smi on the remote hosts.
@@ -265,6 +306,9 @@ table with
 .BR bind ,
 .BR port ,
 .BR auth-token ,
+.BR tls-cert ,
+.BR tls-key ,
+.BR tls-key-password-file ,
 .BR mxsmi-path ,
 .BR command-timeout ,
 .BR open .
@@ -281,7 +325,7 @@ readonly.
 LOW,HIGH intensity thresholds.
 .TP
 .B MXTOP_AUTH_TOKEN
-Default dashboard token for \-\-remote\-mode.
+Default access token for \-\-remote\-mode or \-\-export\-metrics.
 .TP
 .B MXTOP_CONFIG
 Path to the configuration file.
@@ -310,6 +354,9 @@ One minute of JSON samples for logging:
 .TP
 Cluster dashboard for three nodes with a token:
 .B mxtop \-\-remote\-mode \-\-nodes nodeA nodeB nodeC \-\-auth\-token secret \-\-open
+.TP
+Direct-HTTPS exporter with a matching certificate and private key:
+.B mxtop \-\-export\-metrics \-\-bind 0.0.0.0 \-\-tls\-cert /etc/mxtop/fullchain.pem \-\-tls\-key /etc/mxtop/privkey.pem
 .SH SEE ALSO
 .BR mx-smi (1),
 .BR top (1),

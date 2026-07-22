@@ -10,12 +10,19 @@ SSH or the remote extra.
 from __future__ import annotations
 
 import socket
+import ssl
 import threading
 import time
 
 from mxtop.backends import TelemetryBackend
 from mxtop.models import ClusterSnapshot, HostSnapshot, NodeSnapshot
-from mxtop.remote.web import SnapshotHolder, access_url, is_wildcard_bind, make_server
+from mxtop.remote.web import (
+    SnapshotHolder,
+    access_url,
+    is_loopback_bind,
+    is_wildcard_bind,
+    make_server,
+)
 
 
 def _local_host_snapshot() -> HostSnapshot | None:
@@ -80,22 +87,46 @@ def run_exporter(
     port: int = 9532,
     interval: float = 2.0,
     auth_token: str | None = None,
+    tls_context: ssl.SSLContext | None = None,
 ) -> int:
     holder = SnapshotHolder()
     holder.update(build_local_cluster(backend))
     stop = threading.Event()
+    server = make_server(
+        holder,
+        bind=bind,
+        port=port,
+        auth_token=auth_token,
+        tls_context=tls_context,
+    )
 
     def _poll() -> None:
         while not stop.wait(interval):
             holder.update(build_local_cluster(backend))
 
-    poller = threading.Thread(target=_poll, name="mxtop-exporter", daemon=True)
-    poller.start()
+    try:
+        poller = threading.Thread(target=_poll, name="mxtop-exporter", daemon=True)
+        poller.start()
+    except Exception:
+        server.server_close()
+        raise
 
-    server = make_server(holder, bind=bind, port=port, auth_token=auth_token)
-    print(f"mxtop metrics exporter: {access_url(bind, port, path='/metrics')}")
+    print(
+        "mxtop metrics exporter: "
+        f"{access_url(bind, port, path='/metrics', tls=tls_context is not None)}"
+    )
     if is_wildcard_bind(bind):
         print(f"Listening on all interfaces ({bind or '*'}:{port}).")
+    if not is_loopback_bind(bind) and tls_context is None:
+        print(
+            "WARNING: metrics traffic is exposed beyond localhost over plain HTTP; "
+            "configure --tls-cert/--tls-key, a TLS reverse proxy, VPN, or SSH tunnel."
+        )
+    if not is_loopback_bind(bind) and auth_token is None:
+        print(
+            "WARNING: metrics endpoint is exposed beyond localhost without authentication; "
+            "consider --auth-token or the MXTOP_AUTH_TOKEN environment variable."
+        )
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

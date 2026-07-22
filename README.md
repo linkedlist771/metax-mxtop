@@ -163,11 +163,13 @@ mxtop --json-lines -n 60 --interval 1 | jq '.devices[0].gpu_util_percent'
 
 `--json-lines` / `--ndjson` emits one compact JSON object per line, the natural shape for `jq`, log shippers, and time-series ingestion.
 
-For Prometheus-based monitoring of a single host, `--export-metrics` serves the local backend's telemetry on `/metrics` (default port `9532`, dcgm-exporter style) — no SSH or remote extra needed:
+For Prometheus-based monitoring of a single host, `--export-metrics` serves the local backend's telemetry on `/metrics` (default port `9532`, dcgm-exporter style) — no SSH or remote extra needed. The exporter can terminate TLS directly:
 
 ```bash
-mxtop --export-metrics --port 9532 --auth-token secret
-curl -H 'Authorization: Bearer secret' http://127.0.0.1:9532/metrics
+mxtop --export-metrics --bind 0.0.0.0 --port 9532 --auth-token secret \
+  --tls-cert /etc/mxtop/fullchain.pem --tls-key /etc/mxtop/privkey.pem
+curl --cacert /etc/mxtop/ca.pem -H 'Authorization: Bearer secret' \
+  https://monitor-host.example.com:9532/metrics
 ```
 
 Common filters:
@@ -211,7 +213,10 @@ Useful CLI flags:
 | `--monitor`, `-m [auto\|full\|compact]` | Run interactively, optionally choosing the layout. |
 | `--json` | Print one JSON snapshot and exit. |
 | `--json-lines`, `--ndjson` | Print snapshots as one compact JSON object per line (NDJSON). |
-| `--export-metrics` | Serve local telemetry as a Prometheus `/metrics` endpoint (default port `9532`); honors `--bind`, `--port`, `--auth-token`, and `--interval`. |
+| `--export-metrics` | Serve local telemetry as a Prometheus `/metrics` endpoint (default port `9532`); honors `--bind`, `--port`, `--auth-token`, the TLS options, and `--interval`. |
+| `--tls-cert CERTFILE` | Serve the remote dashboard or local exporter over direct HTTPS using this PEM certificate chain; requires `--tls-key`. |
+| `--tls-key KEYFILE` | Matching PEM private key for `--tls-cert`; the pair enables direct HTTPS. |
+| `--tls-key-password-file FILE` | Read an encrypted TLS private key's password from one non-empty line in this protected file. |
 | `--remote-command-timeout SEC` | Bound each remote dashboard SSH command (default `10.0`, minimum `0.1`). |
 | `--no-color` | Disable ANSI colors in text output. |
 | `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
@@ -241,7 +246,7 @@ Useful CLI flags:
 | `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU-memory thresholds when the CLI option is omitted. |
 | `MACA_VISIBLE_DEVICES` | Device indices, UUID prefixes, or BDF prefixes used by `--only-visible`. |
 | `CUDA_VISIBLE_DEVICES` | Fallback visibility list when `MACA_VISIBLE_DEVICES` is not set. |
-| `MXTOP_AUTH_TOKEN` | Default dashboard token for `--remote-mode` when `--auth-token` is omitted. |
+| `MXTOP_AUTH_TOKEN` | Default access token for `--remote-mode` or `--export-metrics` when `--auth-token` is omitted. |
 | `ANSI_COLORS_DISABLED` | Disable ANSI output unless `--force-color` is explicit. |
 | `NO_COLOR` | Disable ANSI output unless `--force-color` is explicit. |
 | `FORCE_COLOR` | Force ANSI output when neither disable variable is present. |
@@ -265,10 +270,49 @@ mem-util-thresh = [10, 80]
 bind = "127.0.0.1"
 port = 8080
 auth-token = "change-me"
+tls-cert = "/etc/mxtop/fullchain.pem"
+tls-key = "/etc/mxtop/privkey.pem"
+# Optional, only for an encrypted private key:
+tls-key-password-file = "/etc/mxtop/tls-key-password"
 mxsmi-path = "mx-smi"
 command-timeout = 10.0   # maximum seconds for each remote command
 open = false
 ```
+
+### Direct HTTPS
+
+The remote dashboard and local Prometheus exporter can terminate TLS directly.
+`--tls-cert` and `--tls-key` must always be supplied together; add
+`--tls-key-password-file` only when the private key is encrypted. The password
+file must contain exactly one non-empty line. The `[remote]` keys shown above
+provide the same settings for `--remote-mode`; pass the TLS flags explicitly to
+`--export-metrics`.
+
+The certificate file must be a PEM full chain: the server certificate first,
+followed by any intermediate certificates. Its Subject Alternative Name (SAN)
+must cover every hostname or IP address clients use. The PEM private key must
+match that certificate. Restrict the key and optional password file to the
+mxtop service account (for example, mode `0600`), and do not place their
+contents in the config file, command line, logs, or issue reports.
+
+For a wildcard bind such as `0.0.0.0`, mxtop prints and opens a `localhost`
+URL. Include `localhost` in the certificate SAN when using `--open`, or open the
+certificate's actual DNS name manually from remote clients.
+
+Publicly trusted certificates work with normal browser and Prometheus trust
+stores. For a self-signed certificate, install that certificate as a trust
+anchor; for a private CA, install its CA certificate. Configure Prometheus with
+`ca_file`, and do not work around trust errors by disabling verification.
+Certificate, key, and password files are loaded once at startup, so restart
+mxtop after renewal or replacement.
+
+TLS encrypts traffic but does not decide who may access telemetry. Keep using a
+high-entropy `--auth-token`, host firewall rules, and a narrowly scoped bind
+address. A TLS-terminating reverse proxy remains appropriate when it owns ACME
+renewal, certificate reload, mutual TLS, or organization-wide access policy.
+When a proxy terminates TLS, keep mxtop's HTTP listener on loopback and configure
+the proxy to append `Secure` to the upstream auth cookie; mxtop adds that flag
+itself only when it terminates TLS directly.
 
 ## Remote mode (cluster dashboard)
 
@@ -284,6 +328,9 @@ mxtop --remote-mode --discover --nodes nodeA nodeB --open
 mxtop --remote-mode --nodes nodeA nodeB nodeC --open
 # or list hosts in a file (one per line, # comments allowed)
 mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
+# Direct HTTPS with an operator-managed certificate:
+mxtop --remote-mode --nodes nodeA nodeB --bind 0.0.0.0 --auth-token secret \
+  --tls-cert /etc/mxtop/fullchain.pem --tls-key /etc/mxtop/privkey.pem --open
 ```
 
 - With no `--nodes` or `--nodes-file`, mxtop enumerates concrete `Host`
@@ -308,12 +355,13 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   freezing updates for the whole fleet.
 - Dashboard access can be protected with a shared token via `--auth-token`
   or the `MXTOP_AUTH_TOKEN` environment variable. Requests must then carry
-  `Authorization: Bearer <token>`, or visit `http://host:port/?token=<token>`
-  once — the token is stored in an `HttpOnly` cookie for the rest of the
-  session. When `--bind` exposes the dashboard beyond localhost without a
-  token, mxtop prints a warning: all cluster telemetry (hostnames, users,
-  process command lines) would otherwise be readable by anyone who can reach
-  the port.
+  `Authorization: Bearer <token>`, or visit the printed HTTP or HTTPS URL with
+  `?token=<token>` once — the token is stored in a 24-hour `HttpOnly` cookie and
+  is also marked `Secure` under direct HTTPS. When `--bind`
+  exposes the dashboard beyond localhost without encryption or without a
+  token, mxtop prints separate warnings: all cluster telemetry (hostnames,
+  users, process command lines) would otherwise be exposed to the network or
+  readable by anyone who can reach the port.
 - A Prometheus endpoint at `/metrics` exports the latest cluster snapshot as
   text exposition: per-GPU utilization, memory, bandwidth, temperature,
   power, clocks, and ECC errors labelled by `node`/`gpu`/`name`/`uuid`, plus
@@ -326,10 +374,18 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
     - job_name: mxtop
       static_configs:
         - targets: ["monitor-host:8080"]
+      scheme: https
       authorization:
         type: Bearer
         credentials: <your --auth-token value>
+      tls_config:
+        # Omit ca_file for a certificate from a public CA.
+        ca_file: /etc/prometheus/pki/mxtop-ca.pem
   ```
+
+  The target name must be present in the server certificate's SAN. Keep
+  certificate verification enabled; distribute the private CA certificate to
+  Prometheus rather than setting `insecure_skip_verify`.
 - The web UI provides a fleet overview with a switchable GPU heatmap, live
   trend sparklines (cluster GPU utilization, HBM, and host CPU; per-node
   GPU/HBM on the detail page), a searchable node inventory, cluster-wide
@@ -438,7 +494,7 @@ See the [output gallery](https://github.com/linkedlist771/metax-mxtop/blob/main/
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for responsible disclosure and secure deployment guidance. In particular, `--auth-token` controls access but does not encrypt HTTP traffic; use a TLS reverse proxy, VPN, or SSH tunnel across untrusted networks.
+See [SECURITY.md](SECURITY.md) for responsible disclosure and secure deployment guidance. Direct TLS or a TLS-terminating reverse proxy encrypts dashboard/exporter traffic; `--auth-token`, firewall policy, and a narrow bind address still control who can reach sensitive telemetry.
 
 ## Development
 

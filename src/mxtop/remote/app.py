@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
+import ssl
 import threading
 import webbrowser
 
@@ -12,20 +12,14 @@ from mxtop.remote.discovery import HostDiscovery
 from mxtop.remote.web import (
     SnapshotHolder,
     access_url,
+    is_loopback_bind,
     is_wildcard_bind,
     make_server,
-    normalized_bind,
 )
 
 
 def _is_loopback(bind: str) -> bool:
-    bind = normalized_bind(bind)
-    if bind == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(bind).is_loopback
-    except ValueError:
-        return False
+    return is_loopback_bind(bind)
 
 
 def report_discovery(results: list[HostDiscovery]) -> None:
@@ -61,6 +55,7 @@ def run_remote(
     command_timeout: float = DEFAULT_REMOTE_COMMAND_TIMEOUT,
     open_browser: bool = False,
     auth_token: str | None = None,
+    tls_context: ssl.SSLContext | None = None,
 ) -> int:
     from mxtop.remote import ssh
 
@@ -74,22 +69,43 @@ def run_remote(
         command_timeout=command_timeout,
     )
     stop = threading.Event()
+    server = make_server(
+        holder,
+        bind=bind,
+        port=port,
+        auth_token=auth_token,
+        tls_context=tls_context,
+    )
 
     def _worker() -> None:
         asyncio.run(_poll_loop(monitor, holder, stop))
 
-    poller = threading.Thread(target=_worker, name="mxtop-cluster", daemon=True)
-    poller.start()
+    try:
+        poller = threading.Thread(target=_worker, name="mxtop-cluster", daemon=True)
+        poller.start()
+    except Exception:
+        server.server_close()
+        raise
 
-    server = make_server(holder, bind=bind, port=port, auth_token=auth_token)
-    url = access_url(bind, port)
-    open_url = access_url(bind, port, auth_token=auth_token)
+    tls_enabled = tls_context is not None
+    url = access_url(bind, port, tls=tls_enabled)
+    open_url = access_url(
+        bind,
+        port,
+        auth_token=auth_token,
+        tls=tls_enabled,
+    )
     print(f"mxtop remote dashboard: {url}  ({len(hosts)} node(s): {', '.join(hosts)})")
     if is_wildcard_bind(bind):
         print(f"Listening on all interfaces ({bind or '*'}:{port}).")
     if auth_token is not None:
         print("Dashboard access requires the configured token (append ?token=... on first visit).")
-    elif not _is_loopback(bind):
+    if not _is_loopback(bind) and tls_context is None:
+        print(
+            "WARNING: dashboard traffic is exposed beyond localhost over plain HTTP; "
+            "configure --tls-cert/--tls-key, a TLS reverse proxy, VPN, or SSH tunnel."
+        )
+    if not _is_loopback(bind) and auth_token is None:
         print(
             "WARNING: dashboard is exposed beyond localhost without authentication; "
             "consider --auth-token or the MXTOP_AUTH_TOKEN environment variable."
@@ -98,8 +114,8 @@ def run_remote(
     if open_browser:
         try:
             opened = webbrowser.open(open_url)
-        except Exception as exc:
-            print(f"Could not open a browser automatically: {exc}")
+        except Exception:
+            print("Could not open a browser automatically; open the dashboard URL manually.")
             opened = True
         if not opened:
             print("No browser available; open the dashboard URL manually.")

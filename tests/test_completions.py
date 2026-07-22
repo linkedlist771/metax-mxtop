@@ -42,6 +42,18 @@ def test_completion_suppresses_large_numeric_choice_ranges():
     assert '"1 2 3' not in script
 
 
+@pytest.mark.parametrize(
+    ("shell", "needle"),
+    (
+        ("bash", '--tls-cert)\n            COMPREPLY=( $(compgen -f -- "$cur") )'),
+        ("zsh", "'--tls-cert[PEM certificate chain for direct HTTPS]:file:_files'"),
+        ("fish", "-l tls-cert -r -F"),
+    ),
+)
+def test_completion_treats_tls_values_as_files(shell, needle):
+    assert needle in render_completion(build_parser(), shell)
+
+
 def test_cli_prints_completion_and_exits(capsys):
     rc = main(["--print-completion", "bash"])
     out = capsys.readouterr().out

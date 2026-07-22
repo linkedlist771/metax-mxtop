@@ -1,6 +1,8 @@
 "use strict";
 
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 
@@ -61,7 +63,7 @@ async function startFixture(options = {}) {
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
-      const match = stdout.match(/mxtop dashboard fixture: (http:\/\/\S+)/);
+      const match = stdout.match(/mxtop dashboard fixture: (https?:\/\/\S+)/);
       if (!match) return;
       clearTimeout(timeout);
       resolve(match[1]);
@@ -74,6 +76,46 @@ async function startFixture(options = {}) {
     });
   });
   return { child, url };
+}
+
+function createTlsMaterial() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mxtop-dashboard-tls-"));
+  const certificate = path.join(directory, "localhost-cert.pem");
+  const privateKey = path.join(directory, "localhost-key.pem");
+  const passwordFile = path.join(directory, "key-password");
+  fs.writeFileSync(passwordFile, "fixture-password\n", { mode: 0o600 });
+  try {
+    execFileSync("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-keyout",
+      privateKey,
+      "-out",
+      certificate,
+      "-days",
+      "1",
+      "-sha256",
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=DNS:localhost,IP:127.0.0.1",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-passout",
+      `file:${passwordFile}`,
+    ], { stdio: "pipe" });
+  } catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    certificate,
+    privateKey,
+    passwordFile,
+    remove: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
 }
 
 function publishStep(fixture, step) {
@@ -546,6 +588,64 @@ test("supports p and uppercase Z without stealing focus or capturing typed text"
   await expect(pause).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("p");
   await expect(pause).toHaveAttribute("aria-pressed", "false");
+});
+
+test("serves live encrypted history over self-signed HTTPS", async ({ browser }) => {
+  let tls;
+  try {
+    tls = createTlsMaterial();
+  } catch (error) {
+    test.skip(error?.code === "ENOENT", "OpenSSL is required for the HTTPS browser fixture");
+    throw error;
+  }
+
+  let context;
+  try {
+    context = await browser.newContext({ ignoreHTTPSErrors: true });
+    const page = await context.newPage();
+    const pageErrors = trackPageErrors(page);
+    const fixture = await startFixture({
+      start_step: 0,
+      control_stdin: true,
+      tls_cert: tls.certificate,
+      tls_key: tls.privateKey,
+      tls_key_password_file: tls.passwordFile,
+    });
+    expect(new URL(fixture.url).protocol).toBe("https:");
+
+    await openProcess(page, fixture);
+    await expect.poll(() => page.evaluate(() => ({
+      secureContext: window.isSecureContext,
+      webCrypto: typeof crypto !== "undefined" && Boolean(crypto.subtle),
+    }))).toEqual({ secureContext: true, webCrypto: true });
+
+    const scope = await currentHistoryScope(page);
+    await waitForStoredHistory(page, scope, 0);
+    publishStep(fixture, 1);
+    await expect(sampleCount(page)).toHaveText("2 samples");
+    const stored = await waitForStoredHistory(page, scope, 1);
+    expect(stored.ciphertextBytes).toBeGreaterThan(16);
+    expect(stored.keys).not.toContain("payload");
+    const database = await historyDatabaseSnapshot(page);
+    expectNoStoredPlaintext(database, "atlas-01");
+    expectNoStoredPlaintext(database, "train.py");
+
+    await page.reload();
+    await expect(page.locator(".connection-state")).toHaveClass(/live/);
+    await expect(page.locator(".process-detail")).toBeVisible();
+    await expect(sampleCount(page)).toHaveText("2 samples");
+    await expect(page.locator("#app-status")).toContainText(
+      "Restored 2 incident history samples",
+    );
+
+    publishStep(fixture, 2);
+    await expect(sampleCount(page)).toHaveText("3 samples");
+    await waitForStoredHistory(page, scope, 2);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    if (context) await context.close();
+    tls.remove();
+  }
 });
 
 test("hydrates encrypted process history exactly once after reload", async ({ page }) => {

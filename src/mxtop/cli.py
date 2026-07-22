@@ -254,7 +254,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "serve local telemetry as a Prometheus /metrics endpoint\n"
-            "(honors --bind, --port [default: 9532], --auth-token, --interval)"
+            "(honors --bind, --port [default: 9532], --auth-token, "
+            "--tls-cert/--tls-key, --interval)"
         ),
     )
     _ = parser.add_argument(
@@ -394,7 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="show only selected process IDs",
     )
 
-    remote = parser.add_argument_group("remote mode")
+    remote = parser.add_argument_group("server and remote mode")
     _ = remote.add_argument(
         "--nodes",
         nargs="+",
@@ -420,12 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--port",
         type=_port,
         default=argparse.SUPPRESS,
-        help="dashboard port (default: 8080)",
+        help="server port (dashboard default: 8080; exporter default: 9532)",
     )
     _ = remote.add_argument(
         "--bind",
         default=argparse.SUPPRESS,
-        help="dashboard bind address (default: 127.0.0.1)",
+        help="server bind address (default: 127.0.0.1)",
     )
     _ = remote.add_argument(
         "--remote-mxsmi-path",
@@ -447,9 +448,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         metavar="TOKEN",
         help=(
-            "require this token for dashboard access\n"
+            "require this token for server access\n"
             f"(default: {MXTOP_AUTH_TOKEN_ENV} environment variable, if set)"
         ),
+    )
+    _ = remote.add_argument(
+        "--tls-cert",
+        default=argparse.SUPPRESS,
+        metavar="CERTFILE",
+        help="PEM certificate chain for direct HTTPS",
+    )
+    _ = remote.add_argument(
+        "--tls-key",
+        default=argparse.SUPPRESS,
+        metavar="KEYFILE",
+        help="PEM private key for direct HTTPS",
+    )
+    _ = remote.add_argument(
+        "--tls-key-password-file",
+        default=argparse.SUPPRESS,
+        metavar="FILE",
+        help="single-line password file for an encrypted TLS private key",
     )
     _ = remote.add_argument(
         "--open",
@@ -529,7 +548,20 @@ REMOTE_ARGUMENTS = (
     "remote_mxsmi_path",
     "remote_command_timeout",
     "auth_token",
+    "tls_cert",
+    "tls_key",
+    "tls_key_password_file",
     "open",
+)
+EXPORTER_SERVER_ARGUMENTS = frozenset(
+    {
+        "port",
+        "bind",
+        "auth_token",
+        "tls_cert",
+        "tls_key",
+        "tls_key_password_file",
+    }
 )
 
 REMOTE_LOCAL_ONLY_OPTIONS = (
@@ -612,14 +644,26 @@ def _apply_config_defaults(
     # Remote-section defaults apply only when --remote-mode is active, and
     # use setattr-if-missing because these args use argparse.SUPPRESS.
     if args.remote_mode:
+        cli_replaces_tls_material = _supplied_option(
+            argv, "--tls-cert"
+        ) or _supplied_option(argv, "--tls-key")
         for config_key, arg_name in (
             ("remote_bind", "bind"),
             ("remote_port", "port"),
             ("remote_auth_token", "auth_token"),
+            ("remote_tls_cert", "tls_cert"),
+            ("remote_tls_key", "tls_key"),
+            ("remote_tls_key_password_file", "tls_key_password_file"),
             ("remote_mxsmi_path", "remote_mxsmi_path"),
             ("remote_command_timeout", "remote_command_timeout"),
             ("remote_open", "open"),
         ):
+            if cli_replaces_tls_material and config_key in {
+                "remote_tls_cert",
+                "remote_tls_key",
+                "remote_tls_key_password_file",
+            }:
+                continue
             if config_key == "remote_auth_token" and os.environ.get(
                 MXTOP_AUTH_TOKEN_ENV
             ):
@@ -646,7 +690,7 @@ def _validate_remote_arguments(
             parser.error(f"{unsupported} is not supported with --remote-mode")
         return
     # --export-metrics reuses the server options but stays local.
-    exporter_allowed = {"port", "bind", "auth_token"} if args.export_metrics else set()
+    exporter_allowed = EXPORTER_SERVER_ARGUMENTS if args.export_metrics else set()
     supplied = [
         name
         for name in REMOTE_ARGUMENTS
@@ -654,8 +698,25 @@ def _validate_remote_arguments(
     ]
     if supplied:
         option = "--" + supplied[0].replace("_", "-")
-        suffix = " or --export-metrics" if supplied[0] in {"port", "bind", "auth_token"} else ""
+        suffix = (
+            " or --export-metrics"
+            if supplied[0] in EXPORTER_SERVER_ARGUMENTS
+            else ""
+        )
         parser.error(f"{option} requires --remote-mode{suffix}")
+
+
+def _validate_tls_arguments(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    cert_file = getattr(args, "tls_cert", None)
+    key_file = getattr(args, "tls_key", None)
+    password_file = getattr(args, "tls_key_password_file", None)
+    if (cert_file is None) != (key_file is None):
+        parser.error("--tls-cert and --tls-key must be provided together")
+    if password_file is not None and cert_file is None:
+        parser.error("--tls-key-password-file requires --tls-cert and --tls-key")
 
 
 def _should_use_color(
@@ -694,6 +755,20 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     _validate_remote_arguments(parser, args, raw_argv)
     file_config = load_config()
     _apply_config_defaults(args, raw_argv, file_config)
+    _validate_tls_arguments(parser, args)
+    tls_context = None
+    if args.remote_mode or args.export_metrics:
+        from mxtop.remote.web import create_tls_context
+
+        try:
+            tls_context = create_tls_context(
+                getattr(args, "tls_cert", None),
+                getattr(args, "tls_key", None),
+                key_password_file=getattr(args, "tls_key_password_file", None),
+            )
+        except Exception as exc:
+            print(f"MXTOP ERROR: TLS setup failed: {exc}", file=sys.stderr)
+            return 1
     if args.count is not None:
         if hasattr(args, "monitor") or args.remote_mode or args.export_metrics:
             parser.error("--count requires --once or --json")
@@ -776,6 +851,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
                     or os.environ.get(MXTOP_AUTH_TOKEN_ENV)
                     or None
                 ),
+                tls_context=tls_context,
             )
         except Exception as exc:
             print(f"MXTOP ERROR: {exc}", file=sys.stderr)
@@ -809,6 +885,7 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
                     or os.environ.get(MXTOP_AUTH_TOKEN_ENV)
                     or None
                 ),
+                tls_context=tls_context,
             )
         except Exception as exc:
             print(f"MXTOP ERROR: {exc}", file=sys.stderr)
