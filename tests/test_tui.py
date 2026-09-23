@@ -779,6 +779,106 @@ def test_mouse_click_outside_tree_rows_clears_tree_selection(monkeypatch):
     assert not state.tagged_pids
 
 
+def test_backslash_enters_filter_mode_and_types_text():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    assert state.filter_editing is True
+
+    for character in "ali":
+        tui._handle_key(ord(character), state, frame, sampler)
+    assert state.text_filter == "ali"
+
+    tui._handle_key(ord("\n"), state, frame, sampler)
+    assert state.filter_editing is False
+    assert state.text_filter == "ali"
+
+
+def test_filter_backspace_and_escape_cancels():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    for character in "abc":
+        tui._handle_key(ord(character), state, frame, sampler)
+    tui._handle_key(tui.curses.KEY_BACKSPACE, state, frame, sampler)
+    assert state.text_filter == "ab"
+
+    tui._handle_key(27, state, frame, sampler)
+    assert state.filter_editing is False
+    assert state.text_filter == ""
+
+
+def test_escape_clears_applied_filter_before_selection():
+    frame = process_frame()
+    state = tui.UiState(text_filter="alice")
+    sampler = FakeSampler()
+    tui._handle_key(tui.curses.KEY_DOWN, state, frame, sampler)
+    assert state.selected_key is not None
+
+    tui._handle_key(27, state, frame, sampler)
+    assert state.text_filter == ""
+    assert state.selected_key is not None
+
+    tui._handle_key(27, state, frame, sampler)
+    assert state.selected_key is None
+
+
+def test_filter_mode_captures_quit_and_sort_keys():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    assert tui._handle_key(ord("q"), state, frame, sampler) is True
+    assert state.text_filter == "q"
+    tui._handle_key(ord("/"), state, frame, sampler)
+    assert state.text_filter == "q/"
+    assert state.reverse_sort is False
+
+
+def test_header_click_sorts_and_reverses(monkeypatch):
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+    header = tui.PROCESS_HEADER_MARKER + " %SM %GMBW  %CPU  %MEM  TIME  COMMAND"
+    spans = tui._header_sort_spans(header)
+    pid_start = header.find("PID")
+    button = getattr(tui.curses, "BUTTON1_CLICKED", 0x4)
+    monkeypatch.setattr(
+        tui.curses, "getmouse", lambda: (0, pid_start, 5, 0, button)
+    )
+
+    tui._handle_key(
+        tui.curses.KEY_MOUSE, state, frame, sampler, header_rows={5: spans}
+    )
+    assert state.process_sort == tui.ProcessSort.PID
+    assert state.reverse_sort is False
+
+    tui._handle_key(
+        tui.curses.KEY_MOUSE, state, frame, sampler, header_rows={5: spans}
+    )
+    assert state.process_sort == tui.ProcessSort.PID
+    assert state.reverse_sort is True
+
+
+def test_header_sort_spans_resolve_overlapping_labels():
+    header = tui.PROCESS_HEADER_MARKER + " %SM %GMBW  %CPU  %MEM  TIME  COMMAND"
+    spans = tui._header_sort_spans(header)
+    by_sort = {sort: (start, end) for start, end, sort in spans}
+
+    gpu_mem = by_sort[tui.ProcessSort.GPU_MEMORY]
+    assert header[gpu_mem[0] : gpu_mem[1]] == "GPU-MEM"
+    gpu = by_sort[tui.ProcessSort.DEFAULT]
+    assert header[gpu[0] : gpu[1]] == "GPU"
+    assert gpu[0] < gpu_mem[0]
+    host_mem = by_sort[tui.ProcessSort.HOST_MEMORY]
+    assert header[host_mem[0] : host_mem[1]] == "%MEM"
+
+
 def test_shift_mouse_wheel_scrolls_host_columns(monkeypatch):
     state = tui.UiState()
     sampler = FakeSampler()
@@ -1137,19 +1237,45 @@ def test_help_colors_key_groups_and_dims_readonly_signal_actions(monkeypatch):
     tui._draw_help_line(header, 0, lines[0], 118, readonly=True)
     assert header.calls[0][-1][0] == tui.PAIR_HEADER
 
+    signal_row_index, signal_line = next(
+        (index, line)
+        for index, line in enumerate(lines)
+        if "interrupt selected process" in line
+    )
+
     readonly_row = FakeScreen(column_limit=118)
-    tui._draw_help_line(readonly_row, 14, lines[14], 118, readonly=True)
+    tui._draw_help_line(readonly_row, signal_row_index, signal_line, 118, readonly=True)
     assert any(
         column == 39 and attr[0] == tui.PAIR_DIM
         for _, column, _, _, attr in readonly_row.calls
     )
 
     writable_row = FakeScreen(column_limit=118)
-    tui._draw_help_line(writable_row, 14, lines[14], 118, readonly=False)
+    tui._draw_help_line(writable_row, signal_row_index, signal_line, 118, readonly=False)
     assert any(
         column == 39 and attr[0] == tui.PAIR_HOT
         for _, column, _, _, attr in writable_row.calls
     )
+
+
+def test_help_colors_survive_line_insertion(monkeypatch):
+    """Colors derive from content, so row offsets must not matter."""
+
+    monkeypatch.setattr(tui, "_attr", lambda pair, extra=0: (pair, extra))
+    lines = tui.render_help_screen(118, 40).lines
+    sort_line = next(line for line in lines if "sort by GPU-MEM" in line)
+
+    for row in (0, 5, 23):
+        screen = FakeScreen(column_limit=118)
+        tui._draw_help_line(screen, row, sort_line, 118, readonly=False)
+        assert any(
+            attr[0] == tui.PAIR_SWAP for _, _, _, _, attr in screen.calls
+        ), f"sort line lost its color at row {row}"
+
+    filter_line = next(line for line in lines if "filter processes" in line)
+    screen = FakeScreen(column_limit=118)
+    tui._draw_help_line(screen, 11, filter_line, 118, readonly=False)
+    assert any(attr[0] == tui.PAIR_HEADER for _, _, _, _, attr in screen.calls)
 
 
 def test_metrics_graphs_use_dedicated_section_and_intensity_colors(monkeypatch):
@@ -1330,3 +1456,94 @@ def test_ascii_lines_keep_semantic_tui_coloring(monkeypatch):
     assert any(
         text == "0" and attr == tui.PAIR_GOOD for _, _, text, _, attr in screen.calls
     )
+
+
+def test_spectrum_rgb_ramp_is_monotonic_green_to_red():
+    start = tui._spectrum_rgb(0.0)
+    end = tui._spectrum_rgb(1.0)
+    assert start[1] > start[0]  # green-dominant at idle
+    assert end[0] > end[1]  # red-dominant at saturation
+    reds = [tui._spectrum_rgb(f / 10)[0] for f in range(11)]
+    assert reds == sorted(reds)  # red channel only ever grows
+    for fraction in (0.0, 0.31, 0.5, 0.77, 1.0):
+        assert all(0 <= channel <= 1000 for channel in tui._spectrum_rgb(fraction))
+
+
+def test_spectrum_pair_uses_truecolor_ramp_when_ready(monkeypatch):
+    monkeypatch.setattr(tui, "_truecolor_ready", False)
+    assert tui._spectrum_pair(0.0) == tui.PAIR_SPECTRUM_FIRST
+    assert (
+        tui._spectrum_pair(1.0)
+        == tui.PAIR_SPECTRUM_FIRST + len(tui.SPECTRUM_COLORS) - 1
+    )
+
+    monkeypatch.setattr(tui, "_truecolor_ready", True)
+    assert tui._spectrum_pair(0.0) == tui.PAIR_TRUECOLOR_FIRST
+    assert (
+        tui._spectrum_pair(1.0)
+        == tui.PAIR_TRUECOLOR_FIRST + tui.TRUECOLOR_SPECTRUM_STEPS - 1
+    )
+    assert tui._spectrum_pair(2.0) <= tui.PAIR_TRUECOLOR_FIRST + tui.TRUECOLOR_SPECTRUM_STEPS - 1
+
+
+def test_truecolor_requires_colorterm_and_curses_support(monkeypatch):
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert tui._terminal_advertises_truecolor()
+    monkeypatch.setenv("COLORTERM", "24bit")
+    assert tui._terminal_advertises_truecolor()
+    monkeypatch.setenv("COLORTERM", "256color")
+    assert not tui._terminal_advertises_truecolor()
+    monkeypatch.delenv("COLORTERM")
+    assert not tui._terminal_advertises_truecolor()
+
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setattr(tui.curses, "can_change_color", lambda: False, raising=False)
+    assert tui._setup_truecolor_spectrum() is False
+
+
+def test_pause_key_toggles_and_refresh_resumes():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("p"), state, frame, sampler)
+    assert state.paused is True
+    tui._handle_key(ord("p"), state, frame, sampler)
+    assert state.paused is False
+
+    tui._handle_key(ord("Z"), state, frame, sampler)
+    assert state.paused is True
+    tui._handle_key(ord("r"), state, frame, sampler)
+    assert state.paused is False
+    assert sampler.refreshed is True
+
+
+def test_pause_key_is_inactive_off_main_screen():
+    state = tui.UiState(active_screen=ScreenMode.TREE, screen_selection_active=True)
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("p"), state, process_frame(), sampler)
+
+    assert state.paused is False
+
+
+def test_filter_editing_captures_pause_key():
+    frame = process_frame()
+    state = tui.UiState()
+    sampler = FakeSampler()
+
+    tui._handle_key(ord("\\"), state, frame, sampler)
+    tui._handle_key(ord("p"), state, frame, sampler)
+
+    assert state.paused is False
+    assert state.text_filter == "p"
+
+
+def test_header_detection_survives_sort_indicators():
+    frame = process_frame()
+    for sort in (ProcessSort.PID, ProcessSort.USER, ProcessSort.DEFAULT):
+        state = tui.UiState(process_sort=sort, reverse_sort=sort is ProcessSort.PID)
+        lines, _, _ = render_process_panel(frame, state, width=120)
+        header = next(line for line in lines if "USER" in line and "PID" in line)
+        assert tui._matches_process_header(header), f"header lost for sort={sort}"
+        assert tui._header_sort_spans(header)

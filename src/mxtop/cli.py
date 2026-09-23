@@ -14,6 +14,8 @@ import time
 from mxtop import __version__
 from mxtop._compat import DATACLASS_SLOTS
 from mxtop.backends import TelemetryBackend, create_backend
+from mxtop.backends.mxsmi import DEFAULT_MXSMI_TIMEOUT
+from mxtop.config import load_config
 from mxtop.filters import (
     apply_filters,
     normalize_indices,
@@ -37,9 +39,12 @@ from mxtop.ui.text import to_ascii
 from mxtop.ui.state import LayoutMode
 
 MIN_INTERVAL = 0.25
+MIN_REMOTE_COMMAND_TIMEOUT = 0.1
+DEFAULT_REMOTE_COMMAND_TIMEOUT = DEFAULT_MXSMI_TIMEOUT
 MXTOP_GPU_THRESHOLDS_ENV = "MXTOP_GPU_UTILIZATION_THRESHOLDS"
 MXTOP_MEM_THRESHOLDS_ENV = "MXTOP_MEMORY_UTILIZATION_THRESHOLDS"
 MXTOP_MONITOR_MODE_ENV = "MXTOP_MONITOR_MODE"
+MXTOP_AUTH_TOKEN_ENV = "MXTOP_AUTH_TOKEN"
 VISIBLE_DEVICE_ENVS = ("MACA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES")
 
 
@@ -74,6 +79,22 @@ def _port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return port
+
+
+def _remote_command_timeout(value: str) -> float:
+    timeout = float(value)
+    if not math.isfinite(timeout) or timeout < MIN_REMOTE_COMMAND_TIMEOUT:
+        raise argparse.ArgumentTypeError(
+            f"remote command timeout must be at least {MIN_REMOTE_COMMAND_TIMEOUT}s"
+        )
+    return timeout
+
+
+def _count(value: str) -> int:
+    count = int(value)
+    if count < 1:
+        raise argparse.ArgumentTypeError("count must be at least 1")
+    return count
 
 
 def _single_snapshot_with_cpu_sample(
@@ -156,9 +177,11 @@ def _monitor_mode_tokens() -> set[str]:
     }
 
 
-def _monitor_layout_from_env(tokens: set[str]) -> str:
+def _monitor_layout_from_env(tokens: set[str], fallback: str | None = None) -> str:
     modes = tokens.intersection({mode.value for mode in LayoutMode})
-    return modes.pop() if len(modes) == 1 else LayoutMode.AUTO.value
+    if len(modes) == 1:
+        return modes.pop()
+    return fallback or LayoutMode.AUTO.value
 
 
 def _visible_device_identifiers() -> tuple[str, ...] | None:
@@ -183,6 +206,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--version", "-V", action="version", version=f"mxtop {__version__}"
     )
     _ = parser.add_argument(
+        "--print-completion",
+        choices=["bash", "zsh", "fish"],
+        default=None,
+        metavar="SHELL",
+        help="print a completion script for bash, zsh, or fish and exit",
+    )
+    _ = parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="diagnose the environment (backends, terminal, config) and exit",
+    )
+    _ = parser.add_argument(
         "--backend", choices=["auto", "pymxsml", "mxsmi"], default="auto"
     )
     mode = parser.add_mutually_exclusive_group()
@@ -204,9 +239,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print one JSON snapshot and exit"
     )
     _ = mode.add_argument(
+        "--json-lines",
+        "--ndjson",
+        action="store_true",
+        help="print snapshots as one compact JSON object per line (NDJSON)",
+    )
+    _ = mode.add_argument(
         "--remote-mode",
         action="store_true",
         help="serve a local web dashboard aggregating multiple SSH nodes",
+    )
+    _ = mode.add_argument(
+        "--export-metrics",
+        action="store_true",
+        help=(
+            "serve local telemetry as a Prometheus /metrics endpoint\n"
+            "(honors --bind, --port [default: 9532], --auth-token, "
+            "--tls-cert/--tls-key, --interval)"
+        ),
     )
     _ = parser.add_argument(
         "--interval",
@@ -214,6 +264,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=2.0,
         metavar="SEC",
         help="process status update interval in seconds (default: 2)",
+    )
+    _ = parser.add_argument(
+        "--count",
+        "-n",
+        type=_count,
+        default=None,
+        metavar="N",
+        help=(
+            "with --once or --json, print N snapshots separated by --interval\n"
+            "and exit (default: 1)"
+        ),
     )
     _ = parser.add_argument(
         "--no-unicode",
@@ -334,7 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="show only selected process IDs",
     )
 
-    remote = parser.add_argument_group("remote mode")
+    remote = parser.add_argument_group("server and remote mode")
     _ = remote.add_argument(
         "--nodes",
         nargs="+",
@@ -360,17 +421,54 @@ def build_parser() -> argparse.ArgumentParser:
         "--port",
         type=_port,
         default=argparse.SUPPRESS,
-        help="dashboard port (default: 8080)",
+        help="server port (dashboard default: 8080; exporter default: 9532)",
     )
     _ = remote.add_argument(
         "--bind",
         default=argparse.SUPPRESS,
-        help="dashboard bind address (default: 127.0.0.1)",
+        help="server bind address (default: 127.0.0.1)",
     )
     _ = remote.add_argument(
         "--remote-mxsmi-path",
         default=argparse.SUPPRESS,
         help="mx-smi path on remote hosts",
+    )
+    _ = remote.add_argument(
+        "--remote-command-timeout",
+        type=_remote_command_timeout,
+        default=argparse.SUPPRESS,
+        metavar="SEC",
+        help=(
+            "maximum time for each remote telemetry command in seconds "
+            f"(default: {DEFAULT_REMOTE_COMMAND_TIMEOUT:g})"
+        ),
+    )
+    _ = remote.add_argument(
+        "--auth-token",
+        default=argparse.SUPPRESS,
+        metavar="TOKEN",
+        help=(
+            "require this token for server access\n"
+            f"(default: {MXTOP_AUTH_TOKEN_ENV} environment variable, if set)"
+        ),
+    )
+    _ = remote.add_argument(
+        "--tls-cert",
+        default=argparse.SUPPRESS,
+        metavar="CERTFILE",
+        help="PEM certificate chain for direct HTTPS",
+    )
+    _ = remote.add_argument(
+        "--tls-key",
+        default=argparse.SUPPRESS,
+        metavar="KEYFILE",
+        help="PEM private key for direct HTTPS",
+    )
+    _ = remote.add_argument(
+        "--tls-key-password-file",
+        default=argparse.SUPPRESS,
+        metavar="FILE",
+        help="single-line password file for an encrypted TLS private key",
     )
     _ = remote.add_argument(
         "--open",
@@ -448,7 +546,22 @@ REMOTE_ARGUMENTS = (
     "port",
     "bind",
     "remote_mxsmi_path",
+    "remote_command_timeout",
+    "auth_token",
+    "tls_cert",
+    "tls_key",
+    "tls_key_password_file",
     "open",
+)
+EXPORTER_SERVER_ARGUMENTS = frozenset(
+    {
+        "port",
+        "bind",
+        "auth_token",
+        "tls_cert",
+        "tls_key",
+        "tls_key_password_file",
+    }
 )
 
 REMOTE_LOCAL_ONLY_OPTIONS = (
@@ -494,6 +607,71 @@ def _supplied_option(argv: list[str], option: str) -> bool:
     return any(token == option or token.startswith(option) for token in argv)
 
 
+def _apply_config_defaults(
+    args: argparse.Namespace, argv: list[str], config: dict[str, object]
+) -> None:
+    """Layer config-file values under CLI flags (flags and env always win)."""
+
+    if not config:
+        return
+    monitor_tokens = _monitor_mode_tokens()
+    if "interval" in config and not _supplied_option(argv, "--interval"):
+        args.interval = float(config["interval"])  # type: ignore[arg-type]
+    for flag, name, negation in (
+        ("--colorful", "colorful", "plain"),
+        ("--light", "light", "dark"),
+        ("--readonly", "readonly", None),
+    ):
+        if negation is not None and negation in monitor_tokens:
+            continue
+        if config.get(name) and not _supplied_option(argv, flag):
+            setattr(args, name, True)
+    if config.get("no_unicode") and not (
+        _supplied_option(argv, "--no-unicode")
+        or _supplied_option(argv, "--ascii")
+        or _supplied_option(argv, "-U")
+    ):
+        args.no_unicode = True
+    for name, env_name in (
+        ("gpu_util_thresh", MXTOP_GPU_THRESHOLDS_ENV),
+        ("mem_util_thresh", MXTOP_MEM_THRESHOLDS_ENV),
+    ):
+        option = "--" + name.replace("_", "-")
+        if os.environ.get(env_name):
+            continue
+        if name in config and getattr(args, name) is None and not _supplied_option(argv, option):
+            setattr(args, name, list(config[name]))  # type: ignore[call-overload]
+    # Remote-section defaults apply only when --remote-mode is active, and
+    # use setattr-if-missing because these args use argparse.SUPPRESS.
+    if args.remote_mode:
+        cli_replaces_tls_material = _supplied_option(
+            argv, "--tls-cert"
+        ) or _supplied_option(argv, "--tls-key")
+        for config_key, arg_name in (
+            ("remote_bind", "bind"),
+            ("remote_port", "port"),
+            ("remote_auth_token", "auth_token"),
+            ("remote_tls_cert", "tls_cert"),
+            ("remote_tls_key", "tls_key"),
+            ("remote_tls_key_password_file", "tls_key_password_file"),
+            ("remote_mxsmi_path", "remote_mxsmi_path"),
+            ("remote_command_timeout", "remote_command_timeout"),
+            ("remote_open", "open"),
+        ):
+            if cli_replaces_tls_material and config_key in {
+                "remote_tls_cert",
+                "remote_tls_key",
+                "remote_tls_key_password_file",
+            }:
+                continue
+            if config_key == "remote_auth_token" and os.environ.get(
+                MXTOP_AUTH_TOKEN_ENV
+            ):
+                continue
+            if config_key in config and not hasattr(args, arg_name):
+                setattr(args, arg_name, config[config_key])
+
+
 def _validate_remote_arguments(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
@@ -511,10 +689,34 @@ def _validate_remote_arguments(
         if unsupported is not None:
             parser.error(f"{unsupported} is not supported with --remote-mode")
         return
-    supplied = [name for name in REMOTE_ARGUMENTS if hasattr(args, name)]
+    # --export-metrics reuses the server options but stays local.
+    exporter_allowed = EXPORTER_SERVER_ARGUMENTS if args.export_metrics else set()
+    supplied = [
+        name
+        for name in REMOTE_ARGUMENTS
+        if hasattr(args, name) and name not in exporter_allowed
+    ]
     if supplied:
         option = "--" + supplied[0].replace("_", "-")
-        parser.error(f"{option} requires --remote-mode")
+        suffix = (
+            " or --export-metrics"
+            if supplied[0] in EXPORTER_SERVER_ARGUMENTS
+            else ""
+        )
+        parser.error(f"{option} requires --remote-mode{suffix}")
+
+
+def _validate_tls_arguments(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    cert_file = getattr(args, "tls_cert", None)
+    key_file = getattr(args, "tls_key", None)
+    password_file = getattr(args, "tls_key_password_file", None)
+    if (cert_file is None) != (key_file is None):
+        parser.error("--tls-cert and --tls-key must be provided together")
+    if password_file is not None and cert_file is None:
+        parser.error("--tls-key-password-file requires --tls-cert and --tls-key")
 
 
 def _should_use_color(
@@ -535,7 +737,43 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     parser = build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
+    if args.print_completion:
+        from mxtop.completions import render_completion
+
+        print(render_completion(parser, args.print_completion), end="")
+        return 0
+    if args.doctor:
+        from mxtop.doctor import run_doctor
+
+        return run_doctor(
+            use_color=_should_use_color(
+                no_color=args.no_color,
+                force_color=args.force_color,
+                stdout_is_tty=sys.stdout.isatty(),
+            )
+        )
     _validate_remote_arguments(parser, args, raw_argv)
+    file_config = load_config()
+    _apply_config_defaults(args, raw_argv, file_config)
+    _validate_tls_arguments(parser, args)
+    tls_context = None
+    if args.remote_mode or args.export_metrics:
+        from mxtop.remote.web import create_tls_context
+
+        try:
+            tls_context = create_tls_context(
+                getattr(args, "tls_cert", None),
+                getattr(args, "tls_key", None),
+                key_password_file=getattr(args, "tls_key_password_file", None),
+            )
+        except Exception as exc:
+            print(f"MXTOP ERROR: TLS setup failed: {exc}", file=sys.stderr)
+            return 1
+    if args.count is not None:
+        if hasattr(args, "monitor") or args.remote_mode or args.export_metrics:
+            parser.error("--count requires --once or --json")
+        if not args.json and not args.json_lines:
+            args.once = True
 
     monitor_tokens = _monitor_mode_tokens()
     explicit_monitor = hasattr(args, "monitor")
@@ -550,13 +788,17 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
     monitor_requested = (explicit_monitor and not monitor_unavailable) or (
         not args.once
         and not args.json
+        and not args.json_lines
         and stdin_is_tty
         and stdout_is_tty
         and not args.remote_mode
+        and not args.export_metrics
     )
     if monitor_requested:
         requested_layout = getattr(args, "monitor", None)
-        args.monitor = requested_layout or _monitor_layout_from_env(monitor_tokens)
+        args.monitor = requested_layout or _monitor_layout_from_env(
+            monitor_tokens, fallback=file_config.get("monitor")  # type: ignore[arg-type]
+        )
     if args.user is not None and not args.user:
         args.user.append(getpass.getuser())
     if not args.colorful:
@@ -598,7 +840,18 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
                 port=getattr(args, "port", 8080),
                 interval=args.interval,
                 mxsmi_path=mxsmi_path,
+                command_timeout=getattr(
+                    args,
+                    "remote_command_timeout",
+                    DEFAULT_REMOTE_COMMAND_TIMEOUT,
+                ),
                 open_browser=getattr(args, "open", False),
+                auth_token=(
+                    getattr(args, "auth_token", None)
+                    or os.environ.get(MXTOP_AUTH_TOKEN_ENV)
+                    or None
+                ),
+                tls_context=tls_context,
             )
         except Exception as exc:
             print(f"MXTOP ERROR: {exc}", file=sys.stderr)
@@ -618,21 +871,52 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         None,
     )
 
-    if args.json:
+    if args.export_metrics:
+        from mxtop.exporter import run_exporter
+
         try:
-            frame = _single_snapshot_with_cpu_sample(selected_backend, options)
+            return run_exporter(
+                selected_backend,
+                bind=getattr(args, "bind", "127.0.0.1"),
+                port=getattr(args, "port", 9532),
+                interval=args.interval,
+                auth_token=(
+                    getattr(args, "auth_token", None)
+                    or os.environ.get(MXTOP_AUTH_TOKEN_ENV)
+                    or None
+                ),
+                tls_context=tls_context,
+            )
         except Exception as exc:
             print(f"MXTOP ERROR: {exc}", file=sys.stderr)
             return 1
-        had_errors = _report_invalid_device_indices(frame, options)
-        print(
-            json.dumps(
-                sanitize_json_value(frame.to_dict()),
-                indent=2,
-                sort_keys=True,
-                allow_nan=False,
-            )
-        )
+
+    if args.json or args.json_lines:
+        had_errors = False
+        for iteration in range(args.count or 1):
+            if iteration:
+                time.sleep(args.interval)
+            try:
+                frame = _single_snapshot_with_cpu_sample(selected_backend, options)
+            except Exception as exc:
+                print(f"MXTOP ERROR: {exc}", file=sys.stderr)
+                return 1
+            had_errors = _report_invalid_device_indices(frame, options) or had_errors
+            payload = sanitize_json_value(frame.to_dict())
+            if args.json_lines:
+                print(
+                    json.dumps(
+                        payload,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                        allow_nan=False,
+                    ),
+                    flush=True,
+                )
+            else:
+                print(
+                    json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)
+                )
         return int(had_errors)
 
     use_color = _should_use_color(
@@ -641,14 +925,18 @@ def main(argv: list[str] | None = None, backend: TelemetryBackend | None = None)
         stdout_is_tty=stdout_is_tty,
     )
     if args.once or not monitor_requested:
-        try:
-            frame = _single_snapshot_with_cpu_sample(selected_backend, options)
-        except Exception as exc:
-            print(f"MXTOP ERROR: {exc}", file=sys.stderr)
-            return 1
-        had_errors = _report_invalid_device_indices(frame, options)
-        output = render_once(frame, use_color=use_color, width=_snapshot_width())
-        print(to_ascii(output) if options.no_unicode else output)
+        had_errors = False
+        for iteration in range(args.count or 1):
+            if iteration:
+                time.sleep(args.interval)
+            try:
+                frame = _single_snapshot_with_cpu_sample(selected_backend, options)
+            except Exception as exc:
+                print(f"MXTOP ERROR: {exc}", file=sys.stderr)
+                return 1
+            had_errors = _report_invalid_device_indices(frame, options) or had_errors
+            output = render_once(frame, use_color=use_color, width=_snapshot_width())
+            print(to_ascii(output) if options.no_unicode else output)
         return int(had_errors or monitor_unavailable)
 
     try:

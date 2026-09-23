@@ -5,7 +5,10 @@ import pytest
 
 from mxtop.models import ProcessSnapshot
 from mxtop.remote import ssh
-from mxtop.remote.cluster import ClusterMonitor
+from mxtop.remote.cluster import (
+    DEFAULT_REMOTE_COMMAND_TIMEOUT,
+    ClusterMonitor,
+)
 from mxtop.remote.host import (
     HOST_TELEMETRY_COMMAND,
     parse_host_telemetry,
@@ -97,8 +100,9 @@ def test_cluster_monitor_collects_host_and_process_context(monkeypatch):
             self.host_calls = 0
             self.closed = False
 
-        async def run(self, command, *, check):
+        async def run(self, command, *, check, timeout):
             assert check is False
+            assert timeout == DEFAULT_REMOTE_COMMAND_TIMEOUT
             if command == "mx-smi -L":
                 stdout = "GPU#0 MXTEST 0000:01:00.0 Available (UUID: GPU-0)\n"
             elif command == "mx-smi --show-version":
@@ -160,3 +164,106 @@ def test_cluster_monitor_collects_host_and_process_context(monkeypatch):
     assert node.frame.processes[0].host_memory_bytes == 4096 * 1024
     assert connection.host_calls == 2
     assert connection.closed is True
+
+
+@pytest.mark.parametrize(
+    "command_timeout",
+    (0.0, -1.0, float("nan"), float("inf"), float("-inf")),
+)
+def test_cluster_monitor_rejects_invalid_command_timeouts(command_timeout):
+    with pytest.raises(ValueError, match="positive and finite"):
+        ClusterMonitor(["node-a"], command_timeout=command_timeout)
+
+
+def test_cluster_monitor_timeout_isolated_per_host_and_reconnects(monkeypatch):
+    class HealthyConnection:
+        def __init__(self, host):
+            self.host = host
+            self.closed = False
+            self.timeouts = []
+
+        async def run(self, command, *, check, timeout):
+            assert check is False
+            self.timeouts.append(timeout)
+            if command == "mx-smi -L":
+                stdout = (
+                    f"GPU#0 MXTEST-{self.host} 0000:01:00.0 "
+                    f"Available (UUID: GPU-{self.host})\n"
+                )
+            elif command == "mx-smi --show-version":
+                stdout = "Driver Version: 3.9.3\nMACA Version: 3.8.0\n"
+            elif "mx-smi dmon" in command:
+                stdout = DMON
+            elif command == "mx-smi --show-process":
+                stdout = "GPU PID Type Process GPU Memory\n"
+            elif command == HOST_TELEMETRY_COMMAND:
+                stdout = HOST_FIRST
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return SimpleNamespace(exit_status=0, stdout=stdout)
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            pass
+
+    class HangingConnection:
+        def __init__(self):
+            self.closed = False
+            self.timeouts = []
+
+        async def run(self, _command, *, check, timeout):
+            assert check is False
+            self.timeouts.append(timeout)
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=timeout)
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            pass
+
+    healthy = HealthyConnection("healthy")
+    hanging = HangingConnection()
+    recovered = HealthyConnection("recovered")
+    connect_calls = {"healthy": 0, "flaky": 0}
+
+    async def fake_connect(host, *, connect_timeout):
+        assert connect_timeout == 10.0
+        connect_calls[host] += 1
+        if host == "healthy":
+            return healthy
+        return hanging if connect_calls[host] == 1 else recovered
+
+    monkeypatch.setattr(ssh, "connect", fake_connect)
+
+    async def poll_twice():
+        monitor = ClusterMonitor(
+            ["healthy", "flaky"],
+            command_timeout=0.02,
+        )
+        try:
+            first = await asyncio.wait_for(monitor.poll_once(), timeout=0.5)
+            second = await asyncio.wait_for(monitor.poll_once(), timeout=0.5)
+            return first, second
+        finally:
+            await monitor.close()
+
+    first, second = asyncio.run(poll_twice())
+
+    assert first.nodes[0].reachable is True
+    assert first.nodes[0].frame is not None
+    assert first.nodes[1].reachable is False
+    assert first.nodes[1].error == "TimeoutError"
+    assert hanging.timeouts == [0.02]
+    assert hanging.closed is True
+    assert connect_calls == {"healthy": 1, "flaky": 2}
+    assert second.nodes[0].reachable is True
+    assert second.nodes[1].reachable is True
+    assert second.nodes[1].frame is not None
+    assert second.nodes[1].frame.backend == "mx-smi@flaky"
+    assert healthy.timeouts and set(healthy.timeouts) == {0.02}
+    assert recovered.timeouts and set(recovered.timeouts) == {0.02}
+    assert healthy.closed is True
+    assert recovered.closed is True

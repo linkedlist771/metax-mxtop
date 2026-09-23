@@ -94,3 +94,23 @@ def test_host_history_reset_clears_graphs():
     history.sample(cpu=10, now=10.0)
     history.sample(cpu=10, now=11.5)
     assert len(history.cpu.samples) == 1
+
+
+def test_history_hold_suppresses_sampling():
+    from mxtop.ui.history import HostHistory
+
+    history = HostHistory(interval=1.0)
+    history.sample(cpu=10.0, now=0.0)
+    history.sample(cpu=20.0, now=1.5)
+    assert list(history.cpu.samples)
+
+    before = list(history.cpu.samples)
+    history.hold = True
+    history.sample(cpu=99.0, now=3.0)
+    history.sample(cpu=99.0, now=4.5)
+    assert list(history.cpu.samples) == before
+
+    history.hold = False
+    history.sample(cpu=30.0, now=6.0)
+    history.sample(cpu=30.0, now=7.5)
+    assert list(history.cpu.samples) != before

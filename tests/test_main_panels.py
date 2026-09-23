@@ -516,3 +516,96 @@ def test_offscreen_selection_hides_signal_hint_but_tags_keep_it():
     state.tagged_pids.add(frame.processes[0].pid)
     tagged = render_main_screen(frame, state, width=120, height=18)
     assert any("send signals" in line for line in tagged.context_lines or tagged.lines)
+
+
+def test_host_metrics_reuse_a_reading_within_the_minimum_window(monkeypatch):
+    readings = iter(
+        [
+            (10.0, "1.00GiB", 1.0, "0B", 0.0),
+            (20.0, "2.00GiB", 2.0, "0B", 0.0),
+        ]
+    )
+    clock = iter([100.0, 100.1, 100.0 + panels.HOST_METRICS_MIN_WINDOW + 0.01])
+    monkeypatch.setattr(panels, "_host_metrics_cache", None)
+    monkeypatch.setattr(panels, "_read_host_metrics", lambda: next(readings))
+    monkeypatch.setattr(panels.time, "monotonic", lambda: next(clock))
+
+    first = panels._host_metrics()
+    # A repaint moments later (e.g. a held key) must not re-sample CPU usage
+    # over a few milliseconds.
+    assert panels._host_metrics() is first
+    assert panels._host_metrics()[0] == 20.0
+
+
+def _stub_host(monkeypatch, percent=33.0):
+    monkeypatch.setattr(
+        panels, "_host_metrics", lambda: (25.0, "42.24GiB", percent, "0B", 0.0)
+    )
+    monkeypatch.setattr(panels, "_host_memory_total", lambda: 128 * 1024**3)
+
+
+def test_memory_totals_sum_vram_across_devices_and_report_host_dram(monkeypatch):
+    _stub_host(monkeypatch)
+    frame = FrameSnapshot(
+        devices=[_device(0, used_gib=48), _device(1, used_gib=16), DeviceSnapshot(index=2)],
+        processes=[],
+    )
+
+    totals = panels.memory_totals(frame)
+
+    # Device 2 reports no memory and must not dilute the fleet total.
+    assert totals == [
+        ("VRAM", "64.00GiB", "128.0GiB", 50.0),
+        ("DRAM", "42.24GiB", "128.0GiB", 33.0),
+    ]
+
+
+def test_memory_totals_skip_unknown_sources(monkeypatch):
+    monkeypatch.setattr(panels, "_host_metrics", lambda: (None, "N/A", None, "N/A", None))
+    monkeypatch.setattr(panels, "_host_memory_total", lambda: None)
+
+    assert panels.memory_totals(FrameSnapshot(devices=[DeviceSnapshot(index=0)], processes=[])) == []
+
+
+def test_title_places_memory_totals_between_clock_and_hint(monkeypatch):
+    _stub_host(monkeypatch)
+    frame = _frame()
+    frame.timestamp = 0
+
+    wide = panels.render_title(frame, 180)
+    tight = panels.render_title(frame, 122)
+    vram_only = panels.render_title(frame, 96)
+    narrow = panels.render_title(frame, 79)
+
+    assert "VRAM: 16384MiB / 128.0GiB (12%)  DRAM: 42.24GiB / 128.0GiB (33%)" in wide
+    assert "VRAM: 16384MiB/128.0GiB (12%)  DRAM: 42.24GiB/128.0GiB (33%)" in tight
+    assert "VRAM: 16384MiB / 128.0GiB (12%)" in vram_only and "DRAM" not in vram_only
+    assert "VRAM" not in narrow
+    for line, width in ((wide, 180), (tight, 122), (vram_only, 96), (narrow, 79)):
+        assert cell_width(line) == width
+        assert line.endswith("(Press h for help or q to quit)")
+
+
+def test_snapshot_title_right_aligns_memory_totals(monkeypatch):
+    _stub_host(monkeypatch)
+    monkeypatch.setattr(panels, "_load_average_text", lambda: "Load Average:  1.00  2.00  3.00")
+    monkeypatch.setattr(panels, "_uptime_text", lambda: "2:00:00")
+
+    title = render_snapshot_screen(_frame(), width=140).lines[0]
+
+    assert len(title) == 140
+    assert title.endswith("DRAM: 42.24GiB / 128.0GiB (33%)")
+
+
+def test_process_percentages_never_overflow_their_columns(monkeypatch):
+    _stub_host(monkeypatch)
+    frame = _frame(device_count=1, process_count=2)
+    frame.processes[0].cpu_percent = 312.4
+    frame.processes[1].cpu_percent = 12.5
+
+    lines, start, count = render_process_panel(frame, UiState(), 120)
+    rows = lines[start : start + count]
+
+    # Every row keeps its COMMAND column at the same offset.
+    assert len({row.index("python") for row in rows}) == 1
+    assert " 312 " in rows[0] or " 312 " in rows[1]

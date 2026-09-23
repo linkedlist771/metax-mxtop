@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from glob import glob
 import importlib
+import logging
 import math
 import os
 import sys
@@ -38,11 +39,25 @@ def _load_pymxsml() -> None:
 T = TypeVar("T")
 PYMXSML_ECC_ERRORS_ENV = "MXTOP_PYMXSML_ECC_ERRORS"
 
+_logger = logging.getLogger(__name__)
+_reported_failures: set[str] = set()
+
 
 def _safe(call: Callable[[], T], default: T | None = None) -> T | None:
+    """Degrade a single telemetry field to its default on any MXSML error.
+
+    Each distinct failure is logged once at debug level so field gaps are
+    diagnosable (e.g. ``python -m logging`` config or pytest caplog) without
+    corrupting the curses display in normal runs.
+    """
+
     try:
         return call()
-    except Exception:
+    except Exception as exc:
+        key = f"{type(exc).__name__}: {exc}"
+        if key not in _reported_failures:
+            _reported_failures.add(key)
+            _logger.debug("pymxsml call failed, using default: %s", key)
         return default
 
 

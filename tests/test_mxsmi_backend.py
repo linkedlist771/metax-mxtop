@@ -288,3 +288,43 @@ def test_recorded_style_mxsmi_outputs_preserve_a_64_gpu_fleet():
     assert frame.processes[-1].gpu_index == 63
     assert frame.processes[-1].pid == 10063
     assert frame.processes[-1].gpu_memory_bytes == 1087 * 1024**2
+
+
+def test_backend_overlaps_dmon_and_process_queries(monkeypatch):
+    import threading
+
+    process_started = threading.Event()
+
+    def fake_run(args, **kwargs):
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "-L":
+            return CompletedProcess(args, 0, "GPU 0: MXC500 (UUID: MX-abc)\n", "")
+        if sub == "dmon":
+            # Only completes when the process query runs at the same time.
+            assert process_started.wait(timeout=5.0)
+            return CompletedProcess(args, 0, DMON_SAMPLE, "")
+        if sub == "--show-process":
+            process_started.set()
+            return CompletedProcess(args, 0, PROCESS_SAMPLE, "")
+        return CompletedProcess(args, 1, "", "")
+
+    monkeypatch.setattr("mxtop.backends.mxsmi.subprocess.run", fake_run)
+
+    frame = MxSmiBackend("/opt/mxdriver/bin/mx-smi").snapshot()
+
+    assert frame.processes[0].pid == 967305
+
+
+def test_backend_reports_dmon_failure_over_process_failure(monkeypatch):
+    def fake_run(args, **kwargs):
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "dmon":
+            raise subprocess.CalledProcessError(3, args)
+        if sub == "--show-process":
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return CompletedProcess(args, 1, "", "")
+
+    monkeypatch.setattr("mxtop.backends.mxsmi.subprocess.run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        MxSmiBackend("/opt/mxdriver/bin/mx-smi").snapshot()

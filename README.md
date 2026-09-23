@@ -3,6 +3,7 @@
 <p align="center">
   <a href="https://github.com/linkedlist771/metax-mxtop"><img src="https://img.shields.io/github/stars/linkedlist771/metax-mxtop?style=flat-square&logo=github&color=181717" alt="GitHub stars"/></a>
   <a href="https://pypi.org/project/metax-mxtop/"><img src="https://img.shields.io/pypi/v/metax-mxtop?style=flat-square&logo=pypi&logoColor=white" alt="PyPI version"/></a>
+  <a href="https://github.com/linkedlist771/metax-mxtop/actions/workflows/wheels.yml"><img src="https://img.shields.io/github/actions/workflow/status/linkedlist771/metax-mxtop/wheels.yml?branch=main&style=flat-square&label=CI" alt="CI status"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="MIT License"/></a>
   <img src="https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+"/>
   <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"/>
@@ -50,6 +51,7 @@ Preview and gallery images use fixed-time deterministic synthetic MetaX-shaped t
 - Read-only GPU telemetry through MXSML/Pymxsml or `mx-smi`.
 - GPU device panel with temperature, power, utilization, memory, memory bandwidth, clocks, bus id, persistence, performance state, and driver fields when available.
 - Adaptive 32/64-GPU fleet grid that preserves per-device load colors and leaves substantially more room for host/process data.
+- Fleet memory totals in the title row — `VRAM: used / total (pct%)` across all visible GPUs and `DRAM: used / total (pct%)` for the host — colored by memory load and using no extra screen rows.
 - Host panel with load average and scrolling history graphs for CPU, memory, swap, and the selected GPU's memory/utilization.
 - Process table with selection, multi-process tagging, vertical and horizontal scrolling, and nvitop-compatible sorting.
 - Process environment, host/GPU process-tree, per-process metrics, and built-in help screens.
@@ -81,6 +83,17 @@ cd metax-mxtop
 pip install -e .
 ```
 
+A man page ships with the package (`man mxtop` after a system-wide or
+user-scheme install); it is also readable in-repo with `man -l docs/mxtop.1`.
+
+Shell completions are generated from the CLI itself:
+
+```bash
+mxtop --print-completion bash > ~/.local/share/bash-completion/completions/mxtop
+mxtop --print-completion zsh  > ~/.zfunc/_mxtop     # ensure ~/.zfunc is in fpath
+mxtop --print-completion fish > ~/.config/fish/completions/mxtop.fish
+```
+
 ## MetaX backend discovery
 
 `mxtop` tries backends in this order when `--backend auto` is used:
@@ -100,6 +113,11 @@ Example:
 ```bash
 MXTOP_MXSMI_PATH=/opt/mxdriver/bin/mx-smi mxtop --backend mxsmi
 ```
+
+When GPUs don't show up, `mxtop --doctor` walks the whole discovery chain —
+Pymxsml importability and SDK wheels, mx-smi resolution, a live backend
+snapshot with device count, terminal capabilities, and config validity —
+printing a fix hint for anything that isn't a PASS.
 
 ## Usage
 
@@ -136,6 +154,25 @@ mxtop --once --force-color
 mxtop --json
 ```
 
+`--count` / `-n` repeats one-shot or JSON output N times at the `--interval` cadence, for cron jobs and logging pipelines:
+
+```bash
+mxtop -n 10 --interval 5           # ten text snapshots, 5s apart
+mxtop --json -n 60 --interval 1    # one minute of JSON samples
+mxtop --json-lines -n 60 --interval 1 | jq '.devices[0].gpu_util_percent'
+```
+
+`--json-lines` / `--ndjson` emits one compact JSON object per line, the natural shape for `jq`, log shippers, and time-series ingestion.
+
+For Prometheus-based monitoring of a single host, `--export-metrics` serves the local backend's telemetry on `/metrics` (default port `9532`, dcgm-exporter style) — no SSH or remote extra needed. The exporter can terminate TLS directly:
+
+```bash
+mxtop --export-metrics --bind 0.0.0.0 --port 9532 --auth-token secret \
+  --tls-cert /etc/mxtop/fullchain.pem --tls-key /etc/mxtop/privkey.pem
+curl --cacert /etc/mxtop/ca.pem -H 'Authorization: Bearer secret' \
+  https://monitor-host.example.com:9532/metrics
+```
+
 Common filters:
 
 ```bash
@@ -168,14 +205,23 @@ Useful CLI flags:
 | Flag | Meaning |
 | --- | --- |
 | `--version`, `-V` | Print the runtime version. |
+| `--print-completion {bash,zsh,fish}` | Print a shell completion script and exit. |
+| `--doctor` | Diagnose the environment (backends, devices, terminal, config) with PASS/WARN/FAIL checks and fix hints; exits non-zero when no telemetry backend works. |
 | `--backend {auto,pymxsml,mxsmi}` | Select telemetry backend. |
 | `--interval SECONDS` | Refresh interval (default `2.0`, minimum `0.25`). |
 | `--once`, `-1` | Print one text snapshot and exit. |
+| `--count N`, `-n N` | With `--once` or `--json`, print N snapshots separated by `--interval` and exit. Implies `--once` when neither is given. |
 | `--monitor`, `-m [auto\|full\|compact]` | Run interactively, optionally choosing the layout. |
 | `--json` | Print one JSON snapshot and exit. |
+| `--json-lines`, `--ndjson` | Print snapshots as one compact JSON object per line (NDJSON). |
+| `--export-metrics` | Serve local telemetry as a Prometheus `/metrics` endpoint (default port `9532`); honors `--bind`, `--port`, `--auth-token`, the TLS options, and `--interval`. |
+| `--tls-cert CERTFILE` | Serve the remote dashboard or local exporter over direct HTTPS using this PEM certificate chain; requires `--tls-key`. |
+| `--tls-key KEYFILE` | Matching PEM private key for `--tls-cert`; the pair enables direct HTTPS. |
+| `--tls-key-password-file FILE` | Read an encrypted TLS private key's password from one non-empty line in this protected file. |
+| `--remote-command-timeout SEC` | Bound each remote dashboard SSH command (default `10.0`, minimum `0.1`). |
 | `--no-color` | Disable ANSI colors in text output. |
 | `--force-color` | Emit ANSI colors even when stdout is not a TTY. |
-| `--colorful` | Use spectrum-like gradient colors for bar charts. |
+| `--colorful` | Use spectrum-like gradient colors for bar charts. On terminals advertising truecolor (`COLORTERM=truecolor`), the gradient uses a smooth 16-step 24-bit ramp; otherwise the 256-color palette. |
 | `--light` | Use colors suitable for a light terminal theme. |
 | `--gpu-util-thresh LOW HIGH` | Override GPU utilization intensity thresholds. |
 | `--mem-util-thresh LOW HIGH` | Override GPU-memory intensity thresholds. |
@@ -201,9 +247,73 @@ Useful CLI flags:
 | `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH` | Set GPU-memory thresholds when the CLI option is omitted. |
 | `MACA_VISIBLE_DEVICES` | Device indices, UUID prefixes, or BDF prefixes used by `--only-visible`. |
 | `CUDA_VISIBLE_DEVICES` | Fallback visibility list when `MACA_VISIBLE_DEVICES` is not set. |
+| `MXTOP_AUTH_TOKEN` | Default access token for `--remote-mode` or `--export-metrics` when `--auth-token` is omitted. |
 | `ANSI_COLORS_DISABLED` | Disable ANSI output unless `--force-color` is explicit. |
 | `NO_COLOR` | Disable ANSI output unless `--force-color` is explicit. |
 | `FORCE_COLOR` | Force ANSI output when neither disable variable is present. |
+| `MXTOP_CONFIG` | Path to the configuration file (default: `~/.config/mxtop/config.toml`). |
+
+### Configuration file
+
+Persistent defaults live in `~/.config/mxtop/config.toml` (or `$XDG_CONFIG_HOME/mxtop/config.toml`, or the file named by `MXTOP_CONFIG`). Explicit CLI flags and environment variables always take precedence over the file. Unknown or invalid keys print a warning instead of being silently ignored.
+
+```toml
+interval = 1.0            # refresh cadence in seconds (min 0.25)
+monitor = "full"          # default layout: auto | full | compact
+colorful = true           # spectrum bar colors
+light = false             # light terminal theme
+readonly = false          # disable process signals
+no-unicode = false        # ASCII output only
+gpu-util-thresh = [10, 75]
+mem-util-thresh = [10, 80]
+
+[remote]                  # --remote-mode defaults
+bind = "127.0.0.1"
+port = 8080
+auth-token = "change-me"
+tls-cert = "/etc/mxtop/fullchain.pem"
+tls-key = "/etc/mxtop/privkey.pem"
+# Optional, only for an encrypted private key:
+tls-key-password-file = "/etc/mxtop/tls-key-password"
+mxsmi-path = "mx-smi"
+command-timeout = 10.0   # maximum seconds for each remote command
+open = false
+```
+
+### Direct HTTPS
+
+The remote dashboard and local Prometheus exporter can terminate TLS directly.
+`--tls-cert` and `--tls-key` must always be supplied together; add
+`--tls-key-password-file` only when the private key is encrypted. The password
+file must contain exactly one non-empty line. The `[remote]` keys shown above
+provide the same settings for `--remote-mode`; pass the TLS flags explicitly to
+`--export-metrics`.
+
+The certificate file must be a PEM full chain: the server certificate first,
+followed by any intermediate certificates. Its Subject Alternative Name (SAN)
+must cover every hostname or IP address clients use. The PEM private key must
+match that certificate. Restrict the key and optional password file to the
+mxtop service account (for example, mode `0600`), and do not place their
+contents in the config file, command line, logs, or issue reports.
+
+For a wildcard bind such as `0.0.0.0`, mxtop prints and opens a `localhost`
+URL. Include `localhost` in the certificate SAN when using `--open`, or open the
+certificate's actual DNS name manually from remote clients.
+
+Publicly trusted certificates work with normal browser and Prometheus trust
+stores. For a self-signed certificate, install that certificate as a trust
+anchor; for a private CA, install its CA certificate. Configure Prometheus with
+`ca_file`, and do not work around trust errors by disabling verification.
+Certificate, key, and password files are loaded once at startup, so restart
+mxtop after renewal or replacement.
+
+TLS encrypts traffic but does not decide who may access telemetry. Keep using a
+high-entropy `--auth-token`, host firewall rules, and a narrowly scoped bind
+address. A TLS-terminating reverse proxy remains appropriate when it owns ACME
+renewal, certificate reload, mutual TLS, or organization-wide access policy.
+When a proxy terminates TLS, keep mxtop's HTTP listener on loopback and configure
+the proxy to append `Secure` to the upstream auth cookie; mxtop adds that flag
+itself only when it terminates TLS directly.
 
 ## Remote mode (cluster dashboard)
 
@@ -219,6 +329,9 @@ mxtop --remote-mode --discover --nodes nodeA nodeB --open
 mxtop --remote-mode --nodes nodeA nodeB nodeC --open
 # or list hosts in a file (one per line, # comments allowed)
 mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
+# Direct HTTPS with an operator-managed certificate:
+mxtop --remote-mode --nodes nodeA nodeB --bind 0.0.0.0 --auth-token secret \
+  --tls-cert /etc/mxtop/fullchain.pem --tls-key /etc/mxtop/privkey.pem --open
 ```
 
 - With no `--nodes` or `--nodes-file`, mxtop enumerates concrete `Host`
@@ -235,15 +348,73 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
   passwords.
 - The dashboard polls every node concurrently (`--interval`, default 2s),
   serves on `127.0.0.1` by default (`--bind` to change), and streams live
-  updates over Server-Sent Events. Unreachable nodes are shown as down
-  instead of breaking the page.
-- The web UI provides a fleet overview with a switchable GPU heatmap, a
-  searchable node inventory, cluster-wide host CPU/RAM/load telemetry, a
-  process table, and per-node GPU, host, and process detail. Remote process
-  rows are enriched with one batched `ps` query per node; missing Linux host
-  fields degrade to unavailable values without taking the node offline. View
-  state is encoded in the URL hash, so browser back/forward navigation works
-  without reconnecting to the nodes.
+  updates over Server-Sent Events. Wildcard binds (`0.0.0.0` / `::`) print a
+  usable localhost access URL separately from the all-interfaces listener;
+  IPv6 access URLs are bracketed correctly. Every SSH telemetry command has a
+  finite deadline (`--remote-command-timeout`, default 10s), so a hung command
+  marks only that node down and reconnects it on the next sample instead of
+  freezing updates for the whole fleet.
+- Dashboard access can be protected with a shared token via `--auth-token`
+  or the `MXTOP_AUTH_TOKEN` environment variable. Requests must then carry
+  `Authorization: Bearer <token>`, or visit the printed HTTP or HTTPS URL with
+  `?token=<token>` once — the token is stored in a 24-hour `HttpOnly` cookie and
+  is also marked `Secure` under direct HTTPS. When `--bind`
+  exposes the dashboard beyond localhost without encryption or without a
+  token, mxtop prints separate warnings: all cluster telemetry (hostnames,
+  users, process command lines) would otherwise be exposed to the network or
+  readable by anyone who can reach the port.
+- A Prometheus endpoint at `/metrics` exports the latest cluster snapshot as
+  text exposition: per-GPU utilization, memory, bandwidth, temperature,
+  power, clocks, and ECC errors labelled by `node`/`gpu`/`name`/`uuid`, plus
+  host CPU/RAM/load, per-node reachability (`mxtop_node_up`) and SSH collect
+  latency. Point a Prometheus `scrape_config` at the dashboard (with the
+  bearer token when set) for alerting and long-term history:
+
+  ```yaml
+  scrape_configs:
+    - job_name: mxtop
+      static_configs:
+        - targets: ["monitor-host:8080"]
+      scheme: https
+      authorization:
+        type: Bearer
+        credentials: <your --auth-token value>
+      tls_config:
+        # Omit ca_file for a certificate from a public CA.
+        ca_file: /etc/prometheus/pki/mxtop-ca.pem
+  ```
+
+  The target name must be present in the server certificate's SAN. Keep
+  certificate verification enabled; distribute the private CA certificate to
+  Prometheus rather than setting `insecure_skip_verify`.
+- The web UI provides a fleet overview with a switchable GPU heatmap, live
+  trend sparklines (cluster GPU utilization, HBM, and host CPU; per-node
+  GPU/HBM on the detail page), a searchable node inventory, cluster-wide
+  host CPU/RAM/load telemetry, a process table, and per-node GPU, host, and
+  process detail. Click a PID or command to open an investigation page with
+  current values and rolling CPU, GPU-utilization, GPU-memory, and host-memory
+  history. An exited process or unreachable node keeps its last sample visible;
+  creation time or backend identity defines generations when available, with
+  ended-state, command, and runtime-reset reconciliation covering remote PID
+  reuse. A new generation never inherits the previous process's charts. Every
+  node and process column is sortable by mouse or keyboard; the active direction
+  remains visible and survives filters, navigation, and live updates, while
+  unavailable values stay last. The header pause control or `p`/`Z` freezes the
+  exact displayed snapshot across navigation, search, sorting, and JSON export;
+  SSE ingestion and bounded history continue, buffered sample count remains
+  visible, and resume applies the newest frame atomically. Bounded incident
+  history also survives same-tab reloads for up to one hour when the dashboard
+  runs in a secure browser context (HTTPS or browser-trusted loopback): it is
+  stored as AES-GCM ciphertext partitioned by the monitored host set, while the
+  key lives only in `sessionStorage` and is rotated on a new token bootstrap.
+  On plain LAN HTTP, history remains in memory for the open page. Clear history
+  removes the current tab session's retained trends and process records while
+  preserving the current sample. Remote process rows are enriched with one
+  batched `ps` query per node; missing Linux host fields degrade to unavailable
+  values without taking the node offline. View state is encoded in the URL hash,
+  so browser back/forward navigation works without reconnecting to the nodes.
+  Dark and light themes follow the browser's `prefers-color-scheme` and can be
+  switched with the header toggle; the choice persists in the browser.
 - Each node runs the same `mx-smi` queries as the local backend; override the
   remote binary with `--remote-mxsmi-path` if it is not on `PATH`.
 
@@ -255,17 +426,19 @@ mxtop --remote-mode --nodes-file ~/hosts.txt --port 8080
 | --- | --- |
 | `q`, `Q` | Quit from the main screen; return from a detail screen. |
 | `h`, `?` | Open help. Any key returns to the previous screen. |
-| `r`, `R`, `Ctrl-R`, `F5` | Refresh immediately. On the main screen this also resets selection and scrolling. |
+| `r`, `R`, `Ctrl-R`, `F5` | Refresh immediately and resume if paused. On the main screen this also resets selection and scrolling. |
+| `p`, `Z` | Pause or resume live updates on the main screen (the status line shows PAUSED). |
 | `a`, `f`, `c` | Switch to auto, full, or compact layout. |
 | Up/Down, `Shift-Tab`/`Tab`, `Alt-k`/`Alt-j` | Select the previous/next process or detail row. |
 | `Home`, `End` | Select the first/last row. |
 | `Space` | Tag or untag the current process, then advance. Tagged processes form the action target set. |
-| `Esc` | Clear the main-screen selection and tags; return from environment or metrics. It does not quit mxtop. |
+| `\`, `F4` | Filter the process table incrementally (htop-style): type to match user, command, or PID; `Enter` applies, `Esc` clears. |
+| `Esc` | Clear the active text filter first; then clear the main-screen selection and tags; return from environment or metrics. It does not quit mxtop. |
 | `PageUp`/`PageDown`, `[`/`]` | Scroll the viewport vertically; `Alt-K`/`Alt-J` are main-screen aliases. |
 | Left/Right, `Alt-h`/`Alt-l` | Scroll horizontally. |
 | `Ctrl-A`, `^` | Return to the leftmost column. |
 | `Ctrl-E`, `$` | Jump to the rightmost process-table column. |
-| Mouse wheel | Move vertically; hold Ctrl for 5x movement or Shift for horizontal movement. Click a row to select it. |
+| Mouse wheel | Move vertically; hold Ctrl for 5x movement or Shift for horizontal movement. Click a row to select it. Click a process-table column header to sort by it; click again to reverse. |
 
 ### Screens and process actions
 
@@ -305,7 +478,7 @@ pip install metax-mxtop
 mxtop --version
 ```
 
-Branch and pull-request workflows run tests and build the offline wheelhouse. A push to `main` also creates a commit-addressed prerelease; versioned GitHub and PyPI publication is tag-driven:
+Branch and pull-request runs execute the Python compatibility matrix and build and test the offline wheelhouse. Release publication is gated on the Python 3.9 wheelhouse checks, the full Python 3.10-3.13 test matrix, lint, and the Chromium dashboard suite. A push to `main` creates a commit-addressed prerelease; versioned GitHub and PyPI publication is limited to `v*` tags:
 
 1. Bump `pyproject.toml`, `src/mxtop/__init__.py`, and the local package entry in `uv.lock`.
 2. Regenerate the preview, gallery, and showcase assets and run their `--check` commands.
@@ -314,19 +487,26 @@ Branch and pull-request workflows run tests and build the offline wheelhouse. A 
 5. Create a new semver tag, for example `v0.1.22`.
 6. Push the commit and that tag.
 
-GitHub Actions then builds the wheelhouse, creates or updates the versioned GitHub Release, and publishes the package to PyPI through Trusted Publishing for `v*` tags.
+GitHub Actions builds and Twine-validates the wheel and source distribution once, bundles them with the offline wheelhouse and a shared `SHA256SUMS.txt`, and makes both publishers download and verify that same workflow artifact. Automation refuses to overwrite an existing tagged GitHub Release. The minimal PyPI job performs no checkout or rebuild; it publishes the prebuilt distributions through OIDC Trusted Publishing.
 
 ## More previews
 
 See the [output gallery](https://github.com/linkedlist771/metax-mxtop/blob/main/GALLERY.md) and [screen showcase](https://github.com/linkedlist771/metax-mxtop/blob/main/SHOWCASE.md) for rendered stdout and deterministic secondary-screen fixtures across palettes, layouts, filters, edge telemetry, and 32/64-GPU fleets.
 
+## Security
+
+See [SECURITY.md](SECURITY.md) for responsible disclosure and secure deployment guidance. Direct TLS or a TLS-terminating reverse proxy encrypts dashboard/exporter traffic; `--auth-token`, firewall policy, and a narrow bind address still control who can reach sensitive telemetry.
+
 ## Development
 
-Run tests and lint locally:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, including the
+docs-sync tests and help-screen colorization rules. Run tests and lint locally:
 
 ```bash
 uv run --locked --with pytest --with psutil --with pillow==11.3.0 pytest -q
 uv run --locked --with ruff ruff check .
+npm ci && npx playwright install --only-shell chromium
+npm run test:dashboard
 uv run --locked --with build python -m build
 ```
 

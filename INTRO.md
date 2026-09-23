@@ -16,9 +16,24 @@ Print one text snapshot or one JSON snapshot:
 ```bash
 mxtop --once                 # alias: -1
 mxtop --json
+mxtop --json-lines           # alias: --ndjson; one compact object per line
+mxtop -n 10 --interval 5     # repeat one-shot output ten times, 5s apart
 ```
 
-Without an explicit output mode, a redirected or piped invocation also emits one text snapshot. Text color is used only on a TTY unless `--force-color` is set; `--no-color` and `NO_COLOR` disable it. Use `--no-unicode` / `--ascii` / `-U` for ASCII rendering (also selected automatically for a non-UTF-8 locale).
+Without an explicit output mode, a redirected or piped invocation also emits one text snapshot. Text color is used only on a TTY unless `--force-color` is set; `--no-color` and `NO_COLOR` disable it. Use `--no-unicode` / `--ascii` / `-U` for ASCII rendering (also selected automatically for a non-UTF-8 locale). With `--colorful`, terminals advertising `COLORTERM=truecolor` get a smooth 24-bit gradient for the bars.
+
+Diagnose a host where GPUs don't show up, and generate shell completions:
+
+```bash
+mxtop --doctor                       # PASS/WARN/FAIL checks with fix hints
+mxtop --print-completion bash        # also: zsh, fish
+```
+
+Serve Prometheus metrics for this host without SSH (dcgm-exporter style):
+
+```bash
+mxtop --export-metrics --port 9532
+```
 
 Force a backend:
 
@@ -52,15 +67,17 @@ The interactive UI has five primary screens:
 
 Main navigation and display keys:
 
-- `q` or `Q`: quit. `Esc` clears process selection and tags; it does not quit.
-- `r`, `R`, `Ctrl-R`, or `F5`: refresh immediately.
+- `q` or `Q`: quit. `Esc` clears the text filter first, then process selection and tags; it does not quit.
+- `r`, `R`, `Ctrl-R`, or `F5`: refresh immediately and resume if paused.
+- `p` or `Z`: pause/resume live updates; the status line shows PAUSED.
 - `a`, `f`, or `c`: select auto, full, or compact layout.
+- `\` or `F4`: incremental filter; typed text matches user, command, or PID, `Enter` applies, `Esc` clears.
 - Up/Down, Shift-Tab/Tab, or Alt-k/Alt-j: select the previous/next row.
 - `Home` / `End`: select the first/last row.
 - `Space`: tag or untag a process and advance; tagged processes become the action target set.
 - `PageUp` / `PageDown` or `[` / `]`: scroll vertically; Alt-K/Alt-J are main-screen aliases.
 - Left/Right or Alt-h/Alt-l: scroll horizontally; `Ctrl-A` / `^` and `Ctrl-E` / `$` jump to the edges.
-- Mouse wheel: move vertically; Ctrl-wheel moves 5x, Shift-wheel moves horizontally, and a click selects a row.
+- Mouse wheel: move vertically; Ctrl-wheel moves 5x, Shift-wheel moves horizontally, a click selects a row, and clicking a process-table column header sorts by it (again to reverse).
 
 Process sorting matches nvitop's bindings:
 
@@ -75,8 +92,12 @@ Useful environment defaults:
 - `MXTOP_MONITOR_MODE`: comma-separated layout and style tokens, for example `compact,colorful,dark,readonly`.
 - `MXTOP_GPU_UTILIZATION_THRESHOLDS=LOW,HIGH` and `MXTOP_MEMORY_UTILIZATION_THRESHOLDS=LOW,HIGH`: intensity thresholds.
 - `MXTOP_MXSMI_PATH`: local `mx-smi` executable override.
+- `MXTOP_AUTH_TOKEN`: dashboard/exporter token when `--auth-token` is omitted.
+- `MXTOP_CONFIG`: configuration file path (default `~/.config/mxtop/config.toml`).
 - `MXTOP_PYMXSML_ECC_ERRORS`: opt into slow, cached ECC-error polling; disabled by default to preserve refresh responsiveness.
 - `ANSI_COLORS_DISABLED`, `NO_COLOR`, and `FORCE_COLOR`: ANSI output control; explicit CLI flags take precedence, then disable variables, then `FORCE_COLOR`.
+
+Persistent defaults can also live in a TOML configuration file (see the README's "Configuration file" section); explicit CLI flags and environment variables always take precedence over it.
 
 ## Backends
 

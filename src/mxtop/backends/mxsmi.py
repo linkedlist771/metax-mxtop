@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import threading
 
 from mxtop.host import enrich_processes
 from mxtop.models import DeviceSnapshot, FrameSnapshot, ProcessSnapshot
@@ -367,11 +368,45 @@ class MxSmiBackend:
                         break
         return self._versions
 
+    def _run_dmon_and_processes(
+        self,
+    ) -> tuple[
+        subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]
+    ]:
+        """Run the two per-refresh queries concurrently.
+
+        ``dmon`` and the process listing are independent, and each mx-smi
+        invocation pays its own startup and driver query cost, so overlapping
+        them roughly halves the latency of every refresh.
+        """
+
+        outcome: dict[str, object] = {}
+
+        def run_processes() -> None:
+            try:
+                outcome["result"] = self._run(PROCESS_ARGS, check=False)
+            except BaseException as exc:  # re-raised on the calling thread
+                outcome["error"] = exc
+
+        worker = threading.Thread(
+            target=run_processes, name="mxtop-mxsmi-processes", daemon=True
+        )
+        worker.start()
+        try:
+            dmon = self._run(DMON_SNAPSHOT_ARGS)
+        finally:
+            # Both commands are bounded by the same timeout, so this join is
+            # bounded too; a dmon failure still wins over the process query.
+            worker.join()
+        error = outcome.get("error")
+        if isinstance(error, BaseException):
+            raise error
+        return dmon, outcome["result"]  # type: ignore[return-value]
+
     def snapshot(self) -> FrameSnapshot:
         known_devices = self._list_devices()
         driver_version, maca_version = self._driver_versions()
-        dmon = self._run(DMON_SNAPSHOT_ARGS)
-        process_output = self._run(PROCESS_ARGS, check=False)
+        dmon, process_output = self._run_dmon_and_processes()
         return build_frame_from_outputs(
             dmon.stdout,
             process_output.stdout if process_output.returncode == 0 else "",

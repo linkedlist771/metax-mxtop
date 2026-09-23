@@ -94,11 +94,16 @@ _DEVICE_INDEX_RE = re.compile(r"^│\s*(\d+)\s+")
 def device_row_levels(lines: list[str], frame: FrameSnapshot) -> dict[int, int]:
     """Map rendered device rows to their combined memory/GPU load level."""
 
+    return device_levels_for_indices(device_row_indices(lines, frame), frame)
+
+
+def device_levels_for_indices(
+    indices: dict[int, int], frame: FrameSnapshot
+) -> dict[int, int]:
+    """Map rows from :func:`device_row_indices` to device load levels."""
+
     devices = {device.index: device for device in frame.devices}
-    return {
-        row: device_display_level(devices[index])
-        for row, index in device_row_indices(lines, frame).items()
-    }
+    return {row: device_display_level(devices[index]) for row, index in indices.items()}
 
 
 def device_row_indices(lines: list[str], frame: FrameSnapshot) -> dict[int, int]:
@@ -389,19 +394,22 @@ def _style_bar_cell(text: str) -> str:
 
 
 def _colorize_title(line: str) -> str:
-    hint_start = line.find("(Press ")
-    if hint_start < 0:
-        return line
-    output = [line[:hint_start]]
-    hint = line[hint_start:]
-    for token in ("h", "q"):
-        prefix, found, rest = hint.partition(token)
-        output.append(_style(prefix, BOLD, FG_WHITE))
-        if not found:
-            return "".join(output)
-        output.append(_style(found, BOLD, FG_MAGENTA))
-        hint = rest
-    output.append(_style(hint, BOLD, FG_WHITE))
+    output: list[str] = []
+    for text, role, load in classify.title_segments(line):
+        if role in {"used", "percent"}:
+            output.append(_style(text, BOLD, _intensity_color(load, memory=True)))
+        elif role == "label":
+            output.append(_style(text, BOLD, FG_CYAN))
+        elif role == "total":
+            output.append(_style(text, BOLD))
+        elif role == "key":
+            output.append(_style(text, BOLD, FG_MAGENTA))
+        elif role == "hint":
+            output.append(_style(text, BOLD, FG_WHITE))
+        elif role == "error":
+            output.append(_style(text, BOLD, FG_RED))
+        else:
+            output.append(text)
     return "".join(output)
 
 

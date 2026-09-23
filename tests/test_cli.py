@@ -49,6 +49,66 @@ def test_cli_json_prints_frame(capsys):
     assert payload["devices"][0]["name"] == "MXC500"
 
 
+def test_cli_count_repeats_once_output(monkeypatch, capsys):
+    sleeps: list[float] = []
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda value: sleeps.append(value))
+
+    rc = main(
+        ["--once", "--no-color", "--count", "3", "--interval", "0.5"],
+        backend=StaticBackend(),
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.count("MXC500") == 3
+    assert sleeps == [0.5, 0.5]
+
+
+def test_cli_count_implies_once(monkeypatch, capsys):
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda _: None)
+
+    rc = main(["-n", "2", "--no-color"], backend=StaticBackend())
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.count("MXC500") == 2
+
+
+def test_cli_count_repeats_json_output(monkeypatch, capsys):
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda _: None)
+
+    rc = main(["--json", "-n", "2"], backend=StaticBackend())
+
+    captured = capsys.readouterr()
+    decoder = json.JSONDecoder()
+    text = captured.out.strip()
+    payloads = []
+    while text:
+        payload, end = decoder.raw_decode(text)
+        payloads.append(payload)
+        text = text[end:].lstrip()
+
+    assert rc == 0
+    assert len(payloads) == 2
+    assert all(p["devices"][0]["name"] == "MXC500" for p in payloads)
+
+
+def test_cli_count_rejects_monitor_mode(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--monitor", "--count", "2"], backend=StaticBackend())
+
+    assert excinfo.value.code == 2
+    assert "--count requires --once or --json" in capsys.readouterr().err
+
+
+def test_cli_count_rejects_zero(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--once", "--count", "0"], backend=StaticBackend())
+
+    assert excinfo.value.code == 2
+    assert "count must be at least 1" in capsys.readouterr().err
+
+
 def test_cli_json_replaces_non_finite_telemetry_with_null(capsys):
     class NonFiniteBackend:
         name = "non-finite"
@@ -345,7 +405,9 @@ def test_cli_help_has_stable_program_name_and_groups(capsys):
     assert "coloring:" in output
     assert "device filtering:" in output
     assert "process filtering:" in output
-    assert "remote mode:" in output
+    assert "server and remote mode:" in output
+    assert "--tls-cert CERTFILE" in output
+    assert "--tls-key KEYFILE" in output
 
 
 def test_cli_non_tty_width_uses_nvitop_fallback(monkeypatch):
@@ -399,6 +461,10 @@ def test_cli_remote_mode_is_mutually_exclusive_with_local_modes(mode, capsys):
         ("--port", "9000", "--once"),
         ("--bind", "0.0.0.0", "--once"),
         ("--remote-mxsmi-path", "/opt/mx-smi", "--once"),
+        ("--remote-command-timeout", "3", "--once"),
+        ("--tls-cert", "cert.pem", "--once"),
+        ("--tls-key", "key.pem", "--once"),
+        ("--tls-key-password-file", "password.txt", "--once"),
         ("--open", "--once"),
     ),
 )
@@ -438,6 +504,139 @@ def test_cli_rejects_invalid_remote_ports(port, capsys):
 
     assert exc_info.value.code == 2
     assert "port must be between 1 and 65535" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1", "0.01", "nan", "inf"))
+def test_cli_rejects_invalid_remote_command_timeouts(timeout, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                f"--remote-command-timeout={timeout}",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "remote command timeout must be at least 0.1s" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "tls_args",
+    (
+        ("--tls-cert", "cert.pem"),
+        ("--tls-key", "key.pem"),
+        ("--tls-key-password-file", "password.txt"),
+    ),
+)
+def test_cli_requires_complete_tls_configuration(tls_args, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--remote-mode", "--nodes", "node-a", *tls_args])
+
+    assert exc_info.value.code == 2
+    error = capsys.readouterr().err
+    assert "requires" in error or "provided together" in error
+
+
+def test_cli_builds_and_forwards_tls_context(monkeypatch):
+    from mxtop.remote import app as remote_app
+    from mxtop.remote import web as remote_web
+
+    observed = {}
+    tls_context = object()
+
+    def fake_tls_context(cert_file, key_file, *, key_password_file=None):
+        observed["tls_files"] = (cert_file, key_file, key_password_file)
+        return tls_context
+
+    monkeypatch.setattr(remote_web, "create_tls_context", fake_tls_context)
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda hosts, **kwargs: observed.update(hosts=hosts, kwargs=kwargs) or 0,
+    )
+
+    assert (
+        main(
+            [
+                "--remote-mode",
+                "--nodes",
+                "node-a",
+                "--tls-cert",
+                "cert.pem",
+                "--tls-key",
+                "key.pem",
+                "--tls-key-password-file",
+                "password.txt",
+            ]
+        )
+        == 0
+    )
+    assert observed["tls_files"] == ("cert.pem", "key.pem", "password.txt")
+    assert observed["kwargs"]["tls_context"] is tls_context
+
+
+def test_cli_allows_tls_for_metrics_exporter(monkeypatch):
+    from mxtop import exporter
+    from mxtop.remote import web as remote_web
+
+    observed = {}
+    tls_context = object()
+    monkeypatch.setattr(
+        remote_web,
+        "create_tls_context",
+        lambda *_args, **_kwargs: tls_context,
+    )
+    monkeypatch.setattr(
+        exporter,
+        "run_exporter",
+        lambda _backend, **kwargs: observed.update(kwargs) or 0,
+    )
+
+    assert (
+        main(
+            [
+                "--export-metrics",
+                "--tls-cert",
+                "cert.pem",
+                "--tls-key",
+                "key.pem",
+            ],
+            backend=StaticBackend(),
+        )
+        == 0
+    )
+    assert observed["tls_context"] is tls_context
+
+
+def test_cli_reports_tls_setup_errors_before_remote_start(tmp_path, monkeypatch, capsys):
+    from mxtop.remote import app as remote_app
+
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("remote server should not start")
+        ),
+    )
+    rc = main(
+        [
+            "--remote-mode",
+            "--nodes",
+            "node-a",
+            "--tls-cert",
+            str(tmp_path / "missing-cert.pem"),
+            "--tls-key",
+            str(tmp_path / "missing-key.pem"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert captured.err.startswith("MXTOP ERROR: TLS setup failed: ")
+    assert "Traceback" not in captured.err
 
 
 def test_cli_reports_remote_inventory_errors_without_traceback(tmp_path, capsys):
@@ -497,7 +696,32 @@ def test_cli_remote_mode_discovers_hosts_when_nodes_are_omitted(monkeypatch, cap
     assert observed["results"] == results
     assert observed["hosts"] == ["node-a"]
     assert observed["kwargs"]["mxsmi_path"] == "mx-smi"
+    assert observed["kwargs"]["command_timeout"] == 10.0
     assert capsys.readouterr().err == ""
+
+
+def test_cli_passes_remote_command_timeout_to_monitor(monkeypatch):
+    from mxtop.remote import app as remote_app
+
+    observed = {}
+    monkeypatch.setattr(
+        remote_app,
+        "run_remote",
+        lambda _hosts, **kwargs: observed.update(kwargs) or 0,
+    )
+
+    rc = main(
+        [
+            "--remote-mode",
+            "--nodes",
+            "node-a",
+            "--remote-command-timeout",
+            "2.5",
+        ]
+    )
+
+    assert rc == 0
+    assert observed["command_timeout"] == 2.5
 
 
 def test_cli_discover_merges_explicit_and_configured_hosts(monkeypatch):
@@ -739,3 +963,26 @@ def test_python_m_mxtop_runs_the_cli_module():
     assert result.returncode == 0
     assert result.stdout == f"mxtop {cli.__version__}\n"
     assert result.stderr == ""
+
+
+def test_cli_json_lines_prints_compact_ndjson(monkeypatch, capsys):
+    monkeypatch.setattr("mxtop.cli.time.sleep", lambda _: None)
+
+    rc = main(["--json-lines", "-n", "3"], backend=StaticBackend())
+
+    captured = capsys.readouterr()
+    lines = captured.out.strip().splitlines()
+    assert rc == 0
+    assert len(lines) == 3
+    for line in lines:
+        payload = json.loads(line)
+        assert payload["devices"][0]["name"] == "MXC500"
+        assert ": " not in line  # compact separators
+
+
+def test_cli_json_lines_conflicts_with_json(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--json", "--json-lines"], backend=StaticBackend())
+
+    assert excinfo.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err

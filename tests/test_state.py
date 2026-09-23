@@ -1,5 +1,11 @@
 from mxtop.models import ProcessSnapshot
-from mxtop.ui.state import ProcessSort, sort_is_descending, sort_processes
+from mxtop.ui.state import (
+    ProcessSort,
+    filter_processes_by_text,
+    process_matches_filter,
+    sort_is_descending,
+    sort_processes,
+)
 
 
 def _process(pid: int, **values) -> ProcessSnapshot:
@@ -72,3 +78,29 @@ def test_non_finite_metrics_sort_as_unavailable() -> None:
 
     assert {process.pid for process in ordered[:2]} == {20, 30}
     assert ordered[-1].pid == 10
+
+
+def test_text_filter_matches_command_name_user_and_pid() -> None:
+    process = _process(
+        1234, user="Alice", command="python train.py", name="python"
+    )
+
+    assert process_matches_filter(process, "TRAIN")
+    assert process_matches_filter(process, "alice")
+    assert process_matches_filter(process, "123")
+    assert process_matches_filter(process, "python")
+    assert not process_matches_filter(process, "nginx")
+    assert process_matches_filter(process, "  ")  # blank matches everything
+
+
+def test_filter_processes_by_text_keeps_order_and_handles_none_fields() -> None:
+    processes = [
+        _process(10, user=None, command=None, name=None),
+        _process(20, user="bob", command="ffmpeg -i in.mp4"),
+        _process(30, user="alice", command="python serve.py"),
+    ]
+
+    assert filter_processes_by_text(processes, "") == processes
+    filtered = filter_processes_by_text(processes, "py")
+    assert [process.pid for process in filtered] == [30]
+    assert filter_processes_by_text(processes, "1") == [processes[0]]

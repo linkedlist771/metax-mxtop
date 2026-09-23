@@ -173,7 +173,12 @@ def test_canonical_dashboard_images_use_consistent_box_widths() -> None:
 
 def test_clipped_help_preview_does_not_color_sort_row_as_footer() -> None:
     showcase = _with_pillow("render_showcase")
-    lines = showcase.render_help_screen(118, 30).lines
+    full = showcase.render_help_screen(118, None).lines
+    # Clip exactly at the ", .:" sort-column row so it lands on the last line.
+    clip_height = next(
+        index for index, line in enumerate(full) if line.lstrip().startswith(", .:")
+    ) + 1
+    lines = showcase.render_help_screen(118, clip_height).lines
 
     colored = showcase._colorize_help(lines).splitlines()
 
@@ -437,11 +442,14 @@ def test_canonical_commands_pin_the_pillow_version() -> None:
         assert pillow_arguments, relative_path
         assert set(pillow_arguments) == {expected}, relative_path
 
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert f'"pillow=={previews.CANONICAL_PILLOW_VERSION}"' in pyproject
+
     workflow = (PROJECT_ROOT / ".github/workflows/wheels.yml").read_text(
         encoding="utf-8"
     )
-    assert f"pillow=={previews.CANONICAL_PILLOW_VERSION}" in workflow
-    assert not re.search(r"\bpillow\b(?!==)", workflow, flags=re.IGNORECASE)
+    assert ".[remote,dev]" in workflow
+    assert ".[dev]" in workflow
 
 
 def test_committed_preview_assets_are_fresh() -> None:

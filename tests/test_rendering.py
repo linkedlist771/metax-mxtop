@@ -741,3 +741,29 @@ def test_render_once_colors_host_history_graphs_by_section():
         )
     finally:
         panels.reset_host_history()
+
+
+def test_title_memory_totals_are_colored_by_memory_load():
+    from mxtop.rendering import _colorize_title
+    from mxtop.ui.classify import title_segments
+
+    line = "Sat Jan 17 12:34:56 2026  VRAM: 1.89TiB / 4.00TiB (85%)  (Press h for help or q to quit)"
+
+    roles = [(text, role) for text, role, _ in title_segments(line)]
+    assert ("VRAM:", "label") in roles
+    assert ("1.89TiB", "used") in roles
+    assert ("4.00TiB", "total") in roles
+    assert ("85%", "percent") in roles
+    assert ("h", "key") in roles and ("q", "key") in roles
+
+    colored = _colorize_title(line)
+    assert "\x1b[1m\x1b[31m85%" in colored  # above the 80% memory threshold
+    assert "\x1b[1m\x1b[36mVRAM:" in colored
+
+
+def test_title_error_hint_is_highlighted():
+    from mxtop.rendering import _colorize_title
+
+    colored = _colorize_title("Sat Jan 17 12:34:56 2026  (ERROR: mx-smi timed out)")
+
+    assert "\x1b[1m\x1b[31m(ERROR: mx-smi timed out)" in colored

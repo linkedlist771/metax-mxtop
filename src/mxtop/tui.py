@@ -8,6 +8,7 @@ import signal
 import sys
 import time
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from mxtop.backends import TelemetryBackend
@@ -19,7 +20,7 @@ from mxtop.filters import (
 )
 from mxtop.models import PROCESS_CREATE_TIME_TOLERANCE, FrameSnapshot, ProcessSnapshot
 from mxtop import rendering as _rendering
-from mxtop.sampler import SnapshotSampler
+from mxtop.sampler import SamplerState, SnapshotSampler
 from mxtop.ui import classify
 from mxtop.ui.classify import host_graph_context
 from mxtop.ui.history import HostHistory
@@ -46,8 +47,10 @@ from mxtop.ui.state import (
     DIRECT_SORT_KEYS,
     LayoutMode,
     ProcessSignal,
+    ProcessSort,
     ScreenMode,
     UiState,
+    filter_processes_by_text,
     keep_selection,
     next_sort,
     sort_processes,
@@ -85,6 +88,12 @@ PAIR_BRIGHT_RED = 14
 PAIR_SPECTRUM_FIRST = 15
 SPECTRUM_COLORS = (40, 46, 190, 226, 208, 196)
 PAIR_TREE_SELECTED = 21
+# Truecolor spectrum: pairs and redefinable color slots above everything the
+# UI otherwise uses. Colors 232-247 shadow the xterm grayscale ramp, which
+# mxtop never draws.
+PAIR_TRUECOLOR_FIRST = 32
+TRUECOLOR_SPECTRUM_STEPS = 16
+TRUECOLOR_COLOR_BASE = 232
 MIN_TUI_WIDTH = MIN_SCREEN_WIDTH
 
 SCROLL_STEP = 3
@@ -122,6 +131,58 @@ def _alt_key(character: str) -> int:
     return ALT_KEY_BASE + ord(character)
 
 
+_truecolor_ready = False
+
+
+def _terminal_advertises_truecolor() -> bool:
+    return os.environ.get("COLORTERM", "").strip().lower() in {"truecolor", "24bit"}
+
+
+def _spectrum_rgb(fraction: float) -> tuple[int, int, int]:
+    """nvitop-like green->yellow->orange->red ramp on a 0..1000 curses scale."""
+
+    fraction = max(0.0, min(1.0, fraction))
+    stops = (
+        (0.0, (0, 800, 250)),
+        (0.35, (250, 900, 0)),
+        (0.6, (900, 900, 0)),
+        (0.8, (950, 550, 0)),
+        (1.0, (950, 150, 100)),
+    )
+    for (left_pos, left_rgb), (right_pos, right_rgb) in zip(stops, stops[1:]):
+        if fraction <= right_pos:
+            span = right_pos - left_pos
+            weight = 0.0 if span <= 0 else (fraction - left_pos) / span
+            return tuple(
+                round(left + (right - left) * weight)
+                for left, right in zip(left_rgb, right_rgb)
+            )
+    return stops[-1][1]
+
+
+def _setup_truecolor_spectrum() -> bool:
+    """Redefine a color ramp for smooth --colorful gradients when supported."""
+
+    if not (
+        _terminal_advertises_truecolor()
+        and curses.can_change_color()
+        and getattr(curses, "COLORS", 0) >= 256
+        and getattr(curses, "COLOR_PAIRS", 0)
+        > PAIR_TRUECOLOR_FIRST + TRUECOLOR_SPECTRUM_STEPS
+    ):
+        return False
+    try:
+        for step in range(TRUECOLOR_SPECTRUM_STEPS):
+            fraction = step / (TRUECOLOR_SPECTRUM_STEPS - 1)
+            red, green, blue = _spectrum_rgb(fraction)
+            color = TRUECOLOR_COLOR_BASE + step
+            curses.init_color(color, red, green, blue)
+            curses.init_pair(PAIR_TRUECOLOR_FIRST + step, color, -1)
+    except curses.error:
+        return False
+    return True
+
+
 def _setup_colors() -> None:
     if not curses.has_colors():
         return
@@ -152,6 +213,8 @@ def _setup_colors() -> None:
         for offset, color in enumerate(SPECTRUM_COLORS):
             curses.init_pair(PAIR_SPECTRUM_FIRST + offset, color, -1)
     curses.init_pair(PAIR_TREE_SELECTED, curses.COLOR_GREEN, -1)
+    global _truecolor_ready
+    _truecolor_ready = _setup_truecolor_spectrum()
 
 
 def _attr(pair: int, extra: int = 0) -> int:
@@ -237,6 +300,10 @@ def _draw_line(
     if row == 0 and (
         "(Press h for help or q to quit)" in semantic_line
         or semantic_line.startswith("mxtop ")
+        or (
+            classify.MEMORY_SUMMARY_RE.search(semantic_line) is not None
+            and not semantic_line.startswith("│")
+        )
     ):
         _draw_title_line(screen, row, line, width)
         return
@@ -246,7 +313,7 @@ def _draw_line(
     if "Processes:" in semantic_line and "@" in semantic_line:
         _draw_process_title_line(screen, row, line, width, attr)
         return
-    if " GPU     PID      USER  GPU-MEM" in semantic_line:
+    if _matches_process_header(semantic_line):
         _draw_process_header_line(screen, row, line, width)
         return
     if _is_process_data_line(semantic_line):
@@ -316,26 +383,19 @@ def _draw_process_header_line(screen, row: int, line: str, width: int) -> None:
 
 
 def _draw_title_line(screen, row: int, line: str, width: int) -> None:
-    hint_start = line.find("(Press ")
-    if hint_start < 0:
-        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
-        return
-    position = _safe_addnstr(
-        screen, row, 0, line[:hint_start], width, _attr(PAIR_VALUE, curses.A_BOLD)
-    )
-    hint = line[hint_start:]
-    for token in ("h", "q"):
-        prefix, found, rest = hint.partition(token)
-        position = _safe_addnstr(
-            screen, row, position, prefix, width, _attr(PAIR_VALUE, curses.A_BOLD)
-        )
-        if not found:
-            return
-        position = _safe_addnstr(
-            screen, row, position, found, width, _attr(PAIR_MEM, curses.A_BOLD)
-        )
-        hint = rest
-    _safe_addnstr(screen, row, position, hint, width, _attr(PAIR_VALUE, curses.A_BOLD))
+    position = 0
+    for text, role, load in classify.title_segments(line):
+        if role in {"used", "percent"}:
+            attr = _attr(_intensity_pair(load, memory=True), curses.A_BOLD)
+        elif role == "label":
+            attr = _attr(PAIR_HEADER, curses.A_BOLD)
+        elif role == "key":
+            attr = _attr(PAIR_MEM, curses.A_BOLD)
+        elif role == "error":
+            attr = _attr(PAIR_ERROR, curses.A_BOLD)
+        else:
+            attr = _attr(PAIR_VALUE, curses.A_BOLD)
+        position = _safe_addnstr(screen, row, position, text, width, attr)
 
 
 def _draw_process_action_line(screen, row: int, line: str, width: int) -> None:
@@ -494,13 +554,55 @@ def _draw_signal_dialog_line(
             )
 
 
+_HELP_SIGNAL_ACTIONS = (
+    "interrupt selected process",
+    "kill selected process",
+    "terminate selected process",
+)
+
+# Content-derived coloring for the help screen: (left key column, right key
+# column, is-signal-action). Matching text keeps colors correct when help
+# lines are added, removed, or scrolled.
+def _help_line_colors(line: str) -> tuple[int | None, int | None, bool]:
+    if any(action in line for action in _HELP_SIGNAL_ACTIONS):
+        return PAIR_HEADER, PAIR_HOT, True
+    if "select sort column" in line:
+        return PAIR_MEM, PAIR_MEM, False
+    if "sort by" in line:
+        return PAIR_SWAP, PAIR_SWAP, False
+    if "Wheel:" in line:
+        return PAIR_SWAP, PAIR_SWAP, False
+    if "show this help screen" in line or line.rstrip().endswith(": quit"):
+        return PAIR_GOOD, PAIR_GOOD, False
+    if "pause/resume" in line:
+        return PAIR_GOOD, None, False
+    if "tag/untag" in line or "clear process selection" in line:
+        return PAIR_HEADER, PAIR_WARN, False
+    if "filter processes" in line:
+        return PAIR_HEADER, PAIR_WARN, False
+    if (
+        "show process environment" in line
+        or "toggle tree-view" in line
+        or "show process metrics" in line
+    ):
+        return PAIR_HEADER, PAIR_GOOD, False
+    if "scroll" in line or "select the" in line:
+        return PAIR_HEADER, None, False
+    return None, None, False
+
+
 def _draw_help_line(screen, row: int, line: str, width: int, *, readonly: bool) -> None:
-    if row in {0, 1} or line.rstrip() == "Press any key to return.":
+    stripped = line.rstrip()
+    if (
+        (stripped.startswith("mxtop ") and "(C)" in stripped)
+        or stripped.startswith("Released under")
+        or stripped == "Press any key to return."
+    ):
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_HEADER, curses.A_BOLD))
         return
 
     _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE))
-    if row == 3:
+    if stripped.startswith("GPU Process Type:"):
         _safe_addnstr(
             screen, row, 0, line[:17], width, _attr(PAIR_VALUE, curses.A_BOLD)
         )
@@ -514,10 +616,10 @@ def _draw_help_line(screen, row: int, line: str, width: int, *, readonly: bool) 
                 _attr(PAIR_MEM, curses.A_BOLD),
             )
         return
-    if row == 5:
+    if stripped.startswith("Device coloring rules"):
         _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
         return
-    if row in {6, 7}:
+    if "GPU utilization:" in line or "GPU-MEM percent:" in line:
         for text, pair in (
             ("light", PAIR_GOOD),
             ("moderate", PAIR_WARN),
@@ -532,31 +634,12 @@ def _draw_help_line(screen, row: int, line: str, width: int, *, readonly: bool) 
                     width,
                     _attr(pair, curses.A_BOLD | getattr(curses, "A_ITALIC", 0)),
                 )
+        return
 
-    color_matrix = {
-        9: (PAIR_GOOD, PAIR_GOOD),
-        10: (PAIR_GOOD, PAIR_GOOD),
-        12: (PAIR_HEADER, PAIR_WARN),
-        13: (PAIR_HEADER, PAIR_WARN),
-        14: (PAIR_HEADER, PAIR_HOT),
-        15: (None, PAIR_HOT),
-        16: (PAIR_HEADER, PAIR_HOT),
-        17: (PAIR_HEADER, PAIR_GOOD),
-        18: (PAIR_HEADER, PAIR_GOOD),
-        19: (PAIR_HEADER, PAIR_GOOD),
-        21: (PAIR_SWAP, PAIR_SWAP),
-        22: (PAIR_SWAP, PAIR_SWAP),
-        24: (PAIR_SWAP, PAIR_SWAP),
-        25: (PAIR_SWAP, PAIR_SWAP),
-        26: (PAIR_SWAP, PAIR_SWAP),
-        27: (PAIR_SWAP, PAIR_SWAP),
-        28: (PAIR_SWAP, PAIR_SWAP),
-        29: (PAIR_MEM, PAIR_MEM),
-    }
-    left_pair, right_pair = color_matrix.get(row, (None, None))
-    if left_pair is not None:
+    left_pair, right_pair, is_signal = _help_line_colors(line)
+    if left_pair is not None and line[:12].strip():
         _safe_addnstr(screen, row, 0, line[:12], width, _attr(left_pair, curses.A_BOLD))
-    if readonly and row in {14, 15, 16}:
+    if readonly and is_signal:
         _safe_addnstr(screen, row, 39, line[39:], width, _attr(PAIR_DIM))
     elif right_pair is not None:
         _safe_addnstr(
@@ -793,7 +876,7 @@ def _draw_metrics_line(
             _attr(PAIR_HEADER, curses.A_BOLD),
         )
         return
-    if row == 2 and " GPU     PID      USER  GPU-MEM" in semantic_line:
+    if row == 2 and _matches_process_header(semantic_line):
         _draw_process_header_line(screen, row, line, width)
         return
     if _is_process_data_line(semantic_line):
@@ -1000,6 +1083,12 @@ def _intensity_pair(value: float | None, *, memory: bool) -> int:
 
 
 def _spectrum_pair(fraction: float) -> int:
+    if _truecolor_ready:
+        index = min(
+            TRUECOLOR_SPECTRUM_STEPS - 1,
+            max(0, round((TRUECOLOR_SPECTRUM_STEPS - 1) * fraction)),
+        )
+        return PAIR_TRUECOLOR_FIRST + index
     index = min(
         len(SPECTRUM_COLORS) - 1, max(0, round((len(SPECTRUM_COLORS) - 1) * fraction))
     )
@@ -1450,10 +1539,69 @@ def _select_edge(state: UiState, frame: FrameSnapshot, *, last: bool) -> None:
     state.follow_selection = True
 
 
-def _command_column_offset(frame: FrameSnapshot | None) -> int:
-    del frame
+def _command_column_offset() -> int:
     # The process renderer clamps this sentinel to the longest visible row.
     return LARGE_SCROLL_OFFSET
+
+
+PROCESS_HEADER_MARKER = " GPU     PID      USER  GPU-MEM"
+
+
+def _matches_process_header(line: str) -> bool:
+    # The sort indicator replaces the space after the active column's label
+    # (e.g. "PID▼"), so normalize indicators back to spaces before matching.
+    return PROCESS_HEADER_MARKER in line.replace("▲", " ").replace("▼", " ")
+
+# Longest labels first so overlapping substrings ("GPU" inside "GPU-MEM",
+# "%MEM" inside an already-claimed span) resolve to the right column.
+_HEADER_SORT_LABELS = (
+    ("GPU-MEM", ProcessSort.GPU_MEMORY),
+    ("COMMAND", ProcessSort.COMMAND),
+    ("%GMBW", ProcessSort.GPU_MEMORY_BANDWIDTH),
+    ("%CPU", ProcessSort.CPU),
+    ("%MEM", ProcessSort.HOST_MEMORY),
+    ("USER", ProcessSort.USER),
+    ("TIME", ProcessSort.TIME),
+    ("%SM", ProcessSort.GPU_UTIL),
+    ("PID", ProcessSort.PID),
+    ("GPU", ProcessSort.DEFAULT),
+)
+
+
+def _header_sort_spans(line: str) -> list[tuple[int, int, ProcessSort]]:
+    """Map column-label character spans of a process header line to sorts."""
+
+    spans: list[tuple[int, int, ProcessSort]] = []
+
+    def _occupied(start: int, end: int) -> bool:
+        return any(start < span_end and end > span_start for span_start, span_end, _ in spans)
+
+    for label, sort in _HEADER_SORT_LABELS:
+        cursor = 0
+        while (start := line.find(label, cursor)) >= 0:
+            end = start + len(label)
+            if not _occupied(start, end):
+                spans.append((start, end, sort))
+                break
+            cursor = start + 1
+    return spans
+
+
+def _apply_header_sort_click(
+    state: UiState,
+    spans: list[tuple[int, int, ProcessSort]],
+    mouse_x: int,
+) -> None:
+    for start, end, sort in spans:
+        # The extra cell covers the ▲/▼ indicator drawn after the label.
+        if start <= mouse_x <= end:
+            if state.process_sort == sort:
+                state.reverse_sort = not state.reverse_sort
+            else:
+                state.process_sort = sort
+                state.reverse_sort = False
+            state.follow_selection = True
+            return
 
 
 def _selected_processes(state: UiState, frame: FrameSnapshot) -> list[ProcessSnapshot]:
@@ -1756,6 +1904,7 @@ def _handle_mouse(
     *,
     mouse_rows: dict[int, int] | None,
     modal_buttons: dict[tuple[int, int], int] | None,
+    header_rows: dict[int, list[tuple[int, int, ProcessSort]]] | None = None,
 ) -> None:
     try:
         _, mouse_x, mouse_y, _, button_state = curses.getmouse()
@@ -1794,6 +1943,13 @@ def _handle_mouse(
         return
     if not _mouse_clicked(button_state):
         return
+    if (
+        header_rows
+        and state.active_screen == ScreenMode.MAIN
+        and mouse_y in header_rows
+    ):
+        _apply_header_sort_click(state, header_rows[mouse_y], mouse_x)
+        return
     if mouse_rows is None or mouse_y not in mouse_rows:
         if state.active_screen == ScreenMode.MAIN:
             state.clear_selection()
@@ -1817,6 +1973,21 @@ def _handle_mouse(
         state.screen_selected_index = max(0, index)
 
 
+def _handle_filter_key(key: int, state: UiState) -> bool:
+    if key in {ord("\n"), curses.KEY_ENTER}:
+        state.filter_editing = False
+        state.text_filter = state.text_filter.strip()
+    elif key == 27:
+        state.filter_editing = False
+        state.text_filter = ""
+    elif key in {curses.KEY_BACKSPACE, 127, 8}:
+        state.text_filter = state.text_filter[:-1]
+    elif 32 <= key <= 126:
+        state.text_filter += chr(key)
+    state.follow_selection = True
+    return True
+
+
 def _handle_key(
     key: int,
     state: UiState,
@@ -1826,6 +1997,7 @@ def _handle_key(
     readonly: bool = False,
     mouse_rows: dict[int, int] | None = None,
     modal_buttons: dict[tuple[int, int], int] | None = None,
+    header_rows: dict[int, list[tuple[int, int, ProcessSort]]] | None = None,
 ) -> bool:
     if key == -1:
         return True
@@ -1833,7 +2005,13 @@ def _handle_key(
         return True
     state.status_message = None
     if key == curses.KEY_MOUSE:
-        _handle_mouse(state, frame, mouse_rows=mouse_rows, modal_buttons=modal_buttons)
+        _handle_mouse(
+            state,
+            frame,
+            mouse_rows=mouse_rows,
+            modal_buttons=modal_buttons,
+            header_rows=header_rows,
+        )
         return True
     if state.pending_signal is not None:
         return _handle_signal_dialog_key(key, state)
@@ -1852,11 +2030,17 @@ def _handle_key(
                 state.reverse_sort = character.isupper()
                 state.follow_selection = True
         return True
+    if state.filter_editing:
+        return _handle_filter_key(key, state)
 
     if key in {ord("h"), ord("?")}:
         state.switch_screen(ScreenMode.HELP)
         return True
+    if key in {ord("p"), ord("Z")} and state.active_screen == ScreenMode.MAIN:
+        state.paused = not state.paused
+        return True
     if key in {ord("r"), ord("R"), 18, getattr(curses, "KEY_F5", curses.KEY_F0 + 5)}:
+        state.paused = False
         if state.active_screen == ScreenMode.MAIN:
             state.clear_selection()
             state.scroll_offset = 0
@@ -1968,7 +2152,15 @@ def _handle_key(
 
     if key in {ord("q"), ord("Q")}:
         return False
+    if key in {ord("\\"), getattr(curses, "KEY_F4", curses.KEY_F0 + 4)}:
+        state.filter_editing = True
+        return True
     if key == 27:
+        if state.text_filter:
+            state.text_filter = ""
+            state.filter_editing = False
+            state.follow_selection = True
+            return True
         state.clear_selection()
     elif key == ord("e"):
         _remember_selected_target(state, frame, fallback_host=True)
@@ -2024,7 +2216,7 @@ def _handle_key(
     elif key in {1, ord("^")}:
         state.command_offset = 0
     elif key in {5, ord("$")}:
-        state.command_offset = _command_column_offset(frame)
+        state.command_offset = _command_column_offset()
     elif key in {ord("T"), ord("K"), ord("k"), 3, ord("I")}:
         process_signal = (
             ProcessSignal.TERMINATE
@@ -2313,6 +2505,7 @@ def run_tui(
         painted_size = (-1, -1)
         painted_at = 0.0
         mouse_rows: dict[int, int] = {}
+        header_rows: dict[int, list[tuple[int, int, ProcessSort]]] = {}
         modal_buttons: dict[tuple[int, int], int] = {}
         tree_entries: list[ProcessTreeEntry] = []
         tree_version = -1
@@ -2323,15 +2516,41 @@ def run_tui(
         environment_key: tuple[int, float | None] | None = None
         environment_variables: list[tuple[str, str]] = []
         environment_error: str | None = None
+        held_sampler_state: SamplerState | None = None
+        filtered_source: FrameSnapshot | None = None
+        filtered_text: str | None = None
+        filtered_result: tuple[FrameSnapshot | None, str | None] = (None, None)
         while True:
-            sampler_state = sampler.snapshot()
+            if state.paused and held_sampler_state is not None:
+                sampler_state = held_sampler_state
+            else:
+                sampler_state = sampler.snapshot()
+                held_sampler_state = sampler_state
+            host_history.hold = state.paused
             filter_error: str | None = None
             if sampler_state.frame is None:
                 frame = None
+            elif (
+                filtered_source is sampler_state.frame
+                and filtered_text == state.text_filter
+            ):
+                # Idle ticks and key presses reuse the filtered frame: the
+                # sampler publishes a new frame object for every refresh.
+                frame, filter_error = filtered_result
             else:
                 frame, filter_error = _filtered_frame_with_error(
                     sampler_state.frame, options
                 )
+                if frame is not None and state.text_filter:
+                    frame = replace(
+                        frame,
+                        processes=filter_processes_by_text(
+                            frame.processes, state.text_filter
+                        ),
+                    )
+                filtered_source = sampler_state.frame
+                filtered_text = state.text_filter
+                filtered_result = (frame, filter_error)
             raw_key = screen.getch()
             key = _decode_alt_key(screen, raw_key)
             refresh_environment = state.active_screen == ScreenMode.ENVIRON and key in {
@@ -2348,6 +2567,7 @@ def run_tui(
                 readonly=readonly,
                 mouse_rows=mouse_rows,
                 modal_buttons=modal_buttons,
+                header_rows=header_rows,
             ):
                 break
             size = screen.getmaxyx()
@@ -2583,6 +2803,26 @@ def run_tui(
             display_status = state.status_message
             if display_status is None and state.active_screen != ScreenMode.MAIN:
                 display_status = filter_error or sampler_state.error
+            if (
+                display_status is None
+                and state.active_screen == ScreenMode.MAIN
+                and state.paused
+            ):
+                display_status = "PAUSED — press p to resume, F5/r to refresh"
+            if (
+                display_status is None
+                and state.active_screen == ScreenMode.MAIN
+                and (state.filter_editing or state.text_filter)
+            ):
+                cursor = "_" if state.filter_editing else ""
+                display_status = (
+                    f"Filter: {state.text_filter}{cursor}  "
+                    + (
+                        "(Enter: apply, Esc: clear)"
+                        if state.filter_editing
+                        else "(\\: edit, Esc: clear)"
+                    )
+                )
             if display_status and state.pending_signal is None and original_lines:
                 status = f" {display_status} "[:render_width]
                 original_lines[-1] = status.ljust(render_width)
@@ -2650,14 +2890,14 @@ def run_tui(
                 }
 
             host_context = visible_context(host_graph_context(context_lines))
-            device_context = (
-                visible_context(_rendering.device_row_levels(context_lines, frame))
-                if state.active_screen == ScreenMode.MAIN and frame is not None
-                else {}
-            )
             device_indices = (
                 visible_context(_rendering.device_row_indices(context_lines, frame))
                 if state.active_screen == ScreenMode.MAIN and frame is not None
+                else {}
+            )
+            device_context = (
+                _rendering.device_levels_for_indices(device_indices, frame)
+                if device_indices
                 else {}
             )
             dense_device_context = (
@@ -2684,6 +2924,7 @@ def run_tui(
                 else {}
             )
             mouse_rows = {}
+            header_rows = {}
             selected_rows: set[int] = set()
             tagged_selected_rows: set[int] = set()
             tagged_rows: set[int] = set()
@@ -2701,6 +2942,8 @@ def run_tui(
                 }
                 visible_keys = iter(view.selection_ids)
                 for row, line in enumerate(original_lines[:draw_height]):
+                    if _matches_process_header(line):
+                        header_rows[row + row_origin] = _header_sort_spans(line)
                     if _is_process_data_line(line):
                         selection_key = next(visible_keys, None)
                         if selection_key is None:
