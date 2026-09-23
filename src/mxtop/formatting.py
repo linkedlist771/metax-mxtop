@@ -82,6 +82,23 @@ def format_percent_value(value: float | None) -> str:
     return f"{value:.1f}"
 
 
+def format_percent_fit(value: float | None, width: int = 4) -> str:
+    """Format a percentage for a fixed-width column without overflowing it.
+
+    Multi-core process CPU usage routinely exceeds 100% ("312.4"), which would
+    push every following column of that row out of alignment. Drop the decimal
+    first, then abbreviate thousands ("12800" -> "13k").
+    """
+
+    text = format_percent_value(value)
+    if len(text) <= width or not _finite(value):
+        return text
+    text = f"{value:.0f}"
+    if len(text) <= width:
+        return text
+    return f"{value / 1000:.0f}k"
+
+
 def format_float(value: float | None, unit: str) -> str:
     return "N/A" if value is None else f"{value:.0f}{unit}"
 

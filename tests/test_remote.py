@@ -875,7 +875,10 @@ def test_tls_context_validates_material_and_encrypted_key_passwords(
     context = create_tls_context(str(cert_file), str(key_file))
     assert context is not None
     assert context.minimum_version == ssl.TLSVersion.TLSv1_2
-    assert context.options & ssl.OP_NO_COMPRESSION
+    # LibreSSL (macOS system Python) defines OP_NO_COMPRESSION as 0 because
+    # it never supports TLS compression; only a nonzero flag can be checked.
+    if ssl.OP_NO_COMPRESSION:
+        assert context.options & ssl.OP_NO_COMPRESSION
     assert create_tls_context(None, None) is None
 
     with pytest.raises(ValueError, match="configured together"):

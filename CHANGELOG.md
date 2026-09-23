@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-09-23
+
 ### Added
 
+- Fleet memory totals in the title row of the live monitor and one-shot
+  output: `VRAM: used / total (pct%)` summed over every visible MetaX device
+  and `DRAM: used / total (pct%)` for the host, colored with the memory
+  intensity thresholds. The summary uses the otherwise empty space between
+  the clock and the help hint, so it costs no screen rows, and it tightens,
+  drops DRAM, then hides as the terminal narrows.
 - Direct TLS 1.2+ termination for both the remote dashboard and local
   Prometheus exporter with paired `--tls-cert` / `--tls-key` options, optional
   single-line `--tls-key-password-file` support for encrypted private keys,
@@ -95,6 +103,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Process rows no longer shift out of alignment when `%CPU` exceeds 100%
+  (`312.4` overflowed its 4-cell column): values keep their integer part and
+  very large multi-core totals abbreviate (`13k`).
+- `%CPU` in the host panel is no longer re-sampled on every key press, which
+  measured CPU time over a few milliseconds while a key was held and made the
+  value jump; readings now span at least half a second.
+- Slicing text that begins inside a double-width (CJK) character no longer
+  pads past the requested width, which could push a horizontally scrolled
+  row one cell beyond the terminal edge.
+- Error titles (`(ERROR: ...)`) are highlighted in red instead of rendering
+  like the normal help hint.
+- The test suite no longer depends on the developer's `COLORTERM` or on
+  OpenSSL-specific TLS flags, so it passes on macOS/LibreSSL as well.
 - Remote cluster polling now bounds every SSH telemetry command with a
   configurable timeout (`--remote-command-timeout` / `[remote]
   command-timeout`). A hung `mx-smi`, host, or process query marks only that
@@ -132,6 +153,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The live monitor repaints 5-10x faster (64-GPU fleet with 150 processes:
+  ~58 ms to ~6 ms per repaint), with byte-identical output: terminal cell
+  width arithmetic takes a fast path for single-cell text, process rows are
+  formatted once per repaint, sort keys build only the compared fields, and
+  the filtered frame is reused across idle ticks and key presses.
+  `scripts/bench_tui.py` measures repaint cost and fingerprints the output.
+- The `mx-smi` backend runs its `dmon` and process queries concurrently,
+  roughly halving the latency of each refresh.
+- The remote dashboard defers page rebuilds while its browser tab is hidden
+  (samples and history keep flowing) and catches up when it becomes visible.
+- Lint rules are pinned in `pyproject.toml`, so new ruff releases cannot
+  change what CI enforces.
 - Help-screen colorization now derives from line content instead of
   hard-coded row numbers, so help edits can no longer silently break colors.
 - Failed pymxsml telemetry calls are logged once at debug level instead of
@@ -198,7 +231,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (0.1.15), usage-based coloring, bordered layout, and the initial
   MXSML/`mx-smi` backends. See the git history for full detail.
 
-[Unreleased]: https://github.com/linkedlist771/metax-mxtop/compare/v0.1.25...HEAD
+[Unreleased]: https://github.com/linkedlist771/metax-mxtop/compare/v0.1.26...HEAD
+[0.1.26]: https://github.com/linkedlist771/metax-mxtop/compare/v0.1.25...v0.1.26
 [0.1.25]: https://github.com/linkedlist771/metax-mxtop/compare/v0.1.24...v0.1.25
 [0.1.24]: https://github.com/linkedlist771/metax-mxtop/compare/v0.1.22...v0.1.24
 [0.1.23]: https://github.com/linkedlist771/metax-mxtop/compare/v0.1.22...v0.1.24

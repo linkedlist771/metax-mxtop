@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 import unicodedata
 
 
@@ -21,6 +22,7 @@ def to_ascii(text: str) -> str:
     return text.translate(ASCII_TRANSLATION)
 
 
+@lru_cache(maxsize=None)
 def character_cell_width(character: str) -> int:
     if not character or character in "\r\n":
         return 0
@@ -29,8 +31,32 @@ def character_cell_width(character: str) -> int:
     return 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
 
 
+# Characters already proven to occupy exactly one terminal cell. Nearly every
+# rendered string is ASCII or built from such glyphs (box drawing, bars,
+# braille), and for those cell arithmetic is plain ``len``/slicing. Growing
+# the set is a single atomic ``set.add`` per glyph, safe under the GIL.
+_NARROW_CHARACTERS: set[str] = set()
+
+
+def _all_narrow(text: str) -> bool:
+    """Whether every character of ``text`` is exactly one cell wide."""
+
+    if text.isascii():
+        return "\n" not in text and "\r" not in text
+    characters = set(text)
+    if characters <= _NARROW_CHARACTERS:
+        return True
+    for character in characters - _NARROW_CHARACTERS:
+        if character_cell_width(character) != 1:
+            return False
+        _NARROW_CHARACTERS.add(character)
+    return True
+
+
 def cell_width(text: str) -> int:
-    return sum(character_cell_width(character) for character in text)
+    if _all_narrow(text):
+        return len(text)
+    return sum(map(character_cell_width, text))
 
 
 def cell_slice(text: str, start: int = 0, width: int | None = None) -> str:
@@ -38,6 +64,8 @@ def cell_slice(text: str, start: int = 0, width: int | None = None) -> str:
 
     start = max(0, start)
     end = None if width is None else start + max(0, width)
+    if _all_narrow(text):
+        return text[start:end]
     result: list[str] = []
     position = 0
     included_base = False
@@ -55,7 +83,10 @@ def cell_slice(text: str, start: int = 0, width: int | None = None) -> str:
         if end is not None and position >= end:
             break
         if position < start:
-            result.append(" " * (next_position - start))
+            # The slice begins inside a wide glyph: pad its visible half, but
+            # never beyond the requested width.
+            visible_end = next_position if end is None else min(next_position, end)
+            result.append(" " * (visible_end - start))
             included_base = False
         elif end is not None and next_position > end:
             result.append(" " * (end - position))

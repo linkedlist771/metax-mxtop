@@ -9,6 +9,7 @@ one place so the two renderers can never drift apart.
 
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 
 BORDER_CHARS = {
@@ -39,6 +40,10 @@ PROCESS_ROW_FIELDS_RE = re.compile(
     r"(?P<before_mem_pct>\s+)(?P<mem_pct>\S+)"
 )
 BRAILLE_RUN_RE = re.compile(r"[⠀-⣿]+")
+MEMORY_SUMMARY_RE = re.compile(
+    r"(?P<label>VRAM|DRAM): (?P<used>[^\s/]+)(?P<separator> ?/ ?)"
+    r"(?P<total>\S+) \((?P<percent>\d+%)\)"
+)
 
 BYTE_UNITS = {
     "B": 1.0,
@@ -108,8 +113,13 @@ def is_device_data_line(line: str) -> bool:
     return any(token in line for token in (" Pwr:", "GPU-Util", " UTL:", " PWR:"))
 
 
+@lru_cache(maxsize=4096)
 def dense_device_cell_spans(line: str) -> tuple[tuple[int, int, int], ...]:
-    """Return ``(start, end, gpu_index)`` spans for a dense fleet row."""
+    """Return ``(start, end, gpu_index)`` spans for a dense fleet row.
+
+    Every semantic pass probes every rendered line, and most lines repeat
+    verbatim between repaints, so results are memoized by line text.
+    """
 
     if not line.startswith("│") or not line.endswith("│"):
         return ()
@@ -173,3 +183,47 @@ def host_graph_context(lines: list[str]) -> dict[int, tuple[str, float | None, b
         context[index + 10] = ("swp", gpu_utl, False)
         return context
     return {}
+
+
+def title_segments(line: str) -> list[tuple[str, str, float | None]]:
+    """Split the title row into ``(text, role, percent)`` styling segments.
+
+    Roles: ``text`` (clock and padding), ``label``/``used``/``total``/
+    ``percent`` (memory summary; ``percent`` carries the parsed load for
+    intensity colors), ``hint`` and ``key`` (the help hint and its h/q keys),
+    and ``error`` (a failure reported in place of the hint).
+    """
+
+    hint_start = line.find("(Press ")
+    error_start = line.find("(ERROR:")
+    tail_start = hint_start if hint_start >= 0 else error_start
+    body = line if tail_start < 0 else line[:tail_start]
+    segments: list[tuple[str, str, float | None]] = []
+    position = 0
+    for match in MEMORY_SUMMARY_RE.finditer(body):
+        load = parse_percent(match.group("percent"))
+        segments += [
+            (body[position : match.start()], "text", None),
+            (match.group("label") + ":", "label", None),
+            (" ", "text", None),
+            (match.group("used"), "used", load),
+            (match.group("separator"), "text", None),
+            (match.group("total"), "total", None),
+            (" (", "text", None),
+            (match.group("percent"), "percent", load),
+            (")", "text", None),
+        ]
+        position = match.end()
+    segments.append((body[position:], "text", None))
+    if tail_start >= 0 and tail_start == error_start:
+        segments.append((line[tail_start:], "error", None))
+    elif tail_start >= 0:
+        hint = line[tail_start:]
+        for key in ("h", "q"):
+            prefix, found, hint = hint.partition(key)
+            segments.append((prefix, "hint", None))
+            if not found:
+                break
+            segments.append((found, "key", None))
+        segments.append((hint, "hint", None))
+    return [segment for segment in segments if segment[0]]

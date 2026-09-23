@@ -300,6 +300,10 @@ def _draw_line(
     if row == 0 and (
         "(Press h for help or q to quit)" in semantic_line
         or semantic_line.startswith("mxtop ")
+        or (
+            classify.MEMORY_SUMMARY_RE.search(semantic_line) is not None
+            and not semantic_line.startswith("│")
+        )
     ):
         _draw_title_line(screen, row, line, width)
         return
@@ -379,26 +383,19 @@ def _draw_process_header_line(screen, row: int, line: str, width: int) -> None:
 
 
 def _draw_title_line(screen, row: int, line: str, width: int) -> None:
-    hint_start = line.find("(Press ")
-    if hint_start < 0:
-        _safe_addnstr(screen, row, 0, line, width, _attr(PAIR_VALUE, curses.A_BOLD))
-        return
-    position = _safe_addnstr(
-        screen, row, 0, line[:hint_start], width, _attr(PAIR_VALUE, curses.A_BOLD)
-    )
-    hint = line[hint_start:]
-    for token in ("h", "q"):
-        prefix, found, rest = hint.partition(token)
-        position = _safe_addnstr(
-            screen, row, position, prefix, width, _attr(PAIR_VALUE, curses.A_BOLD)
-        )
-        if not found:
-            return
-        position = _safe_addnstr(
-            screen, row, position, found, width, _attr(PAIR_MEM, curses.A_BOLD)
-        )
-        hint = rest
-    _safe_addnstr(screen, row, position, hint, width, _attr(PAIR_VALUE, curses.A_BOLD))
+    position = 0
+    for text, role, load in classify.title_segments(line):
+        if role in {"used", "percent"}:
+            attr = _attr(_intensity_pair(load, memory=True), curses.A_BOLD)
+        elif role == "label":
+            attr = _attr(PAIR_HEADER, curses.A_BOLD)
+        elif role == "key":
+            attr = _attr(PAIR_MEM, curses.A_BOLD)
+        elif role == "error":
+            attr = _attr(PAIR_ERROR, curses.A_BOLD)
+        else:
+            attr = _attr(PAIR_VALUE, curses.A_BOLD)
+        position = _safe_addnstr(screen, row, position, text, width, attr)
 
 
 def _draw_process_action_line(screen, row: int, line: str, width: int) -> None:
@@ -2520,6 +2517,9 @@ def run_tui(
         environment_variables: list[tuple[str, str]] = []
         environment_error: str | None = None
         held_sampler_state: SamplerState | None = None
+        filtered_source: FrameSnapshot | None = None
+        filtered_text: str | None = None
+        filtered_result: tuple[FrameSnapshot | None, str | None] = (None, None)
         while True:
             if state.paused and held_sampler_state is not None:
                 sampler_state = held_sampler_state
@@ -2530,6 +2530,13 @@ def run_tui(
             filter_error: str | None = None
             if sampler_state.frame is None:
                 frame = None
+            elif (
+                filtered_source is sampler_state.frame
+                and filtered_text == state.text_filter
+            ):
+                # Idle ticks and key presses reuse the filtered frame: the
+                # sampler publishes a new frame object for every refresh.
+                frame, filter_error = filtered_result
             else:
                 frame, filter_error = _filtered_frame_with_error(
                     sampler_state.frame, options
@@ -2541,6 +2548,9 @@ def run_tui(
                             frame.processes, state.text_filter
                         ),
                     )
+                filtered_source = sampler_state.frame
+                filtered_text = state.text_filter
+                filtered_result = (frame, filter_error)
             raw_key = screen.getch()
             key = _decode_alt_key(screen, raw_key)
             refresh_environment = state.active_screen == ScreenMode.ENVIRON and key in {
@@ -2880,14 +2890,14 @@ def run_tui(
                 }
 
             host_context = visible_context(host_graph_context(context_lines))
-            device_context = (
-                visible_context(_rendering.device_row_levels(context_lines, frame))
-                if state.active_screen == ScreenMode.MAIN and frame is not None
-                else {}
-            )
             device_indices = (
                 visible_context(_rendering.device_row_indices(context_lines, frame))
                 if state.active_screen == ScreenMode.MAIN and frame is not None
+                else {}
+            )
+            device_context = (
+                _rendering.device_levels_for_indices(device_indices, frame)
+                if device_indices
                 else {}
             )
             dense_device_context = (

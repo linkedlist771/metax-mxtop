@@ -210,33 +210,54 @@ def _numeric_sort_value(value: float | int | None) -> tuple[bool, float]:
 
 
 def process_sort_key(sort: ProcessSort, process: ProcessSnapshot) -> tuple[object, ...]:
-    memory = _numeric_sort_value(process.gpu_memory_bytes)
-    gpu_util = _numeric_sort_value(process.gpu_util_percent)
-    gpu_memory_bandwidth = _numeric_sort_value(
-        process.gpu_memory_bandwidth_util_percent
-    )
-    cpu = _numeric_sort_value(process.cpu_percent)
-    host_memory = _numeric_sort_value(process.memory_util_percent)
-    runtime = _numeric_sort_value(process.runtime_seconds)
-    command = process.command or process.name
+    # Build only the fields the active sort compares: this runs once per
+    # process per repaint, so eager evaluation of every column adds up.
     if sort == ProcessSort.PID:
         return (process.pid, process.gpu_index)
     if sort == ProcessSort.USER:
         return (process.user or "N/A", process.pid, process.gpu_index)
     if sort == ProcessSort.GPU_MEMORY:
-        return (memory, gpu_util, cpu, process.pid, process.gpu_index)
+        return (
+            _numeric_sort_value(process.gpu_memory_bytes),
+            _numeric_sort_value(process.gpu_util_percent),
+            _numeric_sort_value(process.cpu_percent),
+            process.pid,
+            process.gpu_index,
+        )
     if sort == ProcessSort.GPU_UTIL:
-        return (gpu_util, memory, cpu, process.pid, process.gpu_index)
+        return (
+            _numeric_sort_value(process.gpu_util_percent),
+            _numeric_sort_value(process.gpu_memory_bytes),
+            _numeric_sort_value(process.cpu_percent),
+            process.pid,
+            process.gpu_index,
+        )
     if sort == ProcessSort.GPU_MEMORY_BANDWIDTH:
-        return (gpu_memory_bandwidth, memory, cpu, process.pid, process.gpu_index)
+        return (
+            _numeric_sort_value(process.gpu_memory_bandwidth_util_percent),
+            _numeric_sort_value(process.gpu_memory_bytes),
+            _numeric_sort_value(process.cpu_percent),
+            process.pid,
+            process.gpu_index,
+        )
     if sort == ProcessSort.CPU:
-        return (cpu, host_memory, process.pid, process.gpu_index)
+        return (
+            _numeric_sort_value(process.cpu_percent),
+            _numeric_sort_value(process.memory_util_percent),
+            process.pid,
+            process.gpu_index,
+        )
     if sort == ProcessSort.HOST_MEMORY:
-        return (host_memory, cpu, process.pid, process.gpu_index)
+        return (
+            _numeric_sort_value(process.memory_util_percent),
+            _numeric_sort_value(process.cpu_percent),
+            process.pid,
+            process.gpu_index,
+        )
     if sort == ProcessSort.TIME:
-        return (runtime, process.pid, process.gpu_index)
+        return (_numeric_sort_value(process.runtime_seconds), process.pid, process.gpu_index)
     if sort == ProcessSort.COMMAND:
-        return (command, process.pid, process.gpu_index)
+        return (process.command or process.name, process.pid, process.gpu_index)
     return (process.gpu_index, process.user or "N/A", process.pid)
 
 

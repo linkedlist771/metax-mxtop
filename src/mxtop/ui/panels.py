@@ -19,6 +19,7 @@ from mxtop.formatting import (
     format_mib,
     format_percent,
     format_percent_precise,
+    format_percent_fit,
     format_percent_value,
 )
 from mxtop.models import (
@@ -67,7 +68,91 @@ def render_title(frame: FrameSnapshot, width: int, error: str | None = None) -> 
     title_width = width
     if title_width <= len(timestamp) + len(hint):
         return ellipsize(f"{timestamp} {hint}", title_width)
-    return f"{timestamp}{' ' * (title_width - len(timestamp) - len(hint))}{hint}"
+    return _compose_title(timestamp, hint, frame, title_width)
+
+
+def _compose_title(left: str, right: str, frame: FrameSnapshot, width: int) -> str:
+    """Lay out ``left ... memory summary ... right`` across ``width`` cells.
+
+    The summary sits in the otherwise empty middle of the title row (centered
+    between the clock and the hint, or flush right when there is no hint) and
+    degrades to tighter or shorter forms, then disappears, as width shrinks.
+    """
+
+    gap = width - len(left) - len(right)
+    for summary in _memory_summary_candidates(frame):
+        margin = 2 * TITLE_SUMMARY_MARGIN if right else TITLE_SUMMARY_MARGIN
+        if len(summary) + margin > gap:
+            continue
+        spare = gap - len(summary)
+        before = spare // 2 if right else spare
+        return f"{left}{' ' * before}{summary}{' ' * (spare - before)}{right}"
+    return f"{left}{' ' * max(0, gap)}{right}"
+
+
+TITLE_SUMMARY_MARGIN = 2
+
+
+def memory_totals(frame: FrameSnapshot) -> list[tuple[str, str, str, float]]:
+    """Total ``(label, used, total, percent)`` for GPU VRAM and host DRAM.
+
+    VRAM sums every visible device that reports both used and total memory;
+    DRAM uses the same host reading as the host panel, so the two agree.
+    """
+
+    totals: list[tuple[str, str, str, float]] = []
+    devices = [
+        device
+        for device in frame.devices
+        if device.memory_used_bytes is not None
+        and device.memory_total_bytes is not None
+        and device.memory_total_bytes > 0
+    ]
+    if devices:
+        used = sum(device.memory_used_bytes or 0 for device in devices)
+        total = sum(device.memory_total_bytes or 0 for device in devices)
+        totals.append(
+            (
+                "VRAM",
+                format_compact_bytes(used),
+                format_compact_bytes(total),
+                100.0 * used / total,
+            )
+        )
+    _cpu, host_used, host_percent, _swap_used, _swap_percent = _host_metrics()
+    host_total = _host_memory_total()
+    if (
+        host_percent is not None
+        and math.isfinite(host_percent)
+        and host_total
+        and host_used != "N/A"
+    ):
+        totals.append(
+            (
+                "DRAM",
+                host_used,
+                format_compact_bytes(host_total, min_unit="GiB"),
+                float(host_percent),
+            )
+        )
+    return totals
+
+
+def _memory_summary_candidates(frame: FrameSnapshot) -> list[str]:
+    totals = memory_totals(frame)
+    if not totals:
+        return []
+
+    def summary(entries, separator: str) -> str:
+        return "  ".join(
+            f"{label}: {used}{separator}{total} ({format_percent(percent)})"
+            for label, used, total, percent in entries
+        )
+
+    candidates = [summary(totals, " / "), summary(totals, "/")]
+    if len(totals) > 1:
+        candidates += [summary(totals[:1], " / "), summary(totals[:1], "/")]
+    return candidates
 
 
 def render_small_terminal_message(
@@ -434,22 +519,19 @@ def render_process_panel(
         ),
     )
     host_memory_total = _host_memory_total()
+    # Format every row once: the widths bound horizontal scrolling and the
+    # same text is drawn for the rows that end up on screen.
+    row_parts = {
+        id(process): (
+            _process_gpu_info(process, state=state, mark_selection=mark_selection),
+            _process_host_info(process, host_memory_total, time_width),
+        )
+        for process in processes
+    }
     max_command_offset = max(
         (
-            max(
-                0,
-                cell_width(_process_host_info(process, host_memory_total, time_width))
-                - max(
-                    0,
-                    inner
-                    - cell_width(
-                        _process_gpu_info(
-                            process, state=state, mark_selection=mark_selection
-                        )
-                    ),
-                ),
-            )
-            for process in processes
+            max(0, cell_width(host_info) - max(0, inner - cell_width(gpu_info)))
+            for gpu_info, host_info in row_parts.values()
         ),
         default=0,
     )
@@ -504,15 +586,7 @@ def render_process_panel(
             lines.append("├" + "─" * inner + "┤")
         lines.append(
             _box_content(
-                _process_row(
-                    process,
-                    state,
-                    inner,
-                    host_memory_total,
-                    mark_selection=mark_selection,
-                    time_width=time_width,
-                ),
-                width,
+                _compose_process_row(*row_parts[id(process)], state, inner), width
             )
         )
         prev_gpu_index = process.gpu_index
@@ -634,7 +708,7 @@ def render_snapshot_screen(frame: FrameSnapshot, *, width: int = 120) -> Rendere
     timestamp = datetime.fromtimestamp(frame.timestamp).strftime("%a %b %d %H:%M:%S %Y")
     compact_devices = len(frame.devices) > DENSE_DEVICE_THRESHOLD
     lines = [
-        timestamp,
+        _compose_title(timestamp, "", frame, width).rstrip(),
         *render_device_panel(frame, width, LayoutMode.FULL, compact=compact_devices),
     ]
     lines.extend(render_host_panel(frame, width, compact=True))
@@ -1225,7 +1299,28 @@ def _power_status(power: float | None, limit: float | None) -> str:
     return f"{left} / {right}"
 
 
+# psutil.cpu_percent(interval=None) measures CPU time since its previous call.
+# Repaints follow key presses, so sampling on every repaint would compute CPU
+# usage over a few milliseconds while a key is held and make the value jump.
+# Reuse a reading for at least this long so every value spans a real window.
+HOST_METRICS_MIN_WINDOW = 0.5
+_host_metrics_cache: (
+    tuple[float, tuple[float | None, str, float | None, str, float | None]] | None
+) = None
+
+
 def _host_metrics() -> tuple[float | None, str, float | None, str, float | None]:
+    global _host_metrics_cache
+    now = time.monotonic()
+    cached = _host_metrics_cache
+    if cached is not None and 0 <= now - cached[0] < HOST_METRICS_MIN_WINDOW:
+        return cached[1]
+    values = _read_host_metrics()
+    _host_metrics_cache = (now, values)
+    return values
+
+
+def _read_host_metrics() -> tuple[float | None, str, float | None, str, float | None]:
     try:
         import psutil
     except ModuleNotFoundError:
@@ -1339,17 +1434,9 @@ def _process_group_order(
     )
 
 
-def _process_row(
-    process: ProcessSnapshot,
-    state: UiState,
-    width: int,
-    host_memory_total: int | None,
-    *,
-    mark_selection: bool,
-    time_width: int,
+def _compose_process_row(
+    gpu_info: str, host_info: str, state: UiState, width: int
 ) -> str:
-    gpu_info = _process_gpu_info(process, state=state, mark_selection=mark_selection)
-    host_info = _process_host_info(process, host_memory_total, time_width)
     visible_host_info = cell_slice(host_info, max(0, state.command_offset))
     host_width = max(0, width - cell_width(gpu_info))
     return gpu_info + cell_ellipsize(visible_host_info, host_width)
@@ -1414,7 +1501,7 @@ def _process_host_info(
 ) -> str:
     command = process.command or process.name
     return (
-        f"{format_percent_value(process.cpu_percent):>4}  "
+        f"{format_percent_fit(process.cpu_percent):>4}  "
         f"{_host_memory_percent(process, host_memory_total):>4}  "
         f"{format_duration(process.runtime_seconds):>{time_width}}  "
         f"{command}"
@@ -1425,7 +1512,7 @@ def _host_memory_percent(
     process: ProcessSnapshot, host_memory_total: int | None
 ) -> str:
     if process.memory_util_percent is not None:
-        return format_percent_value(process.memory_util_percent)
+        return format_percent_fit(process.memory_util_percent)
     if process.host_memory_bytes is None or not host_memory_total:
         return "N/A"
-    return format_percent_value(process.host_memory_bytes / host_memory_total * 100)
+    return format_percent_fit(process.host_memory_bytes / host_memory_total * 100)

@@ -51,6 +51,7 @@ Preview and gallery images use fixed-time deterministic synthetic MetaX-shaped t
 - Read-only GPU telemetry through MXSML/Pymxsml or `mx-smi`.
 - GPU device panel with temperature, power, utilization, memory, memory bandwidth, clocks, bus id, persistence, performance state, and driver fields when available.
 - Adaptive 32/64-GPU fleet grid that preserves per-device load colors and leaves substantially more room for host/process data.
+- Fleet memory totals in the title row — `VRAM: used / total (pct%)` across all visible GPUs and `DRAM: used / total (pct%)` for the host — colored by memory load and using no extra screen rows.
 - Host panel with load average and scrolling history graphs for CPU, memory, swap, and the selected GPU's memory/utilization.
 - Process table with selection, multi-process tagging, vertical and horizontal scrolling, and nvitop-compatible sorting.
 - Process environment, host/GPU process-tree, per-process metrics, and built-in help screens.

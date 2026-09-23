@@ -30,6 +30,7 @@ const state = {
   selectedGpu: {},
   processReturnRoute: "processes",
   renderedRouteKey: null,
+  renderDeferred: false,
   announcedProcess: null,
 };
 
@@ -543,6 +544,7 @@ function receiveCluster(cluster) {
   }
   if (!applyCluster(cluster)) return false;
   if (state.paused) updateShell();
+  else if (document.hidden) state.renderDeferred = true;
   else render();
   return true;
 }
@@ -2652,7 +2654,16 @@ window.addEventListener("online", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") void persistHistoryNow();
+  if (document.visibilityState === "hidden") {
+    void persistHistoryNow();
+    return;
+  }
+  // Samples keep feeding history while hidden, but rebuilding the page for a
+  // tab nobody can see only burns CPU; catch up once it is visible again.
+  if (state.renderDeferred) {
+    state.renderDeferred = false;
+    if (!state.paused) render();
+  }
 });
 window.addEventListener("pagehide", () => { void persistHistoryNow(); });
 
